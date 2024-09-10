@@ -28,21 +28,21 @@ impl<'source> Lexer<'source> {
     }
 }
 
-enum State {
+enum State<'source> {
     String,
     Number,
     Ident,
     Dot,
     MaybeMultiCharacterOperator {
-        option_a: MultiCharacterOperatorOption,
-        option_b: Option<MultiCharacterOperatorOption>,
-        next_does_not_match: TokenKind,
+        option_a: MultiCharacterOperatorOption<'source>,
+        option_b: Option<MultiCharacterOperatorOption<'source>>,
+        next_does_not_match: TokenKind<'source>,
     },
 }
 
-struct MultiCharacterOperatorOption {
+struct MultiCharacterOperatorOption<'source> {
     next: char,
-    next_matches: TokenKind,
+    next_matches: TokenKind<'source>,
 }
 
 macro_rules! token {
@@ -58,7 +58,7 @@ macro_rules! token {
 }
 
 impl<'source> Iterator for Lexer<'source> {
-    type Item = miette::Result<Token>;
+    type Item = miette::Result<Token<'source>>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if let Some(peeked) = self.peeked.take() {
@@ -252,7 +252,7 @@ impl<'source> Iterator for Lexer<'source> {
 }
 
 impl<'source> Lexer<'source> {
-    pub fn peek(&mut self) -> miette::Result<Option<&Token>> {
+    pub fn peek(&mut self) -> miette::Result<Option<&Token<'source>>> {
         if self.peeked.is_none() {
             self.peeked = self.next().transpose()?;
         }
@@ -260,7 +260,7 @@ impl<'source> Lexer<'source> {
         Ok(self.peeked.as_ref())
     }
 
-    pub fn expect<F>(&mut self, matcher: F, expected: &str) -> miette::Result<Token>
+    pub fn expect<F>(&mut self, matcher: F, expected: &str) -> miette::Result<Token<'source>>
     where
         F: FnOnce(&'_ TokenKind) -> bool,
     {
@@ -283,7 +283,7 @@ impl<'source> Lexer<'source> {
         }
     }
 
-    fn parse_ident(&mut self, start: usize) -> miette::Result<Token> {
+    fn parse_ident(&mut self, start: usize) -> miette::Result<Token<'source>> {
         let mut chars = self.rest.chars().peekable();
         while let Some(c) = chars.peek() {
             if matches!(c, 'a'..='z' | 'A'..='Z' | '0'..='9' | '_') {
@@ -321,12 +321,12 @@ impl<'source> Lexer<'source> {
             "while" => TokenKind::While,
 
             // Literals
-            "true" => TokenKind::Boolean(true),
-            "false" => TokenKind::Boolean(false),
+            "true" => TokenKind::True,
+            "false" => TokenKind::False,
             "nil" => TokenKind::Nil,
 
             // Identifiers
-            _ => TokenKind::Identifier,
+            ident => TokenKind::Identifier(ident),
         };
 
         Ok(Token {
@@ -343,7 +343,7 @@ impl<'source> Lexer<'source> {
         starting_character: char,
         start: usize,
         long_form: Option<u8>,
-    ) -> miette::Result<Token> {
+    ) -> miette::Result<Token<'source>> {
         // Try to guess roughly how big our vector will be
         let ending_character = if long_form.is_some() {
             ']'
@@ -659,7 +659,11 @@ impl<'source> Lexer<'source> {
         .with_source_code(self.get_source_code()))
     }
 
-    fn parse_number(&mut self, starting_character: char, start: usize) -> miette::Result<Token> {
+    fn parse_number(
+        &mut self,
+        starting_character: char,
+        start: usize,
+    ) -> miette::Result<Token<'source>> {
         let mut has_fraction = starting_character == '.';
         let mut is_hex = false;
         let mut has_exponent = false;
@@ -801,7 +805,7 @@ impl<'source> Lexer<'source> {
         })
     }
 
-    fn parse_dot(&mut self, start: usize) -> miette::Result<Token> {
+    fn parse_dot(&mut self, start: usize) -> miette::Result<Token<'source>> {
         let mut chars = self.rest.chars().peekable();
         match chars.peek() {
             Some('.') => {
@@ -850,10 +854,10 @@ impl<'source> Lexer<'source> {
     fn parse_maybe_multi_character_operator(
         &mut self,
         start: usize,
-        option_a: MultiCharacterOperatorOption,
-        option_b: Option<MultiCharacterOperatorOption>,
-        next_does_not_match: TokenKind,
-    ) -> miette::Result<Token> {
+        option_a: MultiCharacterOperatorOption<'source>,
+        option_b: Option<MultiCharacterOperatorOption<'source>>,
+        next_does_not_match: TokenKind<'source>,
+    ) -> miette::Result<Token<'source>> {
         let mut chars = self.rest.chars().peekable();
         match (chars.peek(), option_b) {
             (Some(&next), Some(option_b)) if next == option_b.next => {

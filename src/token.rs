@@ -1,17 +1,31 @@
+use miette::{LabeledSpan, SourceSpan};
+
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct Span {
     pub start: usize,
     pub end: usize,
 }
 
+impl Span {
+    pub fn labeled(&self, label: impl Into<String>) -> LabeledSpan {
+        LabeledSpan::at(SourceSpan::from(*self), label)
+    }
+}
+
+impl From<Span> for SourceSpan {
+    fn from(span: Span) -> SourceSpan {
+        SourceSpan::new(span.start.into(), span.end - span.start)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
-pub struct Token {
-    pub kind: TokenKind,
+pub struct Token<'source> {
+    pub kind: TokenKind<'source>,
     pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum TokenKind {
+pub enum TokenKind<'source> {
     // Keywords
     And,
     Break,
@@ -71,11 +85,10 @@ pub enum TokenKind {
     DotDotDot,
 
     // Identifiers
-    Identifier, // NOTE: The value of the identifier is stored in the token's span.
+    Identifier(&'source str),
 
     // Literals
     Nil,
-    Boolean(bool),
     Integer(i64),
     Float(f64),
     String(Vec<u8>), // TODO: Extract to dedicated type.
