@@ -385,8 +385,6 @@ impl<'source> Lexer<'source> {
         let possible_length = self.rest.find(ending_character).unwrap_or(self.rest.len());
         let mut string = Vec::with_capacity(possible_length);
 
-        // eprintln!("[string] starting at {} with {}", start, starting_character);
-
         let mut chars = self.rest.chars().peekable();
         let mut escape = false;
         while let Some(c) = chars.next() {
@@ -419,10 +417,6 @@ impl<'source> Lexer<'source> {
                         // `position` increment.
                         self.position += skipped + 1;
                         escape = false;
-                        // eprintln!(
-                        //     "[escape] skipping {} whitespace characters to {}",
-                        //     skipped, self.position
-                        // );
                         continue;
                     }
                     'x' => {
@@ -442,7 +436,6 @@ impl<'source> Lexer<'source> {
                         })?;
 
                         self.position += 2;
-                        // eprintln!("[hex escape] advancing position by 2 to {}", self.position);
 
                         // Let's avoid allocating a String
                         hex.iter().try_fold(0u8, |acc, c| {
@@ -553,11 +546,6 @@ impl<'source> Lexer<'source> {
 
                         // We'll advance for `c` below, so subtract 1 here
                         self.position += n - 1;
-                        // eprintln!(
-                        //     "[decimal escape] advancing position by {} to {}",
-                        //     n - 1,
-                        //     self.position
-                        // );
 
                         digits[..n].iter().try_fold(0u8, |acc, c| {
                             c.to_digit(10)
@@ -587,11 +575,6 @@ impl<'source> Lexer<'source> {
                 };
 
                 self.position += c.len_utf8();
-                // eprintln!(
-                //     "[escape] advancing position by {} to {}",
-                //     c.len_utf8(),
-                //     self.position
-                // );
                 string.push(escaped);
                 escape = false;
                 continue;
@@ -601,12 +584,6 @@ impl<'source> Lexer<'source> {
                 '\\' if long_form.is_none() => escape = true,
                 c if c == starting_character && long_form.is_none() => {
                     self.position += c.len_utf8();
-                    // eprintln!(
-                    //     "[end character] advancing position by {} to {}",
-                    //     c.len_utf8(),
-                    //     self.position
-                    // );
-
                     self.rest = &self.rest[self.position - start - 1..];
 
                     return Ok(Token {
@@ -624,15 +601,10 @@ impl<'source> Lexer<'source> {
                         equals += 1;
                         chars.next();
                     }
-                    // eprintln!("equals: {}, expected: {}", equals, expected_equals);
+
                     if equals == expected_equals {
                         if let Some(']') = chars.peek() {
                             self.position += 2 + equals as usize;
-                            // eprintln!(
-                            //     "[long form end character] advancing position by {} to {}",
-                            //     2 + equals,
-                            //     self.position
-                            // );
                             self.rest =
                                 &self.rest[self.position - start - 2 - expected_equals as usize..];
 
@@ -649,10 +621,6 @@ impl<'source> Lexer<'source> {
                         string.extend(std::iter::repeat(b'=').take(equals as usize));
 
                         self.position += equals as usize;
-                        // eprintln!(
-                        //     "[long form end character] advancing position by {} to {}",
-                        //     equals, self.position
-                        // );
                     }
                 }
                 '\n' if long_form.is_none() => {
@@ -669,12 +637,6 @@ impl<'source> Lexer<'source> {
             }
 
             self.position += c.len_utf8();
-            // eprintln!(
-            //     "[normal] '{}' advancing position by {} to {}",
-            //     c,
-            //     c.len_utf8(),
-            //     self.position
-            // );
         }
 
         Err(miette!(
