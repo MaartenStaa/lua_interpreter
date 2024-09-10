@@ -664,7 +664,7 @@ impl<'source> Parser<'source> {
                     });
                 }
                 Some(Token {
-                    kind: TokenKind::OpenParen,
+                    kind: TokenKind::OpenParen | TokenKind::String(_),
                     ..
                 }) => {
                     let args = self.parse_args().wrap_err("in prefix expression")?;
@@ -672,23 +672,6 @@ impl<'source> Parser<'source> {
                         function: Box::new(prefix),
                         name: None,
                         args,
-                    });
-                }
-                Some(Token {
-                    kind: TokenKind::String(_),
-                    ..
-                }) => {
-                    let s = match self.lexer.next() {
-                        Some(Ok(Token {
-                            kind: TokenKind::String(s),
-                            ..
-                        })) => s,
-                        _ => unreachable!(),
-                    };
-                    prefix = ast::PrefixExpression::FunctionCall(ast::FunctionCall {
-                        function: Box::new(prefix),
-                        name: None,
-                        args: vec![ast::Expression::Literal(ast::Literal::String(s))],
                     });
                 }
                 Some(Token {
@@ -712,9 +695,16 @@ impl<'source> Parser<'source> {
     }
 
     fn parse_args(&mut self) -> miette::Result<Vec<ast::Expression>> {
-        self.lexer.expect(|k| k == &TokenKind::OpenParen, "(")?;
-
         let mut args = Vec::new();
+        if matches!(
+            self.lexer.peek()?.map(|t| &t.kind),
+            Some(TokenKind::String(_))
+        ) {
+            args.push(self.expect_expression().wrap_err("in function call args")?);
+            return Ok(args);
+        }
+
+        self.lexer.expect(|k| k == &TokenKind::OpenParen, "(")?;
         loop {
             if self.lexer.peek()?.map(|t| &t.kind) == Some(&TokenKind::CloseParen) {
                 self.lexer.next();
@@ -733,9 +723,6 @@ impl<'source> Parser<'source> {
     }
 
     fn parse_table_constructor(&mut self) -> miette::Result<ast::TableConstructor> {
-        // let expect_end_of_field = || {
-        // };
-        //
         macro_rules! expect_end_of_field {
             () => {
                 match self.lexer.peek()? {
