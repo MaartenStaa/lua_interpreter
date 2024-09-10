@@ -7,7 +7,7 @@ pub struct Lexer<'source> {
     filename: PathBuf,
     source: &'source str,
     rest: &'source str,
-    position: usize,
+    pub position: usize,
     peeked: Option<Token<'source>>,
 }
 

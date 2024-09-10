@@ -206,7 +206,6 @@ pub enum Field {
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct FunctionDef {
-    pub name: Option<Name>,
     pub parameters: Vec<Name>,
     pub has_varargs: bool,
     pub block: Block,
