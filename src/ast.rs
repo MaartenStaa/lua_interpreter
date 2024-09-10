@@ -121,7 +121,7 @@ pub enum Literal {
     String(Vec<u8>),
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Copy, Clone)]
 pub enum Number {
     Integer(i64),
     Float(f64),
