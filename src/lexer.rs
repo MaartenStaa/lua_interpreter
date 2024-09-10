@@ -704,7 +704,7 @@ impl<'source> Lexer<'source> {
 
         // Find the end of the number
         let end = chars.position(|(i, c)| {
-            let min_fraction_index = if is_hex { 2 } else { 0 };
+            let min_fraction_index = if is_hex { 1 } else { 0 };
 
             if c == '.' && !has_fraction && i >= min_fraction_index {
                 has_fraction = true;
@@ -751,13 +751,6 @@ impl<'source> Lexer<'source> {
         }
 
         let literal = &self.source[start..self.position];
-        if is_hex && literal.len() <= 2 {
-            return Err(miette!(
-                labels = vec![LabeledSpan::at(start..self.position, "this literal")],
-                "expected hex digits after '{literal}'"
-            )
-            .with_source_code(self.get_source_code()));
-        }
 
         Ok(Token {
             kind: match (is_float, is_hex) {
@@ -789,13 +782,18 @@ impl<'source> Lexer<'source> {
                     };
 
                     let base_str = &literal[2..fraction_start];
-                    let base = i64::from_str_radix(base_str, 16).map_err(|e| {
-                        miette!(
-                            labels = vec![LabeledSpan::at(start..self.position, "this literal")],
-                            "failed to parse hex float literal: {e}"
-                        )
-                        .with_source_code(self.get_source_code())
-                    })? as f64;
+                    let base = if base_str.is_empty() {
+                        0f64
+                    } else {
+                        i64::from_str_radix(base_str, 16).map_err(|e| {
+                            miette!(
+                                labels =
+                                    vec![LabeledSpan::at(start..self.position, "this literal")],
+                                "failed to parse hex float literal: {e}"
+                            )
+                            .with_source_code(self.get_source_code())
+                        })? as f64
+                    };
                     let fraction = if has_fraction {
                         let fraction_str = &literal[fraction_start + 1..exponent_start];
                         let fraction = i64::from_str_radix(fraction_str, 16).map_err(|e| {
@@ -983,6 +981,7 @@ mod tests {
             ("0xA23p-4", TokenKind::Float(162.1875)),
             #[allow(clippy::approx_constant)]
             ("0X1.921FB54442D18P+1", TokenKind::Float(3.141592653589793)),
+            ("0x.0p-3", TokenKind::Float(0.0)),
         ] {
             let mut lexer = Lexer::new(PathBuf::from("test.lua"), input);
             let token = lexer.next().unwrap().unwrap();
