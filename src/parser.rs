@@ -882,7 +882,7 @@ impl<'source> Parser<'source> {
     fn parse_expression_within(&mut self, min_bp: u8) -> miette::Result<Option<ast::Expression>> {
         let mut lhs = match self.lexer.peek()? {
             Some(Token {
-                kind: TokenKind::Identifier(_),
+                kind: TokenKind::Identifier(_) | TokenKind::OpenParen,
                 ..
             }) => ast::Expression::PrefixExpression(
                 self.parse_prefix_expression().wrap_err("in expression")?,
@@ -936,17 +936,6 @@ impl<'source> Parser<'source> {
                     _ => unreachable!(),
                 };
                 ast::Expression::Literal(ast::Literal::String(s))
-            }
-            Some(Token {
-                kind: TokenKind::OpenParen,
-                ..
-            }) => {
-                self.lexer.next();
-                let expression = self.expect_expression()?;
-                self.lexer.expect(|k| k == &TokenKind::CloseParen, ")")?;
-                ast::Expression::PrefixExpression(ast::PrefixExpression::Parenthesized(Box::new(
-                    expression,
-                )))
             }
             Some(Token {
                 kind: TokenKind::DotDotDot,
