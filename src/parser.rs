@@ -234,7 +234,13 @@ impl<'source> Parser<'source> {
                         .wrap_err("in for statement")
                         .map(Some)
                 }
-                Some(TokenKind::Return | TokenKind::End | TokenKind::ElseIf | TokenKind::Else) => {
+                Some(
+                    TokenKind::Return
+                    | TokenKind::End
+                    | TokenKind::ElseIf
+                    | TokenKind::Else
+                    | TokenKind::Until,
+                ) => {
                     // Handled by the block parser or outside of it
                     Ok(None)
                 }
