@@ -8,6 +8,7 @@ pub struct Lexer<'source> {
     source: &'source str,
     rest: &'source str,
     position: usize,
+    peeked: Option<Token<'source>>,
 }
 
 impl<'source> Lexer<'source> {
@@ -17,6 +18,7 @@ impl<'source> Lexer<'source> {
             source,
             rest: source,
             position: 0,
+            peeked: None,
         }
     }
 
@@ -59,6 +61,10 @@ impl<'source> Iterator for Lexer<'source> {
     type Item = miette::Result<Token>;
 
     fn next(&mut self) -> Option<Self::Item> {
+        if let Some(peeked) = self.peeked.take() {
+            return Some(Ok(peeked));
+        }
+
         if self.rest.is_empty() {
             return None;
         }
@@ -246,6 +252,37 @@ impl<'source> Iterator for Lexer<'source> {
 }
 
 impl<'source> Lexer<'source> {
+    pub fn peek(&mut self) -> miette::Result<Option<&Token>> {
+        if self.peeked.is_none() {
+            self.peeked = self.next().transpose()?;
+        }
+
+        Ok(self.peeked.as_ref())
+    }
+
+    pub fn expect<F>(&mut self, matcher: F, expected: &str) -> miette::Result<Token>
+    where
+        F: FnOnce(&'_ TokenKind) -> bool,
+    {
+        match self.next().transpose()? {
+            Some(token) if matcher(&token.kind) => Ok(token),
+            Some(token) => Err(miette!(
+                labels = vec![LabeledSpan::at(
+                    token.span.start..token.span.end,
+                    format!("expected '{expected}', found {:?}", token.kind)
+                )],
+                "unexpected token"
+            )),
+            None => Err(miette!(
+                labels = vec![LabeledSpan::at(
+                    self.position..self.position + 1,
+                    format!("expected '{expected}'")
+                )],
+                "unexpected end of input"
+            )),
+        }
+    }
+
     fn parse_ident(&mut self, start: usize) -> miette::Result<Token> {
         let mut chars = self.rest.chars().peekable();
         while let Some(c) = chars.peek() {
