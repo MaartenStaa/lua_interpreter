@@ -91,9 +91,10 @@ impl<'source> Iterator for Lexer<'source> {
                 '-' => {
                     // Handle the special case of "--" comments
                     if let Some('-') = self.rest.chars().next() {
-                        let line_break = self.rest.find('\n').unwrap_or(self.rest.len());
-                        self.position += line_break;
-                        self.rest = &self.rest[line_break..];
+                        self.position += 1;
+                        self.rest = &self.rest[1..];
+
+                        self.eat_comment();
                         continue;
                     }
 
@@ -281,6 +282,37 @@ impl<'source> Lexer<'source> {
                 "unexpected end of input"
             )),
         }
+    }
+
+    fn eat_comment(&mut self) {
+        // First need to check if this is a long comment
+        let mut chars = self.rest.chars().peekable();
+        if let Some('[') = chars.peek() {
+            chars.next();
+
+            let mut equals = 0;
+            while let Some('=') = chars.peek() {
+                chars.next();
+                equals += 1;
+            }
+
+            if let Some('[') = chars.next() {
+                // This is a long form comment, so we need to find the end
+                self.rest = &self.rest[equals + 2..];
+                self.position += equals + 2;
+
+                let end_pattern = format!("]{}]", "=".repeat(equals));
+                let end = self.rest.find(&end_pattern).unwrap_or(self.rest.len());
+                self.position += end + end_pattern.len();
+                self.rest = &self.rest[end + end_pattern.len()..];
+                return;
+            }
+        }
+
+        // Otherwise, this is a short comment
+        let line_break = self.rest.find('\n').unwrap_or(self.rest.len());
+        self.position += line_break;
+        self.rest = &self.rest[line_break..];
     }
 
     fn parse_ident(&mut self, start: usize) -> miette::Result<Token<'source>> {
@@ -994,6 +1026,24 @@ mod tests {
             let mut lexer = Lexer::new(PathBuf::from("test.lua"), input);
             let token = lexer.next().unwrap().unwrap();
             assert_eq!(token.kind, TokenKind::String(expected));
+        }
+    }
+
+    #[test]
+    fn comments() {
+        for input in [
+            "-- this is a comment\n",
+            "--[=[\n  example of a long [comment],\n  [[spanning several [lines]]]\n\n]=]",
+        ] {
+            let mut lexer = Lexer::new(PathBuf::from("test.lua"), input);
+            let token = lexer.next();
+            assert!(token.is_none(), "when parsing '{input}'");
+
+            // Also check that we can find tokens after the comment
+            let input = format!("{} 3", input);
+            let mut lexer = Lexer::new(PathBuf::from("test.lua"), &input);
+            let token = lexer.next().unwrap().unwrap();
+            assert_eq!(token.kind, TokenKind::Integer(3));
         }
     }
 }
