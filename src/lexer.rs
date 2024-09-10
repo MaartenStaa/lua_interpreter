@@ -713,7 +713,7 @@ impl<'source> Lexer<'source> {
                 is_hex = true;
                 false
             } else if (is_hex && !has_exponent && i > 1 && (c == 'p' || c == 'P'))
-                || (!is_hex && !has_exponent && i > 0 && (c == 'e' || c == 'E'))
+                || (!is_hex && !has_exponent && (c == 'e' || c == 'E'))
             {
                 has_exponent = true;
                 just_started_exponent = true;
@@ -968,6 +968,7 @@ mod tests {
         for (input, expected) in [
             ("3", TokenKind::Integer(3)),
             ("345", TokenKind::Integer(345)),
+            ("5e3", TokenKind::Float(5000.0)),
             ("0xff", TokenKind::Integer(255)),
             ("0xBEBADA", TokenKind::Integer(0xBEBADA)),
             ("3.0", TokenKind::Float(3.0)),
