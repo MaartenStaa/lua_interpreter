@@ -659,6 +659,7 @@ impl<'source> Parser<'source> {
                     let args = self.parse_args().wrap_err("in prefix expression")?;
                     prefix = ast::PrefixExpression::FunctionCall(ast::FunctionCall {
                         function: Box::new(prefix),
+                        as_method: true,
                         name: Some(name),
                         args,
                     });
@@ -670,6 +671,7 @@ impl<'source> Parser<'source> {
                     let args = self.parse_args().wrap_err("in prefix expression")?;
                     prefix = ast::PrefixExpression::FunctionCall(ast::FunctionCall {
                         function: Box::new(prefix),
+                        as_method: false,
                         name: None,
                         args,
                     });
@@ -683,6 +685,7 @@ impl<'source> Parser<'source> {
                         .wrap_err("in prefix expression")?;
                     prefix = ast::PrefixExpression::FunctionCall(ast::FunctionCall {
                         function: Box::new(prefix),
+                        as_method: false,
                         name: None,
                         args: vec![ast::Expression::TableConstructor(table)],
                     });
@@ -1017,16 +1020,12 @@ impl<'source> Parser<'source> {
                 Some(token) if token.kind.is_operator() => token,
                 Some(Token {
                     kind: TokenKind::Colon,
-                    span,
+                    ..
                 }) => {
                     let prefix = match lhs {
                         ast::Expression::PrefixExpression(p) => p,
                         _ => {
-                            return Err(miette!(
-                                labels = vec![span.labeled("cannot use ':' here")],
-                                help = "try wrapping the preceding expression in parentheses",
-                                "invalid expression before ':'"
-                            ))
+                            return Ok(Some(lhs));
                         }
                     };
 
@@ -1036,6 +1035,7 @@ impl<'source> Parser<'source> {
                     lhs = ast::Expression::PrefixExpression(ast::PrefixExpression::FunctionCall(
                         ast::FunctionCall {
                             function: Box::new(prefix),
+                            as_method: true,
                             name: Some(name),
                             args,
                         },

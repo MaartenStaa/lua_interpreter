@@ -116,6 +116,7 @@ pub enum PrefixExpression {
 #[derive(Debug, PartialEq, Clone)]
 pub struct FunctionCall {
     pub function: Box<PrefixExpression>,
+    pub as_method: bool,
     pub name: Option<Name>,
     pub args: Vec<Expression>,
 }
