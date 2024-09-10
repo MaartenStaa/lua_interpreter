@@ -8,12 +8,29 @@ pub struct Block {
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Statement {
-    Assignment(Assignment),
+    Assignment {
+        varlist: Vec<Variable>,
+        explist: Vec<Expression>,
+    },
     Block(Block),
-    While(While),
-    Repeat(Repeat),
-    If(If),
-    For(For),
+    While {
+        condition: Expression,
+        block: Block,
+    },
+    Repeat {
+        block: Block,
+        condition: Expression,
+    },
+    If {
+        condition: Expression,
+        block: Block,
+        else_ifs: Vec<ElseIf>,
+        else_block: Option<Block>,
+    },
+    For {
+        condition: ForCondition,
+        block: Block,
+    },
     Goto(Name),
     Label(Name),
     Break,
@@ -44,40 +61,8 @@ pub enum Variable {
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub struct Assignment {
-    pub varlist: Vec<Variable>,
-    pub explist: Vec<Expression>,
-}
-
-#[derive(Debug, PartialEq, Clone)]
-pub struct While {
-    pub condition: Expression,
-    pub block: Block,
-}
-
-#[derive(Debug, PartialEq, Clone)]
-pub struct Repeat {
-    pub block: Block,
-    pub condition: Expression,
-}
-
-#[derive(Debug, PartialEq, Clone)]
-pub struct If {
-    pub condition: Expression,
-    pub block: Block,
-    pub else_ifs: Vec<ElseIf>,
-    pub else_block: Option<Block>,
-}
-
-#[derive(Debug, PartialEq, Clone)]
 pub struct ElseIf {
     pub condition: Expression,
-    pub block: Block,
-}
-
-#[derive(Debug, PartialEq, Clone)]
-pub struct For {
-    pub condition: ForCondition,
     pub block: Block,
 }
 
@@ -102,8 +87,15 @@ pub enum Expression {
     FunctionDef(FunctionDef),
     TableConstructor(TableConstructor),
     Ellipsis,
-    BinaryOp(BinaryOp),
-    UnaryOp(UnaryOp),
+    BinaryOp {
+        op: BinaryOperator,
+        lhs: Box<Expression>,
+        rhs: Box<Expression>,
+    },
+    UnaryOp {
+        op: UnaryOperator,
+        rhs: Box<Expression>,
+    },
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -133,19 +125,6 @@ pub enum Literal {
 pub enum Number {
     Integer(i64),
     Float(f64),
-}
-
-#[derive(Debug, PartialEq, Clone)]
-pub struct BinaryOp {
-    pub op: BinaryOperator,
-    pub lhs: Box<Expression>,
-    pub rhs: Box<Expression>,
-}
-
-#[derive(Debug, PartialEq, Clone)]
-pub struct UnaryOp {
-    pub op: UnaryOperator,
-    pub operand: Box<Expression>,
 }
 
 #[derive(Debug, PartialEq, Clone)]

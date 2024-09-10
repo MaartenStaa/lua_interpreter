@@ -128,17 +128,14 @@ impl<'source> Parser<'source> {
                     self.lexer.expect(|k| k == &TokenKind::Do, "do")?;
                     let block = self.parse_block().wrap_err("in while statement")?;
                     self.lexer.expect(|k| k == &TokenKind::End, "end")?;
-                    Ok(Some(ast::Statement::While(ast::While { condition, block })))
+                    Ok(Some(ast::Statement::While { condition, block }))
                 }
                 Some(TokenKind::Repeat) => {
                     self.lexer.next();
                     let block = self.parse_block().wrap_err("in repeat statement")?;
                     self.lexer.expect(|k| k == &TokenKind::Until, "until")?;
                     let condition = self.expect_expression().wrap_err("in repeat statement")?;
-                    Ok(Some(ast::Statement::Repeat(ast::Repeat {
-                        block,
-                        condition,
-                    })))
+                    Ok(Some(ast::Statement::Repeat { block, condition }))
                 }
                 Some(TokenKind::If) => {
                     self.lexer.next();
@@ -168,12 +165,12 @@ impl<'source> Parser<'source> {
 
                     self.lexer.expect(|k| k == &TokenKind::End, "end")?;
 
-                    Ok(Some(ast::Statement::If(ast::If {
+                    Ok(Some(ast::Statement::If {
                         condition,
                         block,
                         else_ifs,
                         else_block,
-                    })))
+                    }))
                 }
                 Some(TokenKind::Function) => {
                     self.lexer.next();
@@ -223,10 +220,10 @@ impl<'source> Parser<'source> {
                         .parse_function_body(implicit_self_parameter)
                         .wrap_err("in function declaration")?;
 
-                    Ok(Some(ast::Statement::Assignment(ast::Assignment {
+                    Ok(Some(ast::Statement::Assignment {
                         varlist: vec![name],
                         explist: vec![ast::Expression::FunctionDef(function_def)],
-                    })))
+                    }))
                 }
                 Some(TokenKind::For) => {
                     self.lexer.next();
@@ -495,7 +492,7 @@ impl<'source> Parser<'source> {
         let block = self.parse_block().wrap_err("in block of for statement")?;
         self.lexer.expect(|k| k == &TokenKind::End, "end")?;
 
-        Ok(ast::Statement::For(ast::For { condition, block }))
+        Ok(ast::Statement::For { condition, block })
     }
 
     fn parse_varlist_or_functioncall(&mut self) -> miette::Result<ast::Statement> {
@@ -574,10 +571,7 @@ impl<'source> Parser<'source> {
                     }
                 }
 
-                return Ok(ast::Statement::Assignment(ast::Assignment {
-                    varlist,
-                    explist,
-                }));
+                return Ok(ast::Statement::Assignment { varlist, explist });
             }
             _ => {}
         }
@@ -960,10 +954,10 @@ impl<'source> Parser<'source> {
                 self.lexer.next();
                 let ((), r_bp) = prefix_binding_power(&TokenKind::Minus);
                 let rhs = self.expect_expression_within(r_bp)?;
-                ast::Expression::UnaryOp(ast::UnaryOp {
+                ast::Expression::UnaryOp {
                     op: ast::UnaryOperator::Neg,
-                    operand: Box::new(rhs),
-                })
+                    rhs: Box::new(rhs),
+                }
             }
             Some(Token {
                 kind: TokenKind::Not,
@@ -972,10 +966,10 @@ impl<'source> Parser<'source> {
                 self.lexer.next();
                 let ((), r_bp) = prefix_binding_power(&TokenKind::Not);
                 let rhs = self.expect_expression_within(r_bp)?;
-                ast::Expression::UnaryOp(ast::UnaryOp {
+                ast::Expression::UnaryOp {
                     op: ast::UnaryOperator::Not,
-                    operand: Box::new(rhs),
-                })
+                    rhs: Box::new(rhs),
+                }
             }
             Some(Token {
                 kind: TokenKind::Hash,
@@ -984,10 +978,10 @@ impl<'source> Parser<'source> {
                 self.lexer.next();
                 let ((), r_bp) = prefix_binding_power(&TokenKind::Hash);
                 let rhs = self.expect_expression_within(r_bp)?;
-                ast::Expression::UnaryOp(ast::UnaryOp {
+                ast::Expression::UnaryOp {
                     op: ast::UnaryOperator::Length,
-                    operand: Box::new(rhs),
-                })
+                    rhs: Box::new(rhs),
+                }
             }
             Some(Token {
                 kind: TokenKind::Tilde,
@@ -996,10 +990,10 @@ impl<'source> Parser<'source> {
                 self.lexer.next();
                 let ((), r_bp) = prefix_binding_power(&TokenKind::Tilde);
                 let rhs = self.expect_expression_within(r_bp)?;
-                ast::Expression::UnaryOp(ast::UnaryOp {
+                ast::Expression::UnaryOp {
                     op: ast::UnaryOperator::BitwiseNot,
-                    operand: Box::new(rhs),
-                })
+                    rhs: Box::new(rhs),
+                }
             }
             Some(Token {
                 kind: TokenKind::Function,
@@ -1070,11 +1064,11 @@ impl<'source> Parser<'source> {
                 self.lexer.next();
 
                 let rhs = self.expect_expression_within(r_bp)?;
-                lhs = ast::Expression::BinaryOp(ast::BinaryOp {
+                lhs = ast::Expression::BinaryOp {
                     op,
                     lhs: Box::new(lhs),
                     rhs: Box::new(rhs),
-                })
+                }
             }
         }
 
