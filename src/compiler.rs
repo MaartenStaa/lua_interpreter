@@ -52,20 +52,8 @@ impl Compiler {
                 self.compile_load_literal(literal);
             }
             crate::ast::Expression::BinaryOp { op, lhs, rhs } => {
-                // https://www.lua.org/manual/5.4/manual.html#3.4.8
-                // "The concatenation ('..') and exponentiation ('^') operators are right
-                // associative. All other binary operators are left associative."
-                match op {
-                    crate::ast::BinaryOperator::Concat | crate::ast::BinaryOperator::Pow => {
-                        self.compile_expression(*rhs);
-                        self.compile_expression(*lhs);
-                    }
-                    _ => {
-                        self.compile_expression(*lhs);
-                        self.compile_expression(*rhs);
-                    }
-                }
-
+                self.compile_expression(*lhs);
+                self.compile_expression(*rhs);
                 self.compile_binary_operator(op);
             }
             crate::ast::Expression::PrefixExpression(function_call) => {
