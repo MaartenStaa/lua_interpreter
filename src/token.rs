@@ -7,6 +7,10 @@ pub struct Span {
 }
 
 impl Span {
+    pub fn new(start: usize, end: usize) -> Span {
+        Span { start, end }
+    }
+
     pub fn labeled(&self, label: impl Into<String>) -> LabeledSpan {
         LabeledSpan::at(SourceSpan::from(*self), label)
     }

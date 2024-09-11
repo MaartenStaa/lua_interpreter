@@ -2,13 +2,15 @@ use std::path::PathBuf;
 
 use crate::ast::{self, AttributedName, LocalAttribute};
 use crate::lexer::Lexer;
-use crate::token::{Token, TokenKind};
+use crate::scope::{DraftScope, NameLocation};
+use crate::token::{Span, Token, TokenKind};
 use miette::{miette, Context, LabeledSpan};
 
 pub struct Parser<'source> {
     pub filename: PathBuf,
     source: &'source str,
     lexer: Lexer<'source>,
+    scopes: Vec<DraftScope>,
 }
 
 impl<'source> Parser<'source> {
@@ -17,6 +19,7 @@ impl<'source> Parser<'source> {
             filename: filename.clone(),
             source,
             lexer: Lexer::new(filename, source),
+            scopes: vec![DraftScope::new()],
         }
     }
 
@@ -105,9 +108,12 @@ impl<'source> Parser<'source> {
                     Ok(Some(ast::Statement::Goto(name)))
                 }
                 Some(TokenKind::DoubleColon) => {
+                    let start = self.lexer.position;
                     self.lexer.next();
                     let name = self.parse_name().wrap_err("in label")?;
                     self.lexer.expect(|k| k == &TokenKind::DoubleColon, "::")?;
+                    let end = self.lexer.position;
+                    self.declare_label(&name, Span::new(start, end))?;
                     Ok(Some(ast::Statement::Label(name)))
                 }
                 Some(TokenKind::Local) => {
@@ -175,9 +181,8 @@ impl<'source> Parser<'source> {
                 Some(TokenKind::Function) => {
                     self.lexer.next();
                     let (name, implicit_self_parameter) = {
-                        let mut name = ast::Variable::Name(
-                            self.parse_name().wrap_err("in function declaration")?,
-                        );
+                        let name = self.parse_name().wrap_err("in function declaration")?;
+                        let mut name = ast::Variable::Name(self.declare_variable(name));
                         let mut implicit_self_parameter = None;
 
                         loop {
@@ -206,7 +211,8 @@ impl<'source> Parser<'source> {
                                         Box::new(ast::PrefixExpression::Variable(name)),
                                         method_name,
                                     );
-                                    implicit_self_parameter = Some(ast::Name("self".to_string()));
+                                    implicit_self_parameter =
+                                        Some(ast::Name::unresolved("self".to_string()));
                                     break;
                                 }
                                 _ => break,
@@ -270,9 +276,10 @@ impl<'source> Parser<'source> {
             let name = self
                 .parse_name()
                 .wrap_err("in local function declaration")?;
+            let name = self.declare_variable(name);
             let function_def = self
                 .parse_function_body(None)
-                .wrap_err_with(|| format!("in local {} function declaration", name.0))?;
+                .wrap_err_with(|| format!("in local {} function declaration", name.identifier))?;
 
             Ok(ast::Statement::LocalDeclaraction(
                 vec![AttributedName {
@@ -338,33 +345,6 @@ impl<'source> Parser<'source> {
                             _ => break,
                         }
                     }
-                    // Some(Token {
-                    //     kind: TokenKind::Identifier(attr_str),
-                    //     ..
-                    // }) => {
-                    //     let attr = match *attr_str {
-                    //         "const" => LocalAttribute::Const,
-                    //         "close" => LocalAttribute::Close,
-                    //         _ => {
-                    //             // This probably means we reached the end of the `local`
-                    //             // declaration. For example:
-                    //             // local a, b, c
-                    //             // a = 1
-                    //             attributed_names.push(AttributedName {
-                    //                 name,
-                    //                 attribute: None,
-                    //             });
-                    //             break;
-                    //         }
-                    //     };
-                    //     self.lexer.next();
-
-                    //     attributed_names.push(AttributedName {
-                    //         name,
-                    //         attribute: Some(attr),
-                    //     });
-
-                    //                       }
                     _ => {
                         attributed_names.push(AttributedName {
                             name,
@@ -375,7 +355,7 @@ impl<'source> Parser<'source> {
                 }
             }
 
-            if self.lexer.peek()?.map(|t| &t.kind) == Some(&TokenKind::Equals) {
+            let expressions = if self.lexer.peek()?.map(|t| &t.kind) == Some(&TokenKind::Equals) {
                 self.lexer.next();
                 let mut expressions = Vec::new();
                 loop {
@@ -393,20 +373,29 @@ impl<'source> Parser<'source> {
                     }
                 }
 
-                Ok(ast::Statement::LocalDeclaraction(
-                    attributed_names,
-                    expressions,
-                ))
+                expressions
             } else {
-                Ok(ast::Statement::LocalDeclaraction(
-                    attributed_names,
-                    Vec::new(),
-                ))
-            }
+                vec![]
+            };
+
+            let attributed_names = attributed_names
+                .into_iter()
+                .map(|n| AttributedName {
+                    name: self.declare_variable(n.name),
+                    attribute: n.attribute,
+                })
+                .collect();
+
+            Ok(ast::Statement::LocalDeclaraction(
+                attributed_names,
+                expressions,
+            ))
         }
     }
 
     fn parse_for_statement(&mut self) -> miette::Result<ast::Statement> {
+        self.begin_scope();
+
         let name = self.parse_name().wrap_err("name in for statement")?;
         let condition = match self.lexer.peek()? {
             Some(token) if token.kind == TokenKind::Equals => {
@@ -414,6 +403,9 @@ impl<'source> Parser<'source> {
                 let initial = self
                     .expect_expression()
                     .wrap_err("initializer expression in for statement")?;
+
+                let name = self.declare_variable(name);
+
                 self.lexer.expect(|k| k == &TokenKind::Comma, ",")?;
                 let limit = self
                     .expect_expression()
@@ -469,6 +461,11 @@ impl<'source> Parser<'source> {
                     }
                 }
 
+                let names = names
+                    .into_iter()
+                    .map(|n| self.declare_variable(n))
+                    .collect();
+
                 ast::ForCondition::GenericFor { names, expressions }
             }
             Some(token) => {
@@ -510,7 +507,7 @@ impl<'source> Parser<'source> {
         // varlist ::= var {‘,’ var}
         // var ::=  Name | prefixexp ‘[’ exp ‘]’ | prefixexp ‘.’ Name
         //
-        // functioncall ::=  prefixexp args | prefixexp ‘:’ Name argso
+        // functioncall ::=  prefixexp args | prefixexp ‘:’ Name args
         //
         // prefixexp ::= var | functioncall | ‘(’ exp ‘)’
 
@@ -602,7 +599,7 @@ impl<'source> Parser<'source> {
                 kind: TokenKind::Identifier(ident),
                 ..
             }) => {
-                let name = ast::Name(ident.to_string());
+                let name = self.lookup_variable(ast::Name::unresolved(ident.to_string()));
                 ast::PrefixExpression::Variable(ast::Variable::Name(name))
             }
             Some(t) => {
@@ -823,7 +820,8 @@ impl<'source> Parser<'source> {
                     };
 
                     if let Some(name) = name {
-                        fields.push(ast::Field::Named(name, value));
+                        // TODO: We resolve and then unresolve? That's annoying.
+                        fields.push(ast::Field::Named(name.unresolve(), value));
                     } else {
                         fields.push(ast::Field::Value(value));
                     }
@@ -1077,8 +1075,10 @@ impl<'source> Parser<'source> {
 
     fn parse_function_body(
         &mut self,
-        implicit_self_parameter: Option<ast::Name>,
+        implicit_self_parameter: Option<ast::Name<()>>,
     ) -> miette::Result<ast::FunctionDef> {
+        self.begin_scope();
+
         self.lexer.expect(|k| k == &TokenKind::OpenParen, "(")?;
         let mut parameters = Vec::new();
         if let Some(name) = implicit_self_parameter {
@@ -1136,9 +1136,16 @@ impl<'source> Parser<'source> {
             }
         }
 
+        let parameters = parameters
+            .into_iter()
+            .map(|n| self.declare_variable(n))
+            .collect();
+
         self.lexer.expect(|k| k == &TokenKind::CloseParen, ")")?;
         let block = self.parse_block().wrap_err("in function definition")?;
         self.lexer.expect(|k| k == &TokenKind::End, "end")?;
+
+        self.end_scope();
 
         Ok(ast::FunctionDef {
             parameters,
@@ -1147,7 +1154,7 @@ impl<'source> Parser<'source> {
         })
     }
 
-    fn parse_name(&mut self) -> miette::Result<ast::Name> {
+    fn parse_name(&mut self) -> miette::Result<ast::Name<()>> {
         let token = self
             .lexer
             .expect(|k| matches!(k, &TokenKind::Identifier(_)), "identifier")?;
@@ -1156,7 +1163,7 @@ impl<'source> Parser<'source> {
             _ => unreachable!(),
         };
 
-        Ok(ast::Name(name.to_string()))
+        Ok(ast::Name::unresolved(name.to_string()))
     }
 }
 
@@ -1189,4 +1196,62 @@ fn infix_binding_power(kind: &TokenKind) -> Option<(u8, u8)> {
 
         _ => return None,
     })
+}
+
+/// Scoping methods
+impl<'source> Parser<'source> {
+    fn begin_scope(&mut self) {
+        self.scopes.push(DraftScope::new());
+    }
+
+    fn end_scope(&mut self) {
+        self.scopes.pop();
+    }
+
+    fn declare_variable<T>(&mut self, name: ast::Name<T>) -> ast::Name<NameLocation> {
+        let current_scope = self.scopes.len() - 1;
+        let current_scope = &mut self.scopes[current_scope];
+        current_scope.register_variable(&name.identifier);
+
+        ast::Name {
+            location: NameLocation { scope_offset: 0 },
+            identifier: name.identifier,
+        }
+    }
+
+    fn declare_label<T>(&mut self, name: &ast::Name<T>, span: Span) -> miette::Result<()> {
+        for scope in self.scopes.iter_mut().rev() {
+            if scope.has_label(&name.identifier) {
+                return Err(miette!(
+                    labels = vec![span.labeled("label already defined")],
+                    "label already defined"
+                ));
+            }
+
+            scope.register_label(&name.identifier);
+        }
+
+        Ok(())
+    }
+
+    fn lookup_variable<T>(&mut self, name: ast::Name<T>) -> ast::Name<NameLocation> {
+        for (scope_offset, scope) in self.scopes.iter().rev().enumerate() {
+            if scope.has_variable(&name.identifier) {
+                return ast::Name {
+                    location: NameLocation { scope_offset },
+                    identifier: name.identifier,
+                };
+            }
+        }
+
+        // We've reached the global scope. Undefined variables are
+        // implicitly declared as global (though without an initial value)
+        self.scopes[0].register_variable(&name.identifier);
+        return ast::Name {
+            location: NameLocation {
+                scope_offset: self.scopes.len() - 1,
+            },
+            identifier: name.identifier,
+        };
+    }
 }

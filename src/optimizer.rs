@@ -146,7 +146,7 @@ fn optimize_prefix_expression(prefix: ast::PrefixExpression) -> ast::PrefixExpre
     }
 }
 
-fn optimize_variable(var: ast::Variable) -> ast::Variable {
+fn optimize_variable<T>(var: ast::Variable<T>) -> ast::Variable<T> {
     match var {
         ast::Variable::Name(name) => ast::Variable::Name(name),
         ast::Variable::Field(prefix, name) => {

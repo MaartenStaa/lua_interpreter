@@ -1,5 +1,7 @@
 // Reference: https://www.lua.org/manual/5.4/manual.html#9
 
+use crate::scope::NameLocation;
+
 #[derive(Debug, PartialEq, Clone)]
 pub struct Block {
     pub statements: Vec<Statement>,
@@ -9,7 +11,7 @@ pub struct Block {
 #[derive(Debug, PartialEq, Clone)]
 pub enum Statement {
     Assignment {
-        varlist: Vec<Variable>,
+        varlist: Vec<Variable<NameLocation>>,
         explist: Vec<Expression>,
     },
     Block(Block),
@@ -31,19 +33,40 @@ pub enum Statement {
         condition: ForCondition,
         block: Block,
     },
-    Goto(Name),
-    Label(Name),
+    Goto(Name<()>),
+    Label(Name<()>),
     Break,
     FunctionCall(FunctionCall),
-    LocalDeclaraction(Vec<AttributedName>, Vec<Expression>),
+    LocalDeclaraction(Vec<AttributedName<NameLocation>>, Vec<Expression>),
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub struct Name(pub String);
+pub struct Name<L> {
+    pub identifier: String,
+    pub location: L,
+}
+
+impl Name<()> {
+    pub fn unresolved(identifier: String) -> Self {
+        Self {
+            identifier,
+            location: (),
+        }
+    }
+}
+
+impl<T> Name<T> {
+    pub fn unresolve(self) -> Name<()> {
+        Name {
+            identifier: self.identifier,
+            location: (),
+        }
+    }
+}
 
 #[derive(Debug, PartialEq, Clone)]
-pub struct AttributedName {
-    pub name: Name,
+pub struct AttributedName<L> {
+    pub name: Name<L>,
     pub attribute: Option<LocalAttribute>,
 }
 
@@ -54,10 +77,10 @@ pub enum LocalAttribute {
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub enum Variable {
-    Name(Name),
+pub enum Variable<L> {
+    Name(Name<L>),
     Indexed(Box<PrefixExpression>, Box<Expression>),
-    Field(Box<PrefixExpression>, Name),
+    Field(Box<PrefixExpression>, Name<()>),
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -69,13 +92,13 @@ pub struct ElseIf {
 #[derive(Debug, PartialEq, Clone)]
 pub enum ForCondition {
     NumericFor {
-        name: Name,
+        name: Name<NameLocation>,
         initial: Expression,
         limit: Expression,
         step: Option<Expression>,
     },
     GenericFor {
-        names: Vec<Name>,
+        names: Vec<Name<NameLocation>>,
         expressions: Vec<Expression>,
     },
 }
@@ -100,7 +123,7 @@ pub enum Expression {
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum PrefixExpression {
-    Variable(Variable),
+    Variable(Variable<NameLocation>),
     FunctionCall(FunctionCall),
     Parenthesized(Box<Expression>),
 }
@@ -109,7 +132,7 @@ pub enum PrefixExpression {
 pub struct FunctionCall {
     pub function: Box<PrefixExpression>,
     pub as_method: bool,
-    pub name: Option<Name>,
+    pub name: Option<Name<()>>,
     pub args: Vec<Expression>,
 }
 
@@ -179,14 +202,14 @@ pub struct TableConstructor {
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Field {
-    Named(Name, Expression),
+    Named(Name<()>, Expression),
     Indexed(Expression, Expression),
     Value(Expression),
 }
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct FunctionDef {
-    pub parameters: Vec<Name>,
+    pub parameters: Vec<Name<NameLocation>>,
     pub has_varargs: bool,
     pub block: Block,
 }
