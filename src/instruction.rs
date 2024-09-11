@@ -9,9 +9,9 @@ pub enum Instruction {
     Add,
     Sub,
     Mul,
+    Div,
     Mod,
     Pow,
-    Div,
     IDiv,
     // Band,
     // Bor,
@@ -32,6 +32,9 @@ pub enum Instruction {
 
     // Unary operations
     Neg,
+    Not,
+    // Len,
+
     // // Table
     // NewTable,
     // SetTable,

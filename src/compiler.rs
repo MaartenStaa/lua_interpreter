@@ -1,5 +1,5 @@
 use crate::{
-    ast::{self, BinaryOperator},
+    ast::{self, BinaryOperator, UnaryOperator},
     instruction::Instruction,
     value,
     vm::VM,
@@ -66,10 +66,7 @@ impl Compiler {
             }
             crate::ast::Expression::UnaryOp { op, rhs } => {
                 self.compile_expression(*rhs);
-                match op {
-                    crate::ast::UnaryOperator::Neg => self.vm.push_instruction(Instruction::Neg),
-                    _ => todo!("compile_expression UnaryOp {:?}", op),
-                }
+                self.compile_unary_operator(op);
             }
             _ => todo!("compile_expression {:?}", expression),
         }
@@ -113,10 +110,20 @@ impl Compiler {
             BinaryOperator::Div => self.vm.push_instruction(Instruction::Div),
             BinaryOperator::Mod => self.vm.push_instruction(Instruction::Mod),
             BinaryOperator::Pow => self.vm.push_instruction(Instruction::Pow),
+            BinaryOperator::FloorDiv => self.vm.push_instruction(Instruction::IDiv),
 
             // Strings
             BinaryOperator::Concat => self.vm.push_instruction(Instruction::Concat),
+
             _ => todo!("compile_binary_operator {:?}", op),
+        }
+    }
+
+    fn compile_unary_operator(&mut self, op: ast::UnaryOperator) {
+        match op {
+            UnaryOperator::Neg => self.vm.push_instruction(Instruction::Neg),
+            UnaryOperator::Not => self.vm.push_instruction(Instruction::Not),
+            _ => todo!("compile_expression UnaryOp {:?}", op),
         }
     }
 }

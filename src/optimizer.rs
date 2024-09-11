@@ -334,6 +334,9 @@ fn optimize_unary_op(op: UnaryOperator, rhs: Expression) -> Expression {
         (UnaryOperator::Not, Expression::Literal(Literal::Nil)) => {
             Expression::Literal(Literal::Boolean(true))
         }
+        (UnaryOperator::Not, Expression::Literal(_)) => {
+            Expression::Literal(Literal::Boolean(false))
+        }
         (op, rhs) => Expression::UnaryOp {
             op,
             rhs: Box::new(rhs),

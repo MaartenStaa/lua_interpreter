@@ -199,6 +199,18 @@ impl ops::Neg for LuaValue {
     }
 }
 
+impl ops::Not for LuaValue {
+    type Output = Self;
+
+    fn not(self) -> Self {
+        match self {
+            LuaValue::Boolean(b) => LuaValue::Boolean(!b),
+            LuaValue::Nil => LuaValue::Boolean(true),
+            _ => LuaValue::Boolean(false),
+        }
+    }
+}
+
 impl LuaValue {
     pub fn concat(self, other: Self) -> Self {
         match (self, other) {
@@ -229,6 +241,13 @@ impl LuaValue {
     pub fn pow(self, other: Self) -> Self {
         match (self, other) {
             (LuaValue::Number(a), LuaValue::Number(b)) => LuaValue::Number(a.pow(b)),
+            _ => unimplemented!(),
+        }
+    }
+
+    pub fn idiv(self, other: Self) -> Self {
+        match (self, other) {
+            (LuaValue::Number(a), LuaValue::Number(b)) => LuaValue::Number((a / b).floor()),
             _ => unimplemented!(),
         }
     }
@@ -319,6 +338,13 @@ impl LuaNumber {
             (LuaNumber::Float(a), LuaNumber::Float(b)) => LuaNumber::Float(a.powf(b)),
             (LuaNumber::Integer(a), LuaNumber::Float(b)) => LuaNumber::Float((a as f64).powf(b)),
             (LuaNumber::Float(a), LuaNumber::Integer(b)) => LuaNumber::Float(a.powi(b as i32)),
+        }
+    }
+
+    pub fn floor(self) -> Self {
+        match self {
+            LuaNumber::Integer(a) => LuaNumber::Integer(a),
+            LuaNumber::Float(a) => LuaNumber::Float(a.floor()),
         }
     }
 }

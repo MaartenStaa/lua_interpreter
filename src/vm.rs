@@ -112,6 +112,12 @@ impl VM {
                     self.push(a.pow(b));
                     1
                 }
+                Instruction::IDiv => {
+                    let b = self.pop();
+                    let a = self.pop();
+                    self.push(a.idiv(b));
+                    1
+                }
 
                 // Comparison
 
@@ -129,6 +135,11 @@ impl VM {
                     self.push(-a);
                     1
                 }
+                Instruction::Not => {
+                    let a = self.pop();
+                    self.push(!a);
+                    1
+                }
 
                 // Debug
                 Instruction::Print => {
@@ -139,8 +150,6 @@ impl VM {
 
                 // Halt
                 Instruction::Halt => break,
-
-                _ => unimplemented!(),
             };
             ip += instruction_increment;
         }

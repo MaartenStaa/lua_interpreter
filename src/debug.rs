@@ -69,8 +69,10 @@ pub fn print_instructions(vm: &VM) {
                 println!("NEG");
                 1
             }
-
-            _ => todo!("print_instructions {:?}", instruction),
+            Instruction::Not => {
+                println!("NOT");
+                1
+            }
         };
         instruction_pointer += instruction_increment;
     }
