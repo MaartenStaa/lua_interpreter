@@ -62,7 +62,14 @@ impl Display for LuaNumber {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             LuaNumber::Integer(i) => write!(f, "{}", i),
-            LuaNumber::Float(fl) => write!(f, "{}", fl),
+            LuaNumber::Float(fl) => {
+                // Ensure we always print the decimal point
+                if fl.fract() == 0.0 {
+                    write!(f, "{:.1}", fl)
+                } else {
+                    write!(f, "{}", fl)
+                }
+            }
         }
     }
 }
