@@ -251,13 +251,10 @@ impl<'source> Parser<'source> {
                     .parse_varlist_or_functioncall()
                     .wrap_err("in variable assignment or function call")
                     .map(Some),
-                Some(t) => {
+                Some(_) => {
                     return Err(miette!(
-                        labels = vec![LabeledSpan::at(
-                            self.lexer.position..self.lexer.position,
-                            "here"
-                        )],
-                        "unimplemented token in parse_statement: {t:?}"
+                        labels = vec![next_token.unwrap().span.labeled("this is not a statement")],
+                        "expected a statement"
                     ))
                 }
 
