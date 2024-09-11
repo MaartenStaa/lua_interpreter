@@ -1,8 +1,13 @@
 pub mod ast;
+pub mod compiler;
+pub mod debug;
 mod helpers;
+mod instruction;
 pub mod lexer;
-pub mod math;
+mod math;
 pub mod optimizer;
 pub mod parser;
 pub mod scope;
 pub mod token;
+pub mod value;
+pub mod vm;

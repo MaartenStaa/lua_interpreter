@@ -1,6 +1,9 @@
 use std::ops;
 
-use crate::ast;
+use crate::{
+    ast,
+    value::{LuaNumber, LuaValue},
+};
 
 impl ops::Add for ast::Number {
     type Output = Self;
@@ -119,6 +122,30 @@ impl PartialOrd for ast::Number {
             (ast::Number::Float(a), ast::Number::Float(b)) => a.partial_cmp(b),
             (ast::Number::Integer(a), ast::Number::Float(b)) => (*a as f64).partial_cmp(b),
             (ast::Number::Float(a), ast::Number::Integer(b)) => a.partial_cmp(&(*b as f64)),
+        }
+    }
+}
+
+impl ops::Add for LuaValue {
+    type Output = Self;
+
+    fn add(self, other: Self) -> Self {
+        match (self, other) {
+            (LuaValue::Number(a), LuaValue::Number(b)) => LuaValue::Number(a + b),
+            _ => unimplemented!(),
+        }
+    }
+}
+
+impl ops::Add for LuaNumber {
+    type Output = Self;
+
+    fn add(self, other: Self) -> Self {
+        match (self, other) {
+            (LuaNumber::Integer(a), LuaNumber::Integer(b)) => LuaNumber::Integer(a.wrapping_add(b)),
+            (LuaNumber::Float(a), LuaNumber::Float(b)) => LuaNumber::Float(a + b),
+            (LuaNumber::Integer(a), LuaNumber::Float(b)) => LuaNumber::Float(a as f64 + b),
+            (LuaNumber::Float(a), LuaNumber::Integer(b)) => LuaNumber::Float(a + b as f64),
         }
     }
 }

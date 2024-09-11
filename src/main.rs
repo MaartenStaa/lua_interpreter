@@ -1,7 +1,9 @@
 use std::path::PathBuf;
 
 use clap::Parser;
-use lua_interpreter::{lexer, parser, token::TokenKind};
+use lua_interpreter::{
+    debug, lexer, optimizer::optimize as optimize_ast, parser, token::TokenKind,
+};
 use miette::LabeledSpan;
 
 #[derive(Parser, Debug)]
@@ -17,6 +19,14 @@ struct Input {
     /// Debug the parser, printing out the AST. Does not execute the file.
     #[clap(long, default_value = "false")]
     debug_parser: bool,
+
+    /// Disable the optimizer, e.g. skipping constant folding.
+    #[clap(long, default_value = "false")]
+    disable_optimizer: bool,
+
+    /// Print the bytecode instructions before executing them.
+    #[clap(long, default_value = "false")]
+    print_bytecode: bool,
 }
 
 fn main() {
@@ -24,6 +34,8 @@ fn main() {
         filename,
         debug_lexer,
         debug_parser,
+        disable_optimizer,
+        print_bytecode,
     } = Input::parse();
 
     let source = std::fs::read_to_string(&filename).expect("failed to read source code file");
@@ -36,13 +48,31 @@ fn main() {
         return;
     }
 
+    let mut parser = parser::Parser::new(filename, &source);
     if debug_parser {
-        let parser = parser::Parser::new(filename, &source);
         run_debug_parser(parser);
         return;
     }
 
-    unimplemented!();
+    let ast = match parser.parse() {
+        Ok(ast) => ast,
+        Err(e) => {
+            eprintln!("{:?}", e);
+            std::process::exit(1);
+        }
+    };
+    let ast = if disable_optimizer {
+        ast
+    } else {
+        optimize_ast(ast)
+    };
+
+    let mut vm = lua_interpreter::compiler::Compiler::new().compile(ast);
+    if print_bytecode {
+        debug::print_instructions(&vm);
+    }
+
+    vm.run();
 }
 
 fn run_debug_lexer(lexer: lexer::Lexer, source_code: miette::NamedSource<String>) {
