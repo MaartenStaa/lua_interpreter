@@ -113,6 +113,13 @@ impl ast::Number {
             ast::Number::Float(a) => ast::Number::Integer(a.floor() as i64),
         }
     }
+
+    pub fn to_string(self) -> String {
+        match self {
+            ast::Number::Integer(i) => i.to_string(),
+            ast::Number::Float(f) => f.to_string(),
+        }
+    }
 }
 
 impl PartialOrd for ast::Number {

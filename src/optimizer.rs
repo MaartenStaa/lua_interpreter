@@ -1,9 +1,9 @@
-use crate::ast;
+use crate::ast::*;
 
 /// Apply optimizations to the AST
 /// At the moment, we only do constant folding
-pub fn optimize(program: ast::Block) -> ast::Block {
-    ast::Block {
+pub fn optimize(program: Block) -> Block {
+    Block {
         statements: program
             .statements
             .into_iter()
@@ -15,80 +15,80 @@ pub fn optimize(program: ast::Block) -> ast::Block {
     }
 }
 
-fn optimize_statement(statement: ast::Statement) -> ast::Statement {
+fn optimize_statement(statement: Statement) -> Statement {
     match statement {
-        ast::Statement::Assignment { varlist, explist } => ast::Statement::Assignment {
+        Statement::Assignment { varlist, explist } => Statement::Assignment {
             varlist: varlist.into_iter().map(optimize_variable).collect(),
             explist: explist.into_iter().map(optimize_expression).collect(),
         },
-        ast::Statement::Block(block) => ast::Statement::Block(optimize(block)),
-        ast::Statement::While { condition, block } => ast::Statement::While {
+        Statement::Block(block) => Statement::Block(optimize(block)),
+        Statement::While { condition, block } => Statement::While {
             condition: optimize_expression(condition),
             block: optimize(block),
         },
-        ast::Statement::Repeat { block, condition } => ast::Statement::Repeat {
+        Statement::Repeat { block, condition } => Statement::Repeat {
             block: optimize(block),
             condition: optimize_expression(condition),
         },
-        ast::Statement::If {
+        Statement::If {
             condition,
             block,
             else_ifs,
             else_block,
-        } => ast::Statement::If {
+        } => Statement::If {
             condition: optimize_expression(condition),
             block: optimize(block),
             else_ifs: else_ifs.into_iter().map(optimize_else_if).collect(),
             else_block: else_block.map(optimize),
         },
-        ast::Statement::For { condition, block } => ast::Statement::For {
+        Statement::For { condition, block } => Statement::For {
             condition: optimize_for_condition(condition),
             block: optimize(block),
         },
-        ast::Statement::FunctionCall(function_call) => {
-            ast::Statement::FunctionCall(optimize_function_call(function_call))
+        Statement::FunctionCall(function_call) => {
+            Statement::FunctionCall(optimize_function_call(function_call))
         }
-        ast::Statement::LocalDeclaraction(names, expressions) => ast::Statement::LocalDeclaraction(
+        Statement::LocalDeclaraction(names, expressions) => Statement::LocalDeclaraction(
             names,
             expressions.into_iter().map(optimize_expression).collect(),
         ),
 
         // No optimization to be done
-        ast::Statement::Goto(label) => ast::Statement::Goto(label),
-        ast::Statement::Label(label) => ast::Statement::Label(label),
-        ast::Statement::Break => ast::Statement::Break,
+        Statement::Goto(label) => Statement::Goto(label),
+        Statement::Label(label) => Statement::Label(label),
+        Statement::Break => Statement::Break,
     }
 }
 
-fn optimize_else_if(else_if: ast::ElseIf) -> ast::ElseIf {
-    ast::ElseIf {
+fn optimize_else_if(else_if: ElseIf) -> ElseIf {
+    ElseIf {
         condition: optimize_expression(else_if.condition),
         block: optimize(else_if.block),
     }
 }
 
-fn optimize_for_condition(condition: ast::ForCondition) -> ast::ForCondition {
+fn optimize_for_condition(condition: ForCondition) -> ForCondition {
     match condition {
-        ast::ForCondition::NumericFor {
+        ForCondition::NumericFor {
             name,
             initial,
             step,
             limit,
-        } => ast::ForCondition::NumericFor {
+        } => ForCondition::NumericFor {
             name,
             initial: optimize_expression(initial),
             step: step.map(optimize_expression),
             limit: optimize_expression(limit),
         },
-        ast::ForCondition::GenericFor { names, expressions } => ast::ForCondition::GenericFor {
+        ForCondition::GenericFor { names, expressions } => ForCondition::GenericFor {
             names,
             expressions: expressions.into_iter().map(optimize_expression).collect(),
         },
     }
 }
 
-fn optimize_function_call(function_call: ast::FunctionCall) -> ast::FunctionCall {
-    ast::FunctionCall {
+fn optimize_function_call(function_call: FunctionCall) -> FunctionCall {
+    FunctionCall {
         function: Box::new(optimize_prefix_expression(*function_call.function)),
         as_method: function_call.as_method,
         name: function_call.name,
@@ -100,209 +100,217 @@ fn optimize_function_call(function_call: ast::FunctionCall) -> ast::FunctionCall
     }
 }
 
-fn optimize_expression(expression: ast::Expression) -> ast::Expression {
+fn optimize_expression(expression: Expression) -> Expression {
     match expression {
-        ast::Expression::PrefixExpression(prefix) => {
+        Expression::PrefixExpression(prefix) => {
             let optimized_prefix = optimize_prefix_expression(prefix);
             match optimized_prefix {
-                ast::PrefixExpression::Parenthesized(parenthesized) => {
-                    if matches!(&*parenthesized, ast::Expression::Literal(_)) {
+                PrefixExpression::Parenthesized(parenthesized) => {
+                    if matches!(&*parenthesized, Expression::Literal(_)) {
                         *parenthesized
                     } else {
-                        ast::Expression::PrefixExpression(ast::PrefixExpression::Parenthesized(
-                            parenthesized,
-                        ))
+                        Expression::PrefixExpression(PrefixExpression::Parenthesized(parenthesized))
                     }
                 }
-                other => ast::Expression::PrefixExpression(other),
+                other => Expression::PrefixExpression(other),
             }
         }
-        ast::Expression::FunctionDef(func) => {
-            ast::Expression::FunctionDef(optimize_function_def(func))
+        Expression::FunctionDef(func) => Expression::FunctionDef(optimize_function_def(func)),
+        Expression::TableConstructor(table) => {
+            Expression::TableConstructor(optimize_table_constructor(table))
         }
-        ast::Expression::TableConstructor(table) => {
-            ast::Expression::TableConstructor(optimize_table_constructor(table))
-        }
-        ast::Expression::BinaryOp { op, lhs, rhs } => optimize_binary_op(op, *lhs, *rhs),
-        ast::Expression::UnaryOp { op, rhs } => optimize_unary_op(op, *rhs),
+        Expression::BinaryOp { op, lhs, rhs } => optimize_binary_op(op, *lhs, *rhs),
+        Expression::UnaryOp { op, rhs } => optimize_unary_op(op, *rhs),
 
         // No optimization to be done
-        ast::Expression::Literal(literal) => ast::Expression::Literal(literal),
-        ast::Expression::Ellipsis => ast::Expression::Ellipsis,
+        Expression::Literal(literal) => Expression::Literal(literal),
+        Expression::Ellipsis => Expression::Ellipsis,
     }
 }
 
-fn optimize_prefix_expression(prefix: ast::PrefixExpression) -> ast::PrefixExpression {
+fn optimize_prefix_expression(prefix: PrefixExpression) -> PrefixExpression {
     match prefix {
-        ast::PrefixExpression::Variable(var) => {
-            ast::PrefixExpression::Variable(optimize_variable(var))
+        PrefixExpression::Variable(var) => PrefixExpression::Variable(optimize_variable(var)),
+        PrefixExpression::Parenthesized(expr) => {
+            PrefixExpression::Parenthesized(Box::new(optimize_expression(*expr)))
         }
-        ast::PrefixExpression::Parenthesized(expr) => {
-            ast::PrefixExpression::Parenthesized(Box::new(optimize_expression(*expr)))
-        }
-        ast::PrefixExpression::FunctionCall(func) => {
-            ast::PrefixExpression::FunctionCall(optimize_function_call(func))
+        PrefixExpression::FunctionCall(func) => {
+            PrefixExpression::FunctionCall(optimize_function_call(func))
         }
     }
 }
 
-fn optimize_variable<T>(var: ast::Variable<T>) -> ast::Variable<T> {
+fn optimize_variable<T>(var: Variable<T>) -> Variable<T> {
     match var {
-        ast::Variable::Name(name) => ast::Variable::Name(name),
-        ast::Variable::Field(prefix, name) => {
-            ast::Variable::Field(Box::new(optimize_prefix_expression(*prefix)), name)
+        Variable::Name(name) => Variable::Name(name),
+        Variable::Field(prefix, name) => {
+            Variable::Field(Box::new(optimize_prefix_expression(*prefix)), name)
         }
-        ast::Variable::Indexed(prefix, index_expression) => ast::Variable::Indexed(
+        Variable::Indexed(prefix, index_expression) => Variable::Indexed(
             Box::new(optimize_prefix_expression(*prefix)),
             Box::new(optimize_expression(*index_expression)),
         ),
     }
 }
 
-fn optimize_function_def(func: ast::FunctionDef) -> ast::FunctionDef {
-    ast::FunctionDef {
+fn optimize_function_def(func: FunctionDef) -> FunctionDef {
+    FunctionDef {
         parameters: func.parameters,
         has_varargs: func.has_varargs,
         block: optimize(func.block),
     }
 }
 
-fn optimize_table_constructor(table: ast::TableConstructor) -> ast::TableConstructor {
-    ast::TableConstructor {
+fn optimize_table_constructor(table: TableConstructor) -> TableConstructor {
+    TableConstructor {
         fields: table.fields.into_iter().map(optimize_table_field).collect(),
     }
 }
 
-fn optimize_table_field(field: ast::Field) -> ast::Field {
+fn optimize_table_field(field: Field) -> Field {
     match field {
-        ast::Field::Value(expression) => ast::Field::Value(optimize_expression(expression)),
-        ast::Field::Named(name, expression) => {
-            ast::Field::Named(name, optimize_expression(expression))
-        }
-        ast::Field::Indexed(index, value) => {
-            ast::Field::Indexed(optimize_expression(index), optimize_expression(value))
+        Field::Value(expression) => Field::Value(optimize_expression(expression)),
+        Field::Named(name, expression) => Field::Named(name, optimize_expression(expression)),
+        Field::Indexed(index, value) => {
+            Field::Indexed(optimize_expression(index), optimize_expression(value))
         }
     }
 }
 
-fn optimize_binary_op(
-    op: ast::BinaryOperator,
-    lhs: ast::Expression,
-    rhs: ast::Expression,
-) -> ast::Expression {
+fn optimize_binary_op(op: BinaryOperator, lhs: Expression, rhs: Expression) -> Expression {
     let lhs = optimize_expression(lhs);
     let rhs = optimize_expression(rhs);
 
     match (op, lhs, rhs) {
         (
-            ast::BinaryOperator::Add,
-            ast::Expression::Literal(ast::Literal::Number(lhs)),
-            ast::Expression::Literal(ast::Literal::Number(rhs)),
-        ) => ast::Expression::Literal(ast::Literal::Number(lhs + rhs)),
+            BinaryOperator::Add,
+            Expression::Literal(Literal::Number(lhs)),
+            Expression::Literal(Literal::Number(rhs)),
+        ) => Expression::Literal(Literal::Number(lhs + rhs)),
         (
-            ast::BinaryOperator::Sub,
-            ast::Expression::Literal(ast::Literal::Number(lhs)),
-            ast::Expression::Literal(ast::Literal::Number(rhs)),
-        ) => ast::Expression::Literal(ast::Literal::Number(lhs - rhs)),
+            BinaryOperator::Sub,
+            Expression::Literal(Literal::Number(lhs)),
+            Expression::Literal(Literal::Number(rhs)),
+        ) => Expression::Literal(Literal::Number(lhs - rhs)),
         (
-            ast::BinaryOperator::Mul,
-            ast::Expression::Literal(ast::Literal::Number(lhs)),
-            ast::Expression::Literal(ast::Literal::Number(rhs)),
-        ) => ast::Expression::Literal(ast::Literal::Number(lhs * rhs)),
+            BinaryOperator::Mul,
+            Expression::Literal(Literal::Number(lhs)),
+            Expression::Literal(Literal::Number(rhs)),
+        ) => Expression::Literal(Literal::Number(lhs * rhs)),
         (
-            ast::BinaryOperator::Div,
-            ast::Expression::Literal(ast::Literal::Number(lhs)),
-            ast::Expression::Literal(ast::Literal::Number(rhs)),
-        ) => ast::Expression::Literal(ast::Literal::Number(lhs / rhs)),
+            BinaryOperator::Div,
+            Expression::Literal(Literal::Number(lhs)),
+            Expression::Literal(Literal::Number(rhs)),
+        ) => Expression::Literal(Literal::Number(lhs / rhs)),
         (
-            ast::BinaryOperator::Mod,
-            ast::Expression::Literal(ast::Literal::Number(lhs)),
-            ast::Expression::Literal(ast::Literal::Number(rhs)),
-        ) => ast::Expression::Literal(ast::Literal::Number(lhs % rhs)),
+            BinaryOperator::Mod,
+            Expression::Literal(Literal::Number(lhs)),
+            Expression::Literal(Literal::Number(rhs)),
+        ) => Expression::Literal(Literal::Number(lhs % rhs)),
         (
-            ast::BinaryOperator::Pow,
-            ast::Expression::Literal(ast::Literal::Number(lhs)),
-            ast::Expression::Literal(ast::Literal::Number(rhs)),
-        ) => ast::Expression::Literal(ast::Literal::Number(lhs.pow(rhs))),
+            BinaryOperator::Pow,
+            Expression::Literal(Literal::Number(lhs)),
+            Expression::Literal(Literal::Number(rhs)),
+        ) => Expression::Literal(Literal::Number(lhs.pow(rhs))),
         (
-            ast::BinaryOperator::Concat,
-            ast::Expression::Literal(ast::Literal::String(mut lhs)),
-            ast::Expression::Literal(ast::Literal::String(rhs)),
+            BinaryOperator::Concat,
+            Expression::Literal(Literal::String(mut lhs)),
+            Expression::Literal(Literal::String(rhs)),
         ) => {
             lhs.extend(rhs);
-            ast::Expression::Literal(ast::Literal::String(lhs))
+            Expression::Literal(Literal::String(lhs))
         }
         (
-            ast::BinaryOperator::FloorDiv,
-            ast::Expression::Literal(ast::Literal::Number(lhs)),
-            ast::Expression::Literal(ast::Literal::Number(rhs)),
-        ) => ast::Expression::Literal(ast::Literal::Number((lhs / rhs).floor())),
+            BinaryOperator::Concat,
+            Expression::Literal(Literal::String(mut lhs)),
+            Expression::Literal(Literal::Number(rhs)),
+        ) => {
+            lhs.extend(rhs.to_string().into_bytes());
+            Expression::Literal(Literal::String(lhs))
+        }
         (
-            ast::BinaryOperator::And,
-            ast::Expression::Literal(ast::Literal::Boolean(lhs)),
-            ast::Expression::Literal(ast::Literal::Boolean(rhs)),
-        ) => ast::Expression::Literal(ast::Literal::Boolean(lhs && rhs)),
+            BinaryOperator::Concat,
+            Expression::Literal(Literal::Number(lhs)),
+            Expression::Literal(Literal::String(rhs)),
+        ) => Expression::Literal(Literal::String(Vec::from_iter(
+            lhs.to_string().into_bytes().into_iter().chain(rhs),
+        ))),
         (
-            ast::BinaryOperator::Or,
-            ast::Expression::Literal(ast::Literal::Boolean(lhs)),
-            ast::Expression::Literal(ast::Literal::Boolean(rhs)),
-        ) => ast::Expression::Literal(ast::Literal::Boolean(lhs || rhs)),
+            BinaryOperator::Concat,
+            Expression::Literal(Literal::Number(lhs)),
+            Expression::Literal(Literal::Number(rhs)),
+        ) => {
+            let mut lhs = lhs.to_string();
+            lhs.push_str(&rhs.to_string());
+            Expression::Literal(Literal::String(lhs.into_bytes()))
+        }
         (
-            ast::BinaryOperator::LessThan,
-            ast::Expression::Literal(ast::Literal::Number(lhs)),
-            ast::Expression::Literal(ast::Literal::Number(rhs)),
-        ) => ast::Expression::Literal(ast::Literal::Boolean(lhs < rhs)),
+            BinaryOperator::FloorDiv,
+            Expression::Literal(Literal::Number(lhs)),
+            Expression::Literal(Literal::Number(rhs)),
+        ) => Expression::Literal(Literal::Number((lhs / rhs).floor())),
         (
-            ast::BinaryOperator::GreaterThan,
-            ast::Expression::Literal(ast::Literal::Number(lhs)),
-            ast::Expression::Literal(ast::Literal::Number(rhs)),
-        ) => ast::Expression::Literal(ast::Literal::Boolean(lhs > rhs)),
+            BinaryOperator::And,
+            Expression::Literal(Literal::Boolean(lhs)),
+            Expression::Literal(Literal::Boolean(rhs)),
+        ) => Expression::Literal(Literal::Boolean(lhs && rhs)),
         (
-            ast::BinaryOperator::LessThanOrEqual,
-            ast::Expression::Literal(ast::Literal::Number(lhs)),
-            ast::Expression::Literal(ast::Literal::Number(rhs)),
-        ) => ast::Expression::Literal(ast::Literal::Boolean(lhs <= rhs)),
+            BinaryOperator::Or,
+            Expression::Literal(Literal::Boolean(lhs)),
+            Expression::Literal(Literal::Boolean(rhs)),
+        ) => Expression::Literal(Literal::Boolean(lhs || rhs)),
         (
-            ast::BinaryOperator::GreaterThanOrEqual,
-            ast::Expression::Literal(ast::Literal::Number(lhs)),
-            ast::Expression::Literal(ast::Literal::Number(rhs)),
-        ) => ast::Expression::Literal(ast::Literal::Boolean(lhs >= rhs)),
+            BinaryOperator::LessThan,
+            Expression::Literal(Literal::Number(lhs)),
+            Expression::Literal(Literal::Number(rhs)),
+        ) => Expression::Literal(Literal::Boolean(lhs < rhs)),
         (
-            ast::BinaryOperator::Equal,
-            ast::Expression::Literal(lhs),
-            ast::Expression::Literal(rhs),
-        ) => ast::Expression::Literal(ast::Literal::Boolean(lhs == rhs)),
+            BinaryOperator::GreaterThan,
+            Expression::Literal(Literal::Number(lhs)),
+            Expression::Literal(Literal::Number(rhs)),
+        ) => Expression::Literal(Literal::Boolean(lhs > rhs)),
         (
-            ast::BinaryOperator::NotEqual,
-            ast::Expression::Literal(lhs),
-            ast::Expression::Literal(rhs),
-        ) => ast::Expression::Literal(ast::Literal::Boolean(lhs != rhs)),
+            BinaryOperator::LessThanOrEqual,
+            Expression::Literal(Literal::Number(lhs)),
+            Expression::Literal(Literal::Number(rhs)),
+        ) => Expression::Literal(Literal::Boolean(lhs <= rhs)),
         (
-            ast::BinaryOperator::BitwiseOr,
-            ast::Expression::Literal(ast::Literal::Number(ast::Number::Integer(lhs))),
-            ast::Expression::Literal(ast::Literal::Number(ast::Number::Integer(rhs))),
-        ) => ast::Expression::Literal(ast::Literal::Number(ast::Number::Integer(lhs | rhs))),
+            BinaryOperator::GreaterThanOrEqual,
+            Expression::Literal(Literal::Number(lhs)),
+            Expression::Literal(Literal::Number(rhs)),
+        ) => Expression::Literal(Literal::Boolean(lhs >= rhs)),
+        (BinaryOperator::Equal, Expression::Literal(lhs), Expression::Literal(rhs)) => {
+            Expression::Literal(Literal::Boolean(lhs == rhs))
+        }
+        (BinaryOperator::NotEqual, Expression::Literal(lhs), Expression::Literal(rhs)) => {
+            Expression::Literal(Literal::Boolean(lhs != rhs))
+        }
         (
-            ast::BinaryOperator::BitwiseXor,
-            ast::Expression::Literal(ast::Literal::Number(ast::Number::Integer(lhs))),
-            ast::Expression::Literal(ast::Literal::Number(ast::Number::Integer(rhs))),
-        ) => ast::Expression::Literal(ast::Literal::Number(ast::Number::Integer(lhs ^ rhs))),
+            BinaryOperator::BitwiseOr,
+            Expression::Literal(Literal::Number(Number::Integer(lhs))),
+            Expression::Literal(Literal::Number(Number::Integer(rhs))),
+        ) => Expression::Literal(Literal::Number(Number::Integer(lhs | rhs))),
         (
-            ast::BinaryOperator::BitwiseAnd,
-            ast::Expression::Literal(ast::Literal::Number(ast::Number::Integer(lhs))),
-            ast::Expression::Literal(ast::Literal::Number(ast::Number::Integer(rhs))),
-        ) => ast::Expression::Literal(ast::Literal::Number(ast::Number::Integer(lhs & rhs))),
+            BinaryOperator::BitwiseXor,
+            Expression::Literal(Literal::Number(Number::Integer(lhs))),
+            Expression::Literal(Literal::Number(Number::Integer(rhs))),
+        ) => Expression::Literal(Literal::Number(Number::Integer(lhs ^ rhs))),
         (
-            ast::BinaryOperator::ShiftLeft,
-            ast::Expression::Literal(ast::Literal::Number(ast::Number::Integer(lhs))),
-            ast::Expression::Literal(ast::Literal::Number(ast::Number::Integer(rhs))),
-        ) => ast::Expression::Literal(ast::Literal::Number(ast::Number::Integer(lhs << rhs))),
+            BinaryOperator::BitwiseAnd,
+            Expression::Literal(Literal::Number(Number::Integer(lhs))),
+            Expression::Literal(Literal::Number(Number::Integer(rhs))),
+        ) => Expression::Literal(Literal::Number(Number::Integer(lhs & rhs))),
         (
-            ast::BinaryOperator::ShiftRight,
-            ast::Expression::Literal(ast::Literal::Number(ast::Number::Integer(lhs))),
-            ast::Expression::Literal(ast::Literal::Number(ast::Number::Integer(rhs))),
-        ) => ast::Expression::Literal(ast::Literal::Number(ast::Number::Integer(lhs >> rhs))),
-        (op, lhs, rhs) => ast::Expression::BinaryOp {
+            BinaryOperator::ShiftLeft,
+            Expression::Literal(Literal::Number(Number::Integer(lhs))),
+            Expression::Literal(Literal::Number(Number::Integer(rhs))),
+        ) => Expression::Literal(Literal::Number(Number::Integer(lhs << rhs))),
+        (
+            BinaryOperator::ShiftRight,
+            Expression::Literal(Literal::Number(Number::Integer(lhs))),
+            Expression::Literal(Literal::Number(Number::Integer(rhs))),
+        ) => Expression::Literal(Literal::Number(Number::Integer(lhs >> rhs))),
+        (op, lhs, rhs) => Expression::BinaryOp {
             lhs: Box::new(lhs),
             op,
             rhs: Box::new(rhs),
@@ -310,24 +318,23 @@ fn optimize_binary_op(
     }
 }
 
-fn optimize_unary_op(op: ast::UnaryOperator, rhs: ast::Expression) -> ast::Expression {
+fn optimize_unary_op(op: UnaryOperator, rhs: Expression) -> Expression {
     let rhs = optimize_expression(rhs);
 
     match (op, rhs) {
-        (ast::UnaryOperator::Neg, ast::Expression::Literal(ast::Literal::Number(rhs))) => {
-            ast::Expression::Literal(ast::Literal::Number(-rhs))
+        (UnaryOperator::Neg, Expression::Literal(Literal::Number(rhs))) => {
+            Expression::Literal(Literal::Number(-rhs))
         }
-        (
-            ast::UnaryOperator::BitwiseNot,
-            ast::Expression::Literal(ast::Literal::Number(ast::Number::Integer(rhs))),
-        ) => ast::Expression::Literal(ast::Literal::Number(ast::Number::Integer(!rhs))),
-        (ast::UnaryOperator::Not, ast::Expression::Literal(ast::Literal::Boolean(rhs))) => {
-            ast::Expression::Literal(ast::Literal::Boolean(!rhs))
+        (UnaryOperator::BitwiseNot, Expression::Literal(Literal::Number(Number::Integer(rhs)))) => {
+            Expression::Literal(Literal::Number(Number::Integer(!rhs)))
         }
-        (ast::UnaryOperator::Not, ast::Expression::Literal(ast::Literal::Nil)) => {
-            ast::Expression::Literal(ast::Literal::Boolean(true))
+        (UnaryOperator::Not, Expression::Literal(Literal::Boolean(rhs))) => {
+            Expression::Literal(Literal::Boolean(!rhs))
         }
-        (op, rhs) => ast::Expression::UnaryOp {
+        (UnaryOperator::Not, Expression::Literal(Literal::Nil)) => {
+            Expression::Literal(Literal::Boolean(true))
+        }
+        (op, rhs) => Expression::UnaryOp {
             op,
             rhs: Box::new(rhs),
         },
