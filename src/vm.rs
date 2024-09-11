@@ -66,26 +66,80 @@ impl VM {
         loop {
             let instruction = self.instructions[ip];
             let instruction_increment = match Instruction::from(instruction) {
-                Instruction::Halt => {
-                    break;
-                }
-                Instruction::Print => {
-                    let value = self.pop();
-                    println!("{}", value);
-                    1
-                }
+                // Constants
                 Instruction::LoadConst => {
                     let const_index = self.instructions[ip + 1];
                     let constant = self.consts[const_index as usize].clone();
                     self.push(constant.into());
                     2
                 }
+
+                // Binary operations
+                // Arithmetic
                 Instruction::Add => {
                     let b = self.pop();
                     let a = self.pop();
                     self.push(a + b);
                     1
                 }
+                Instruction::Sub => {
+                    let b = self.pop();
+                    let a = self.pop();
+                    self.push(a - b);
+                    1
+                }
+                Instruction::Mul => {
+                    let b = self.pop();
+                    let a = self.pop();
+                    self.push(a * b);
+                    1
+                }
+                Instruction::Div => {
+                    let b = self.pop();
+                    let a = self.pop();
+                    self.push(a / b);
+                    1
+                }
+                Instruction::Mod => {
+                    let b = self.pop();
+                    let a = self.pop();
+                    self.push(a % b);
+                    1
+                }
+                Instruction::Pow => {
+                    let b = self.pop();
+                    let a = self.pop();
+                    self.push(a.pow(b));
+                    1
+                }
+
+                // Comparison
+
+                // Concatenation
+                Instruction::Concat => {
+                    let b = self.pop();
+                    let a = self.pop();
+                    self.push(a.concat(b));
+                    1
+                }
+
+                // Unary operations
+                Instruction::Neg => {
+                    let a = self.pop();
+                    self.push(-a);
+                    1
+                }
+
+                // Debug
+                Instruction::Print => {
+                    let value = self.pop();
+                    println!("{}", value);
+                    1
+                }
+
+                // Halt
+                Instruction::Halt => break,
+
                 _ => unimplemented!(),
             };
             ip += instruction_increment;

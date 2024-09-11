@@ -28,7 +28,7 @@ pub enum Instruction {
     // Le,
 
     // Concatenation
-    // Concat,
+    Concat,
 
     // Unary operations
     Neg,

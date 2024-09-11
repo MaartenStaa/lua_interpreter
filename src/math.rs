@@ -144,6 +144,96 @@ impl ops::Add for LuaValue {
     }
 }
 
+impl ops::Sub for LuaValue {
+    type Output = Self;
+
+    fn sub(self, other: Self) -> Self {
+        match (self, other) {
+            (LuaValue::Number(a), LuaValue::Number(b)) => LuaValue::Number(a - b),
+            _ => unimplemented!(),
+        }
+    }
+}
+
+impl ops::Mul for LuaValue {
+    type Output = Self;
+
+    fn mul(self, other: Self) -> Self {
+        match (self, other) {
+            (LuaValue::Number(a), LuaValue::Number(b)) => LuaValue::Number(a * b),
+            _ => unimplemented!(),
+        }
+    }
+}
+
+impl ops::Div for LuaValue {
+    type Output = Self;
+
+    fn div(self, other: Self) -> Self {
+        match (self, other) {
+            (LuaValue::Number(a), LuaValue::Number(b)) => LuaValue::Number(a / b),
+            _ => unimplemented!(),
+        }
+    }
+}
+
+impl ops::Rem for LuaValue {
+    type Output = Self;
+
+    fn rem(self, other: Self) -> Self {
+        match (self, other) {
+            (LuaValue::Number(a), LuaValue::Number(b)) => LuaValue::Number(a % b),
+            _ => unimplemented!(),
+        }
+    }
+}
+
+impl ops::Neg for LuaValue {
+    type Output = Self;
+
+    fn neg(self) -> Self {
+        match self {
+            LuaValue::Number(a) => LuaValue::Number(-a),
+            _ => unimplemented!(),
+        }
+    }
+}
+
+impl LuaValue {
+    pub fn concat(self, other: Self) -> Self {
+        match (self, other) {
+            (LuaValue::String(mut a), LuaValue::String(b)) => {
+                a.extend(b);
+                LuaValue::String(a)
+            }
+            (LuaValue::String(mut a), LuaValue::Number(b)) => {
+                a.extend(b.to_string().as_bytes());
+                LuaValue::String(a)
+            }
+            (LuaValue::Number(a), LuaValue::String(b)) => {
+                // b.insert_str(0, &a.to_string());
+                LuaValue::String(Vec::from_iter(
+                    a.to_string().into_bytes().into_iter().chain(b),
+                ))
+            }
+            (LuaValue::Number(a), LuaValue::Number(b)) => LuaValue::String(Vec::from_iter(
+                a.to_string()
+                    .into_bytes()
+                    .into_iter()
+                    .chain(b.to_string().into_bytes()),
+            )),
+            _ => unimplemented!(),
+        }
+    }
+
+    pub fn pow(self, other: Self) -> Self {
+        match (self, other) {
+            (LuaValue::Number(a), LuaValue::Number(b)) => LuaValue::Number(a.pow(b)),
+            _ => unimplemented!(),
+        }
+    }
+}
+
 impl ops::Add for LuaNumber {
     type Output = Self;
 
@@ -153,6 +243,82 @@ impl ops::Add for LuaNumber {
             (LuaNumber::Float(a), LuaNumber::Float(b)) => LuaNumber::Float(a + b),
             (LuaNumber::Integer(a), LuaNumber::Float(b)) => LuaNumber::Float(a as f64 + b),
             (LuaNumber::Float(a), LuaNumber::Integer(b)) => LuaNumber::Float(a + b as f64),
+        }
+    }
+}
+
+impl ops::Sub for LuaNumber {
+    type Output = Self;
+
+    fn sub(self, other: Self) -> Self {
+        match (self, other) {
+            (LuaNumber::Integer(a), LuaNumber::Integer(b)) => LuaNumber::Integer(a.wrapping_sub(b)),
+            (LuaNumber::Float(a), LuaNumber::Float(b)) => LuaNumber::Float(a - b),
+            (LuaNumber::Integer(a), LuaNumber::Float(b)) => LuaNumber::Float(a as f64 - b),
+            (LuaNumber::Float(a), LuaNumber::Integer(b)) => LuaNumber::Float(a - b as f64),
+        }
+    }
+}
+
+impl ops::Mul for LuaNumber {
+    type Output = Self;
+
+    fn mul(self, other: Self) -> Self {
+        match (self, other) {
+            (LuaNumber::Integer(a), LuaNumber::Integer(b)) => LuaNumber::Integer(a.wrapping_mul(b)),
+            (LuaNumber::Float(a), LuaNumber::Float(b)) => LuaNumber::Float(a * b),
+            (LuaNumber::Integer(a), LuaNumber::Float(b)) => LuaNumber::Float(a as f64 * b),
+            (LuaNumber::Float(a), LuaNumber::Integer(b)) => LuaNumber::Float(a * b as f64),
+        }
+    }
+}
+
+impl ops::Div for LuaNumber {
+    type Output = Self;
+
+    fn div(self, other: Self) -> Self {
+        match (self, other) {
+            (LuaNumber::Integer(a), LuaNumber::Integer(b)) => LuaNumber::Integer(a.wrapping_div(b)),
+            (LuaNumber::Float(a), LuaNumber::Float(b)) => LuaNumber::Float(a / b),
+            (LuaNumber::Integer(a), LuaNumber::Float(b)) => LuaNumber::Float(a as f64 / b),
+            (LuaNumber::Float(a), LuaNumber::Integer(b)) => LuaNumber::Float(a / b as f64),
+        }
+    }
+}
+
+impl ops::Rem for LuaNumber {
+    type Output = Self;
+
+    fn rem(self, other: Self) -> Self {
+        match (self, other) {
+            (LuaNumber::Integer(a), LuaNumber::Integer(b)) => LuaNumber::Integer(a.wrapping_rem(b)),
+            (LuaNumber::Float(a), LuaNumber::Float(b)) => LuaNumber::Float(a % b),
+            (LuaNumber::Integer(a), LuaNumber::Float(b)) => LuaNumber::Float(a as f64 % b),
+            (LuaNumber::Float(a), LuaNumber::Integer(b)) => LuaNumber::Float(a % b as f64),
+        }
+    }
+}
+
+impl ops::Neg for LuaNumber {
+    type Output = Self;
+
+    fn neg(self) -> Self {
+        match self {
+            LuaNumber::Integer(a) => LuaNumber::Integer(-a),
+            LuaNumber::Float(a) => LuaNumber::Float(-a),
+        }
+    }
+}
+
+impl LuaNumber {
+    pub fn pow(self, other: Self) -> Self {
+        match (self, other) {
+            (LuaNumber::Integer(a), LuaNumber::Integer(b)) => {
+                LuaNumber::Integer(a.wrapping_pow(b as u32))
+            }
+            (LuaNumber::Float(a), LuaNumber::Float(b)) => LuaNumber::Float(a.powf(b)),
+            (LuaNumber::Integer(a), LuaNumber::Float(b)) => LuaNumber::Float((a as f64).powf(b)),
+            (LuaNumber::Float(a), LuaNumber::Integer(b)) => LuaNumber::Float(a.powi(b as i32)),
         }
     }
 }

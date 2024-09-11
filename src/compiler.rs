@@ -1,4 +1,9 @@
-use crate::{ast, instruction::Instruction, value, vm::VM};
+use crate::{
+    ast::{self, BinaryOperator},
+    instruction::Instruction,
+    value,
+    vm::VM,
+};
 
 pub struct Compiler {
     vm: VM,
@@ -27,7 +32,7 @@ impl Compiler {
             crate::ast::Statement::FunctionCall(function_call) => {
                 self.compile_function_call(function_call);
             }
-            _ => unimplemented!(),
+            _ => todo!("compile_statement {:?}", statement),
         }
     }
 
@@ -42,7 +47,7 @@ impl Compiler {
             {
                 self.vm.push_instruction(Instruction::Print);
             }
-            _ => unimplemented!(),
+            _ => todo!("compile_function_call for other than `print`"),
         }
     }
 
@@ -63,10 +68,10 @@ impl Compiler {
                 self.compile_expression(*rhs);
                 match op {
                     crate::ast::UnaryOperator::Neg => self.vm.push_instruction(Instruction::Neg),
-                    _ => unimplemented!(),
+                    _ => todo!("compile_expression UnaryOp {:?}", op),
                 }
             }
-            _ => unimplemented!(),
+            _ => todo!("compile_expression {:?}", expression),
         }
     }
 
@@ -78,7 +83,7 @@ impl Compiler {
             crate::ast::PrefixExpression::Parenthesized(expression) => {
                 self.compile_expression(*expression);
             }
-            _ => unimplemented!(),
+            _ => todo!("compile_prefix_expression {:?}", prefix_expression),
         }
     }
 
@@ -99,15 +104,19 @@ impl Compiler {
         self.vm.push_instruction(const_index);
     }
 
-    fn compile_binary_operator(&mut self, op: crate::ast::BinaryOperator) {
+    fn compile_binary_operator(&mut self, op: BinaryOperator) {
         match op {
-            crate::ast::BinaryOperator::Add => self.vm.push_instruction(Instruction::Add),
-            crate::ast::BinaryOperator::Sub => self.vm.push_instruction(Instruction::Sub),
-            crate::ast::BinaryOperator::Mul => self.vm.push_instruction(Instruction::Mul),
-            crate::ast::BinaryOperator::Div => self.vm.push_instruction(Instruction::Div),
-            crate::ast::BinaryOperator::Pow => self.vm.push_instruction(Instruction::Pow),
-            // crate::ast::BinaryOperator::Concat => self.vm.push_instruction(Instruction::Concat),
-            _ => unimplemented!(),
+            // Arithmetic
+            BinaryOperator::Add => self.vm.push_instruction(Instruction::Add),
+            BinaryOperator::Sub => self.vm.push_instruction(Instruction::Sub),
+            BinaryOperator::Mul => self.vm.push_instruction(Instruction::Mul),
+            BinaryOperator::Div => self.vm.push_instruction(Instruction::Div),
+            BinaryOperator::Mod => self.vm.push_instruction(Instruction::Mod),
+            BinaryOperator::Pow => self.vm.push_instruction(Instruction::Pow),
+
+            // Strings
+            BinaryOperator::Concat => self.vm.push_instruction(Instruction::Concat),
+            _ => todo!("compile_binary_operator {:?}", op),
         }
     }
 }
