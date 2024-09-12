@@ -645,6 +645,16 @@ fn optimize_unary_op(
                 node: Literal::Boolean(false),
                 span,
             }),
+            (
+                UnaryOperator::Length,
+                Expression::Literal(TokenTree {
+                    node: Literal::String(s),
+                    ..
+                }),
+            ) => Expression::Literal(TokenTree::new(
+                Literal::Number(Number::Integer(s.len() as i64)),
+                span,
+            )),
             (_, _) => Expression::UnaryOp {
                 op,
                 rhs: Box::new(rhs),
