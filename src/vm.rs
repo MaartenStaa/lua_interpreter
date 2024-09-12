@@ -1,5 +1,8 @@
+use std::collections::HashMap;
+
 use crate::{
     instruction::Instruction,
+    token::Span,
     value::{LuaConst, LuaValue},
 };
 
@@ -13,6 +16,7 @@ pub struct Chunk {}
 #[derive(Debug)]
 pub struct VM {
     instructions: Vec<u8>,
+    instruction_spans: HashMap<usize, Span>,
     consts: Vec<LuaConst>,
     const_index: u8,
     stack: Vec<LuaValue>,
@@ -23,6 +27,7 @@ impl VM {
     pub fn new() -> Self {
         Self {
             instructions: vec![],
+            instruction_spans: HashMap::new(),
             consts: vec![LuaConst::Nil; u8::MAX as usize],
             const_index: 0,
             stack: vec![LuaValue::Nil; MAX_STACK_SIZE],
@@ -53,11 +58,16 @@ impl VM {
         &self.stack[self.stack_index - 1]
     }
 
-    pub fn push_instruction<T>(&mut self, instruction: T)
+    // TODO: Can this be non-optional?
+    pub fn push_instruction<T>(&mut self, instruction: T, span: Option<Span>)
     where
         T: Into<u8> + std::fmt::Debug,
     {
+        let instruction_index = self.instructions.len();
         self.instructions.push(instruction.into());
+        if let Some(span) = span {
+            self.instruction_spans.insert(instruction_index, span);
+        }
     }
 
     pub fn push_addr_placeholder(&mut self) -> usize {

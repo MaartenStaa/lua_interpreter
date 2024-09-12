@@ -4,6 +4,7 @@ use crate::{
         Statement, TokenTree, UnaryOperator, Variable,
     },
     instruction::Instruction,
+    token::Span,
     value::{LuaConst, LuaNumber},
     vm::VM,
 };
@@ -19,7 +20,7 @@ impl Compiler {
 
     pub fn compile(mut self, ast: TokenTree<Block>) -> VM {
         self.compile_block(ast);
-        self.vm.push_instruction(Instruction::Halt);
+        self.vm.push_instruction(Instruction::Halt, None);
 
         self.vm
     }
@@ -42,18 +43,18 @@ impl Compiler {
                 else_block,
             } => {
                 self.compile_expression(condition);
-                self.vm.push_instruction(Instruction::JmpFalse);
+                self.vm.push_instruction(Instruction::JmpFalse, None);
                 let jmp_false_addr = self.vm.push_addr_placeholder();
                 self.compile_block(block);
-                self.vm.push_instruction(Instruction::Jmp);
+                self.vm.push_instruction(Instruction::Jmp, None);
                 let mut jmp_end_addrs = vec![self.vm.push_addr_placeholder()];
                 self.vm.patch_addr_placeholder(jmp_false_addr);
                 for else_if in else_ifs {
                     self.compile_expression(else_if.node.condition);
-                    self.vm.push_instruction(Instruction::JmpFalse);
+                    self.vm.push_instruction(Instruction::JmpFalse, None);
                     let jmp_false_addr = self.vm.push_addr_placeholder();
                     self.compile_block(else_if.node.block);
-                    self.vm.push_instruction(Instruction::Jmp);
+                    self.vm.push_instruction(Instruction::Jmp, None);
                     jmp_end_addrs.push(self.vm.push_addr_placeholder());
                     self.vm.patch_addr_placeholder(jmp_false_addr);
                 }
@@ -82,7 +83,8 @@ impl Compiler {
                     }),
                 ..
             } if name.node.identifier == "print" => {
-                self.vm.push_instruction(Instruction::Print);
+                self.vm
+                    .push_instruction(Instruction::Print, Some(function_call.span));
             }
             _ => todo!("compile_function_call for other than `print`"),
         }
@@ -96,14 +98,14 @@ impl Compiler {
             Expression::BinaryOp { op, lhs, rhs } => match &op.node {
                 BinaryOperator::And => {
                     self.compile_expression(*lhs);
-                    self.vm.push_instruction(Instruction::JmpFalse);
+                    self.vm.push_instruction(Instruction::JmpFalse, None);
                     let jmp_false_addr = self.vm.push_addr_placeholder();
                     self.compile_expression(*rhs);
                     self.vm.patch_addr_placeholder(jmp_false_addr);
                 }
                 BinaryOperator::Or => {
                     self.compile_expression(*lhs);
-                    self.vm.push_instruction(Instruction::JmpTrue);
+                    self.vm.push_instruction(Instruction::JmpTrue, None);
                     let jmp_true_addr = self.vm.push_addr_placeholder();
                     self.compile_expression(*rhs);
                     self.vm.patch_addr_placeholder(jmp_true_addr);
@@ -111,7 +113,7 @@ impl Compiler {
                 _ => {
                     self.compile_expression(*lhs);
                     self.compile_expression(*rhs);
-                    self.compile_binary_operator(op);
+                    self.compile_binary_operator(op, expression.span);
                 }
             },
             Expression::PrefixExpression(function_call) => {
@@ -119,7 +121,7 @@ impl Compiler {
             }
             Expression::UnaryOp { op, rhs } => {
                 self.compile_expression(*rhs);
-                self.compile_unary_operator(op);
+                self.compile_unary_operator(op, expression.span);
             }
             _ => todo!("compile_expression {:?}", expression),
         }
@@ -150,36 +152,41 @@ impl Compiler {
             Literal::String(s) => self.vm.register_const(LuaConst::String(s)),
         };
 
-        self.vm.push_instruction(Instruction::LoadConst);
-        self.vm.push_instruction(const_index);
+        self.vm
+            .push_instruction(Instruction::LoadConst, Some(literal.span));
+        self.vm.push_instruction(const_index, None);
     }
 
-    fn compile_binary_operator(&mut self, op: TokenTree<BinaryOperator>) {
+    fn compile_binary_operator(&mut self, op: TokenTree<BinaryOperator>, span: Span) {
         match op.node {
             // Arithmetic
-            BinaryOperator::Add => self.vm.push_instruction(Instruction::Add),
-            BinaryOperator::Sub => self.vm.push_instruction(Instruction::Sub),
-            BinaryOperator::Mul => self.vm.push_instruction(Instruction::Mul),
-            BinaryOperator::Div => self.vm.push_instruction(Instruction::Div),
-            BinaryOperator::Mod => self.vm.push_instruction(Instruction::Mod),
-            BinaryOperator::Pow => self.vm.push_instruction(Instruction::Pow),
-            BinaryOperator::FloorDiv => self.vm.push_instruction(Instruction::IDiv),
-            BinaryOperator::BitwiseAnd => self.vm.push_instruction(Instruction::Band),
-            BinaryOperator::BitwiseOr => self.vm.push_instruction(Instruction::Bor),
-            BinaryOperator::BitwiseXor => self.vm.push_instruction(Instruction::Bxor),
-            BinaryOperator::ShiftLeft => self.vm.push_instruction(Instruction::Shl),
-            BinaryOperator::ShiftRight => self.vm.push_instruction(Instruction::Shr),
+            BinaryOperator::Add => self.vm.push_instruction(Instruction::Add, Some(span)),
+            BinaryOperator::Sub => self.vm.push_instruction(Instruction::Sub, Some(span)),
+            BinaryOperator::Mul => self.vm.push_instruction(Instruction::Mul, Some(span)),
+            BinaryOperator::Div => self.vm.push_instruction(Instruction::Div, Some(span)),
+            BinaryOperator::Mod => self.vm.push_instruction(Instruction::Mod, Some(span)),
+            BinaryOperator::Pow => self.vm.push_instruction(Instruction::Pow, Some(span)),
+            BinaryOperator::FloorDiv => self.vm.push_instruction(Instruction::IDiv, Some(span)),
+            BinaryOperator::BitwiseAnd => self.vm.push_instruction(Instruction::Band, Some(span)),
+            BinaryOperator::BitwiseOr => self.vm.push_instruction(Instruction::Bor, Some(span)),
+            BinaryOperator::BitwiseXor => self.vm.push_instruction(Instruction::Bxor, Some(span)),
+            BinaryOperator::ShiftLeft => self.vm.push_instruction(Instruction::Shl, Some(span)),
+            BinaryOperator::ShiftRight => self.vm.push_instruction(Instruction::Shr, Some(span)),
 
             // Comparison
-            BinaryOperator::Equal => self.vm.push_instruction(Instruction::Eq),
-            BinaryOperator::NotEqual => self.vm.push_instruction(Instruction::Ne),
-            BinaryOperator::LessThan => self.vm.push_instruction(Instruction::Lt),
-            BinaryOperator::LessThanOrEqual => self.vm.push_instruction(Instruction::Le),
-            BinaryOperator::GreaterThan => self.vm.push_instruction(Instruction::Gt),
-            BinaryOperator::GreaterThanOrEqual => self.vm.push_instruction(Instruction::Ge),
+            BinaryOperator::Equal => self.vm.push_instruction(Instruction::Eq, Some(span)),
+            BinaryOperator::NotEqual => self.vm.push_instruction(Instruction::Ne, Some(span)),
+            BinaryOperator::LessThan => self.vm.push_instruction(Instruction::Lt, Some(span)),
+            BinaryOperator::LessThanOrEqual => {
+                self.vm.push_instruction(Instruction::Le, Some(span))
+            }
+            BinaryOperator::GreaterThan => self.vm.push_instruction(Instruction::Gt, Some(span)),
+            BinaryOperator::GreaterThanOrEqual => {
+                self.vm.push_instruction(Instruction::Ge, Some(span))
+            }
 
             // Strings
-            BinaryOperator::Concat => self.vm.push_instruction(Instruction::Concat),
+            BinaryOperator::Concat => self.vm.push_instruction(Instruction::Concat, Some(span)),
 
             // Logical
             BinaryOperator::And | BinaryOperator::Or => {
@@ -190,10 +197,10 @@ impl Compiler {
         }
     }
 
-    fn compile_unary_operator(&mut self, op: TokenTree<UnaryOperator>) {
+    fn compile_unary_operator(&mut self, op: TokenTree<UnaryOperator>, span: Span) {
         match op.node {
-            UnaryOperator::Neg => self.vm.push_instruction(Instruction::Neg),
-            UnaryOperator::Not => self.vm.push_instruction(Instruction::Not),
+            UnaryOperator::Neg => self.vm.push_instruction(Instruction::Neg, Some(span)),
+            UnaryOperator::Not => self.vm.push_instruction(Instruction::Not, Some(span)),
             _ => todo!("compile_expression UnaryOp {:?}", op),
         }
     }
