@@ -29,16 +29,20 @@ impl<'path, 'source> Compiler<'path, 'source> {
         self.vm
     }
 
-    fn compile_block(&mut self, ast: TokenTree<Block>) {
-        for statement in ast.node.statements {
-            self.compile_statement(statement);
-        }
+    fn compile_block(&mut self, ast: TokenTree<Block>) -> Vec<usize> {
+        ast.node
+            .statements
+            .into_iter()
+            .flat_map(|statement| self.compile_statement(statement))
+            .collect()
     }
 
-    fn compile_statement(&mut self, statement: TokenTree<Statement>) {
+    fn compile_statement(&mut self, statement: TokenTree<Statement>) -> Vec<usize> {
+        let span = statement.span;
         match statement.node {
             Statement::FunctionCall(function_call) => {
                 self.compile_function_call(function_call);
+                vec![]
             }
             Statement::If {
                 condition,
@@ -46,28 +50,92 @@ impl<'path, 'source> Compiler<'path, 'source> {
                 else_ifs,
                 else_block,
             } => {
+                let mut break_jumps = vec![];
+                // Push expression
                 self.compile_expression(condition);
+                // Jump to the end of the block if the condition is false
                 self.vm.push_instruction(Instruction::JmpFalse, None);
                 let jmp_false_addr = self.vm.push_addr_placeholder();
-                self.compile_block(block);
+                // Pop the condition value
+                self.vm.push_instruction(Instruction::Pop, None);
+                // Compile the block
+                break_jumps.extend(self.compile_block(block));
+                // Jump to the end of the if statement
                 self.vm.push_instruction(Instruction::Jmp, None);
                 let mut jmp_end_addrs = vec![self.vm.push_addr_placeholder()];
+                // Right before the else/elseifs, go here if the condition was false
                 self.vm.patch_addr_placeholder(jmp_false_addr);
                 for else_if in else_ifs {
+                    // Pop the initial condition
+                    self.vm.push_instruction(Instruction::Pop, None);
+                    // Push the new condition
                     self.compile_expression(else_if.node.condition);
+                    // Jump to the end of the block if the condition is false
                     self.vm.push_instruction(Instruction::JmpFalse, None);
                     let jmp_false_addr = self.vm.push_addr_placeholder();
-                    self.compile_block(else_if.node.block);
+                    // Pop the condition value
+                    self.vm.push_instruction(Instruction::Pop, None);
+                    // Compile the block
+                    break_jumps.extend(self.compile_block(else_if.node.block));
+                    // Jump to the end of the if statement
                     self.vm.push_instruction(Instruction::Jmp, None);
                     jmp_end_addrs.push(self.vm.push_addr_placeholder());
+                    // Right before the else/elseifs, go here if the condition was false
                     self.vm.patch_addr_placeholder(jmp_false_addr);
                 }
-                if let Some(else_block) = else_block {
-                    self.compile_block(else_block);
-                }
+                let else_jump_addr = if let Some(else_block) = else_block {
+                    // Pop the initial condition
+                    self.vm.push_instruction(Instruction::Pop, None);
+                    break_jumps.extend(self.compile_block(else_block));
+                    self.vm.push_instruction(Instruction::Jmp, None);
+                    Some(self.vm.push_addr_placeholder())
+                } else {
+                    None
+                };
+                self.vm.push_instruction(Instruction::Pop, None);
                 for jmp_end_addr in jmp_end_addrs {
                     self.vm.patch_addr_placeholder(jmp_end_addr);
                 }
+                if let Some(else_jump_addr) = else_jump_addr {
+                    self.vm.patch_addr_placeholder(else_jump_addr);
+                }
+                break_jumps
+            }
+            Statement::Break => {
+                self.vm.push_instruction(Instruction::Jmp, Some(span));
+                vec![self.vm.push_addr_placeholder()]
+            }
+            Statement::Repeat { block, condition } => {
+                // Jump into the block
+                self.vm.push_instruction(Instruction::Jmp, None);
+                let inside_block_jump = self.vm.push_addr_placeholder();
+                // Pop the condition value
+                let start_addr = self.vm.get_current_addr();
+                self.vm.push_instruction(Instruction::Pop, None);
+                self.vm.patch_addr_placeholder(inside_block_jump);
+                let break_jumps = self.compile_block(block);
+                self.compile_expression(condition);
+                self.vm.push_instruction(Instruction::JmpFalse, None);
+                self.vm.push_addr(start_addr);
+                self.vm.push_instruction(Instruction::Pop, None);
+                for break_jump in break_jumps {
+                    self.vm.patch_addr_placeholder(break_jump);
+                }
+                vec![]
+            }
+            Statement::While { condition, block } => {
+                let start_addr = self.vm.get_current_addr();
+                self.compile_expression(condition);
+                self.vm.push_instruction(Instruction::JmpFalse, None);
+                let jmp_false_addr = self.vm.push_addr_placeholder();
+                let break_jumps = self.compile_block(block);
+                self.vm.push_instruction(Instruction::Jmp, None);
+                self.vm.push_addr(start_addr);
+                for break_jump in break_jumps {
+                    self.vm.patch_addr_placeholder(break_jump);
+                }
+                self.vm.patch_addr_placeholder(jmp_false_addr);
+                vec![]
             }
             _ => todo!("compile_statement {:?}", statement),
         }

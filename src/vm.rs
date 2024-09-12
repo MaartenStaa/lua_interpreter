@@ -64,6 +64,10 @@ impl<'path, 'source> VM<'path, 'source> {
         &self.stack[self.stack_index - 1]
     }
 
+    pub fn get_current_addr(&self) -> JumpAddr {
+        self.instructions.len() as JumpAddr
+    }
+
     // TODO: Can this be non-optional?
     pub fn push_instruction<T>(&mut self, instruction: T, span: Option<Span>)
     where
@@ -76,10 +80,14 @@ impl<'path, 'source> VM<'path, 'source> {
         }
     }
 
+    pub fn push_addr(&mut self, addr: JumpAddr) {
+        self.instructions.extend_from_slice(&addr.to_be_bytes());
+    }
+
     pub fn push_addr_placeholder(&mut self) -> usize {
         let index = self.instructions.len();
         self.instructions
-            .extend_from_slice(&[0; std::mem::size_of::<JumpAddr>()]);
+            .extend_from_slice(&JumpAddr::MAX.to_be_bytes());
         index
     }
 
@@ -123,12 +131,16 @@ impl<'path, 'source> VM<'path, 'source> {
         loop {
             let instruction = self.instructions[self.ip];
             let instruction_increment = match Instruction::from(instruction) {
-                // Constants
+                // Stack manipulation
                 Instruction::LoadConst => {
                     let const_index = self.instructions[self.ip + 1];
                     let constant = self.consts[const_index as usize].clone();
                     self.push(constant.into());
                     2
+                }
+                Instruction::Pop => {
+                    self.pop();
+                    1
                 }
 
                 // Binary operations
@@ -274,6 +286,12 @@ impl<'path, 'source> VM<'path, 'source> {
                     let addr_bytes = &self.instructions
                         [self.ip + 1..self.ip + 1 + std::mem::size_of::<JumpAddr>()];
                     let addr = JumpAddr::from_be_bytes(addr_bytes.try_into().unwrap());
+                    if addr == JumpAddr::MAX {
+                        // TODO: We probably want a nicer error here. Was this a break
+                        // outside of a loop? Was it a goto statement with no matching
+                        // label?
+                        return Err(miette!("attempt to jump to an invalid address"));
+                    }
                     self.ip = addr as usize;
                     continue;
                 }

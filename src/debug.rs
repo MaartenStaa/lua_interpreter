@@ -21,13 +21,18 @@ pub fn print_instructions(vm: &VM) {
                 println!("PRINT");
                 1
             }
-            // Constants
+
+            // Stack manipulation
             Instruction::LoadConst => {
                 let const_index = instructions[instruction_pointer + 1];
                 print!("LOAD_CONST    ");
                 print_const(&consts[const_index as usize]);
                 println!();
                 2
+            }
+            Instruction::Pop => {
+                println!("POP");
+                1
             }
 
             // Binary operations

@@ -1,8 +1,9 @@
 #[derive(Debug)]
 #[repr(u8)]
 pub enum Instruction {
-    // Constants
+    // Stack operations
     LoadConst,
+    Pop,
 
     // Binary operations
     // Arithmetic
