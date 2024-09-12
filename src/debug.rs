@@ -1,4 +1,7 @@
-use crate::{instruction::Instruction, vm::VM};
+use crate::{
+    instruction::Instruction,
+    vm::{JumpAddr, VM},
+};
 
 pub fn print_instructions(vm: &VM) {
     let instructions = vm.get_instructions();
@@ -110,16 +113,6 @@ pub fn print_instructions(vm: &VM) {
                 1
             }
 
-            // Logical
-            Instruction::And => {
-                println!("AND");
-                1
-            }
-            Instruction::Or => {
-                println!("OR");
-                1
-            }
-
             // Unary operations
             Instruction::Neg => {
                 println!("NEG");
@@ -128,6 +121,29 @@ pub fn print_instructions(vm: &VM) {
             Instruction::Not => {
                 println!("NOT");
                 1
+            }
+
+            // Control
+            Instruction::Jmp => {
+                let offset_bytes = &instructions[instruction_pointer + 1
+                    ..instruction_pointer + 1 + std::mem::size_of::<JumpAddr>()];
+                let offset = JumpAddr::from_be_bytes(offset_bytes.try_into().unwrap());
+                println!("JMP           {offset:04}");
+                1 + std::mem::size_of::<JumpAddr>()
+            }
+            Instruction::JmpTrue => {
+                let offset_bytes = &instructions[instruction_pointer + 1
+                    ..instruction_pointer + 1 + std::mem::size_of::<JumpAddr>()];
+                let offset = JumpAddr::from_be_bytes(offset_bytes.try_into().unwrap());
+                println!("JMP_TRUE      {offset:04}");
+                1 + std::mem::size_of::<JumpAddr>()
+            }
+            Instruction::JmpFalse => {
+                let offset_bytes = &instructions[instruction_pointer + 1
+                    ..instruction_pointer + 1 + std::mem::size_of::<JumpAddr>()];
+                let offset = JumpAddr::from_be_bytes(offset_bytes.try_into().unwrap());
+                println!("JMP_FALSE     {offset:04}");
+                1 + std::mem::size_of::<JumpAddr>()
             }
         };
         instruction_pointer += instruction_increment;

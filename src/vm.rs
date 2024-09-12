@@ -5,6 +5,9 @@ use crate::{
 
 const MAX_STACK_SIZE: usize = 256;
 
+pub type JumpAddr = u16;
+pub type JumpRelOffset = i16;
+
 pub struct Chunk {}
 
 #[derive(Debug)]
@@ -34,16 +37,20 @@ impl VM {
         index
     }
 
-    pub fn push(&mut self, value: LuaValue) {
+    fn push(&mut self, value: LuaValue) {
         let index = self.stack_index;
         self.stack[index] = value;
         self.stack_index += 1;
     }
 
-    pub fn pop(&mut self) -> LuaValue {
+    fn pop(&mut self) -> LuaValue {
         self.stack_index -= 1;
         // FIXME: This shrinks the stack by 1 if this was the last element
         self.stack.swap_remove(self.stack_index)
+    }
+
+    fn peek(&self) -> &LuaValue {
+        &self.stack[self.stack_index - 1]
     }
 
     pub fn push_instruction<T>(&mut self, instruction: T)
@@ -51,6 +58,20 @@ impl VM {
         T: Into<u8> + std::fmt::Debug,
     {
         self.instructions.push(instruction.into());
+    }
+
+    pub fn push_addr_placeholder(&mut self) -> usize {
+        let index = self.instructions.len();
+        self.instructions
+            .extend_from_slice(&[0; std::mem::size_of::<JumpAddr>()]);
+        index
+    }
+
+    pub fn patch_addr_placeholder(&mut self, index: usize) {
+        let addr = self.instructions.len() as JumpAddr;
+        let addr_bytes = addr.to_be_bytes();
+        self.instructions[index..index + std::mem::size_of::<JumpAddr>()]
+            .copy_from_slice(&addr_bytes);
     }
 
     pub fn get_consts(&self) -> &[LuaConst] {
@@ -191,20 +212,6 @@ impl VM {
                     1
                 }
 
-                // Logical
-                Instruction::And => {
-                    let b = self.pop();
-                    let a = self.pop();
-                    self.push(LuaValue::Boolean(a.as_boolean() && b.as_boolean()));
-                    1
-                }
-                Instruction::Or => {
-                    let b = self.pop();
-                    let a = self.pop();
-                    self.push(LuaValue::Boolean(a.as_boolean() || b.as_boolean()));
-                    1
-                }
-
                 // Concatenation
                 Instruction::Concat => {
                     let b = self.pop();
@@ -223,6 +230,40 @@ impl VM {
                     let a = self.pop();
                     self.push(!a);
                     1
+                }
+
+                // Control
+                Instruction::Jmp => {
+                    // Absolute jump
+                    let addr_bytes =
+                        &self.instructions[ip + 1..ip + 1 + std::mem::size_of::<JumpAddr>()];
+                    let addr = JumpAddr::from_be_bytes(addr_bytes.try_into().unwrap());
+                    ip = addr as usize;
+                    continue;
+                }
+                Instruction::JmpTrue => {
+                    let value = self.peek();
+                    if value.as_boolean() {
+                        // Absolute jump
+                        let addr_bytes =
+                            &self.instructions[ip + 1..ip + 1 + std::mem::size_of::<JumpAddr>()];
+                        let addr = JumpAddr::from_be_bytes(addr_bytes.try_into().unwrap());
+                        ip = addr as usize;
+                        continue;
+                    }
+                    1 + std::mem::size_of::<JumpAddr>()
+                }
+                Instruction::JmpFalse => {
+                    let value = self.peek();
+                    if !value.as_boolean() {
+                        // Absolute jump
+                        let addr_bytes =
+                            &self.instructions[ip + 1..ip + 1 + std::mem::size_of::<JumpAddr>()];
+                        let addr = JumpAddr::from_be_bytes(addr_bytes.try_into().unwrap());
+                        ip = addr as usize;
+                        continue;
+                    }
+                    1 + std::mem::size_of::<JumpAddr>()
                 }
 
                 // Debug

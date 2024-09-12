@@ -56,11 +56,27 @@ impl Compiler {
             crate::ast::Expression::Literal(literal) => {
                 self.compile_load_literal(literal);
             }
-            crate::ast::Expression::BinaryOp { op, lhs, rhs } => {
-                self.compile_expression(*lhs);
-                self.compile_expression(*rhs);
-                self.compile_binary_operator(op);
-            }
+            crate::ast::Expression::BinaryOp { op, lhs, rhs } => match &op {
+                BinaryOperator::And => {
+                    self.compile_expression(*lhs);
+                    self.vm.push_instruction(Instruction::JmpFalse);
+                    let jmp_false_addr = self.vm.push_addr_placeholder();
+                    self.compile_expression(*rhs);
+                    self.vm.patch_addr_placeholder(jmp_false_addr);
+                }
+                BinaryOperator::Or => {
+                    self.compile_expression(*lhs);
+                    self.vm.push_instruction(Instruction::JmpTrue);
+                    let jmp_true_addr = self.vm.push_addr_placeholder();
+                    self.compile_expression(*rhs);
+                    self.vm.patch_addr_placeholder(jmp_true_addr);
+                }
+                _ => {
+                    self.compile_expression(*lhs);
+                    self.compile_expression(*rhs);
+                    self.compile_binary_operator(op);
+                }
+            },
             crate::ast::Expression::PrefixExpression(function_call) => {
                 self.compile_prefix_expression(function_call);
             }
@@ -129,9 +145,11 @@ impl Compiler {
             BinaryOperator::Concat => self.vm.push_instruction(Instruction::Concat),
 
             // Logical
-            // TODO: Implement short-circuiting
-            BinaryOperator::And => self.vm.push_instruction(Instruction::And),
-            BinaryOperator::Or => self.vm.push_instruction(Instruction::Or),
+            BinaryOperator::And | BinaryOperator::Or => {
+                unreachable!(
+                    "short-circuiting logical operators should be handled in compile_expression"
+                );
+            }
         }
     }
 

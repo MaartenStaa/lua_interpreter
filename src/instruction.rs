@@ -33,10 +33,6 @@ pub enum Instruction {
     // Concatenation
     Concat,
 
-    // Logical
-    And,
-    Or,
-
     // Unary operations
     Neg,
     Not,
@@ -53,10 +49,14 @@ pub enum Instruction {
     // Closure,
     // Call,
     // Return,
-    // // Control
-    // Jmp,
+
+    // Control
+    Jmp,
+    JmpTrue,
+    JmpFalse,
+    // JmpRel,
     // Test,
-    // TestSet,
+
     // // Upvalue
     // GetUpval,
     // SetUpval,
@@ -64,7 +64,6 @@ pub enum Instruction {
     // Vararg,
     // // Extra
     // ExtraArg,
-    //
 
     // Debug
     Print,
