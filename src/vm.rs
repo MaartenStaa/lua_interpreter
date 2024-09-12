@@ -56,8 +56,7 @@ impl<'path, 'source> VM<'path, 'source> {
 
     fn pop(&mut self) -> LuaValue {
         self.stack_index -= 1;
-        // FIXME: This shrinks the stack by 1 if this was the last element
-        self.stack.swap_remove(self.stack_index)
+        std::mem::replace(&mut self.stack[self.stack_index], LuaValue::Nil)
     }
 
     fn peek(&self) -> &LuaValue {
