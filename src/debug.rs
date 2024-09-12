@@ -128,6 +128,22 @@ pub fn print_instructions(vm: &VM) {
                 1
             }
 
+            // Variables
+            Instruction::SetGlobal => {
+                let name_index = instructions[instruction_pointer + 1];
+                print!("SET_GLOBAL    ");
+                print_const(&consts[name_index as usize]);
+                println!("   ({name_index})");
+                2
+            }
+            Instruction::GetGlobal => {
+                let name_index = instructions[instruction_pointer + 1];
+                print!("GET_GLOBAL    ");
+                print_const(&consts[name_index as usize]);
+                println!("   ({name_index})");
+                2
+            }
+
             // Control
             Instruction::Jmp => {
                 let offset_bytes = &instructions[instruction_pointer + 1

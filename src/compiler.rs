@@ -44,6 +44,27 @@ impl<'path, 'source> Compiler<'path, 'source> {
                 self.compile_function_call(function_call);
                 vec![]
             }
+            Statement::Assignment { varlist, explist } => {
+                for expression in explist {
+                    self.compile_expression(expression);
+                }
+
+                for variable in varlist {
+                    match variable.node {
+                        Variable::Name(name) => {
+                            // TODO: Is this global or local?
+                            let const_index = self.vm.register_const(LuaConst::String(
+                                name.node.identifier.into_bytes(),
+                            ));
+                            self.vm.push_instruction(Instruction::SetGlobal, Some(span));
+                            self.vm.push_instruction(const_index, None);
+                        }
+                        _ => todo!("compile_statement Assignment {:#?}", variable),
+                    }
+                }
+
+                vec![]
+            }
             Statement::If {
                 condition,
                 block,
@@ -137,7 +158,7 @@ impl<'path, 'source> Compiler<'path, 'source> {
                 self.vm.patch_addr_placeholder(jmp_false_addr);
                 vec![]
             }
-            _ => todo!("compile_statement {:?}", statement),
+            _ => todo!("compile_statement {:#?}", statement),
         }
     }
 
@@ -207,7 +228,22 @@ impl<'path, 'source> Compiler<'path, 'source> {
             PrefixExpression::Parenthesized(expression) => {
                 self.compile_expression(*expression);
             }
-            _ => todo!("compile_prefix_expression {:?}", prefix_expression),
+            PrefixExpression::Variable(variable) => {
+                match variable.node {
+                    Variable::Name(name) => {
+                        // TODO: Is this global or local?
+                        let name_lua_string = LuaConst::String(name.node.identifier.into_bytes());
+                        let const_index = self
+                            .vm
+                            .lookup_const(&name_lua_string)
+                            .unwrap_or_else(|| self.vm.register_const(name_lua_string));
+                        self.vm
+                            .push_instruction(Instruction::GetGlobal, Some(variable.span));
+                        self.vm.push_instruction(const_index, None);
+                    }
+                    _ => todo!("compile_prefix_expression Variable {:#?}", variable),
+                }
+            }
         }
     }
 

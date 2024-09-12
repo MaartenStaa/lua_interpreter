@@ -39,6 +39,10 @@ pub enum Instruction {
     Not,
     // Len,
 
+    // Variables
+    SetGlobal,
+    GetGlobal,
+
     // // Table
     // NewTable,
     // SetTable,

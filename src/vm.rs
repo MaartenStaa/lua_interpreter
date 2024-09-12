@@ -24,6 +24,7 @@ pub struct VM<'path, 'source> {
     const_index: u8,
     stack: Vec<LuaValue>,
     stack_index: usize,
+    globals: HashMap<u8, LuaValue>,
 }
 
 impl<'path, 'source> VM<'path, 'source> {
@@ -38,6 +39,7 @@ impl<'path, 'source> VM<'path, 'source> {
             const_index: 0,
             stack: vec![LuaValue::Nil; MAX_STACK_SIZE],
             stack_index: 0,
+            globals: HashMap::new(),
         }
     }
 
@@ -46,6 +48,14 @@ impl<'path, 'source> VM<'path, 'source> {
         self.consts[index as usize] = constant;
         self.const_index += 1;
         index
+    }
+
+    pub fn lookup_const(&self, constant: &LuaConst) -> Option<u8> {
+        // TODO: Maybe a hashmap would be better
+        self.consts
+            .iter()
+            .position(|c| c == constant)
+            .map(|i| i as u8)
     }
 
     fn push(&mut self, value: LuaValue) {
@@ -277,6 +287,25 @@ impl<'path, 'source> VM<'path, 'source> {
                     let a = self.pop();
                     self.push(!a);
                     1
+                }
+
+                // Variables
+                Instruction::SetGlobal => {
+                    let global_index = self.instructions[self.ip + 1];
+                    let value = self.pop();
+                    self.globals.insert(global_index, value);
+                    2
+                }
+                Instruction::GetGlobal => {
+                    let global_index = self.instructions[self.ip + 1];
+                    let value = self
+                        .globals
+                        .get(&global_index)
+                        // FIXME: Not everything can be freely cloned
+                        .cloned()
+                        .unwrap_or(LuaValue::Nil);
+                    self.push(value);
+                    2
                 }
 
                 // Control
