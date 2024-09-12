@@ -57,10 +57,66 @@ pub fn print_instructions(vm: &VM) {
                 println!("IDIV");
                 1
             }
+            Instruction::Band => {
+                println!("BAND");
+                1
+            }
+            Instruction::Bor => {
+                println!("BOR");
+                1
+            }
+            Instruction::Bxor => {
+                println!("BXOR");
+                1
+            }
+            Instruction::Shl => {
+                println!("SHL");
+                1
+            }
+            Instruction::Shr => {
+                println!("SHR");
+                1
+            }
+
+            // Comparison
+            Instruction::Eq => {
+                println!("EQ");
+                1
+            }
+            Instruction::Ne => {
+                println!("NE");
+                1
+            }
+            Instruction::Lt => {
+                println!("LT");
+                1
+            }
+            Instruction::Le => {
+                println!("LE");
+                1
+            }
+            Instruction::Gt => {
+                println!("GT");
+                1
+            }
+            Instruction::Ge => {
+                println!("GE");
+                1
+            }
 
             // Concatenation
             Instruction::Concat => {
                 println!("CONCAT");
+                1
+            }
+
+            // Logical
+            Instruction::And => {
+                println!("AND");
+                1
+            }
+            Instruction::Or => {
+                println!("OR");
                 1
             }
 

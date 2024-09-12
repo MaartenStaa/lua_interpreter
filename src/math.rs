@@ -211,6 +211,70 @@ impl ops::Not for LuaValue {
     }
 }
 
+impl ops::BitAnd for LuaValue {
+    type Output = Self;
+
+    fn bitand(self, other: Self) -> Self {
+        match (self, other) {
+            (LuaValue::Number(a), LuaValue::Number(b)) => LuaValue::Number(a & b),
+            _ => unimplemented!(),
+        }
+    }
+}
+
+impl ops::BitOr for LuaValue {
+    type Output = Self;
+
+    fn bitor(self, other: Self) -> Self {
+        match (self, other) {
+            (LuaValue::Number(a), LuaValue::Number(b)) => LuaValue::Number(a | b),
+            _ => unimplemented!(),
+        }
+    }
+}
+
+impl ops::BitXor for LuaValue {
+    type Output = Self;
+
+    fn bitxor(self, other: Self) -> Self {
+        match (self, other) {
+            (LuaValue::Number(a), LuaValue::Number(b)) => LuaValue::Number(a ^ b),
+            _ => unimplemented!(),
+        }
+    }
+}
+
+impl ops::Shl for LuaValue {
+    type Output = Self;
+
+    fn shl(self, other: Self) -> Self {
+        match (self, other) {
+            (LuaValue::Number(a), LuaValue::Number(b)) => LuaValue::Number(a << b),
+            _ => unimplemented!(),
+        }
+    }
+}
+
+impl ops::Shr for LuaValue {
+    type Output = Self;
+
+    fn shr(self, other: Self) -> Self {
+        match (self, other) {
+            (LuaValue::Number(a), LuaValue::Number(b)) => LuaValue::Number(a >> b),
+            _ => unimplemented!(),
+        }
+    }
+}
+
+impl PartialOrd for LuaValue {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        match (self, other) {
+            (LuaValue::Number(a), LuaValue::Number(b)) => a.partial_cmp(b),
+            _ => todo!("LuaValue::partial_cmp"),
+        }
+    }
+}
+
 impl LuaValue {
     pub fn concat(self, other: Self) -> Self {
         match (self, other) {
@@ -249,6 +313,14 @@ impl LuaValue {
         match (self, other) {
             (LuaValue::Number(a), LuaValue::Number(b)) => LuaValue::Number((a / b).floor()),
             _ => unimplemented!(),
+        }
+    }
+
+    pub fn as_boolean(&self) -> bool {
+        match self {
+            LuaValue::Nil => false,
+            LuaValue::Boolean(b) => *b,
+            _ => true,
         }
     }
 }
@@ -325,6 +397,75 @@ impl ops::Neg for LuaNumber {
         match self {
             LuaNumber::Integer(a) => LuaNumber::Integer(-a),
             LuaNumber::Float(a) => LuaNumber::Float(-a),
+        }
+    }
+}
+
+impl ops::BitAnd for LuaNumber {
+    type Output = Self;
+
+    fn bitand(self, other: Self) -> Self {
+        match (self, other) {
+            (LuaNumber::Integer(a), LuaNumber::Integer(b)) => LuaNumber::Integer(a & b),
+            // TODO: This is wrong. Need to check if float has a decimal part, if so it's an error
+            (LuaNumber::Float(a), LuaNumber::Float(b)) => LuaNumber::Integer(a as i64 & b as i64),
+            (LuaNumber::Integer(a), LuaNumber::Float(b)) => LuaNumber::Integer(a & b as i64),
+            (LuaNumber::Float(a), LuaNumber::Integer(b)) => LuaNumber::Integer(a as i64 & b),
+        }
+    }
+}
+
+impl ops::BitOr for LuaNumber {
+    type Output = Self;
+
+    fn bitor(self, other: Self) -> Self {
+        match (self, other) {
+            (LuaNumber::Integer(a), LuaNumber::Integer(b)) => LuaNumber::Integer(a | b),
+            _ => todo!("LuaNumber::bitor"),
+        }
+    }
+}
+
+impl ops::BitXor for LuaNumber {
+    type Output = Self;
+
+    fn bitxor(self, other: Self) -> Self {
+        match (self, other) {
+            (LuaNumber::Integer(a), LuaNumber::Integer(b)) => LuaNumber::Integer(a ^ b),
+            _ => todo!("LuaNumber::bitxor"),
+        }
+    }
+}
+
+impl ops::Shl for LuaNumber {
+    type Output = Self;
+
+    fn shl(self, other: Self) -> Self {
+        match (self, other) {
+            (LuaNumber::Integer(a), LuaNumber::Integer(b)) => LuaNumber::Integer(a << b),
+            _ => todo!("LuaNumber::shl"),
+        }
+    }
+}
+
+impl ops::Shr for LuaNumber {
+    type Output = Self;
+
+    fn shr(self, other: Self) -> Self {
+        match (self, other) {
+            (LuaNumber::Integer(a), LuaNumber::Integer(b)) => LuaNumber::Integer(a >> b),
+            _ => todo!("LuaNumber::shr"),
+        }
+    }
+}
+
+impl PartialOrd for LuaNumber {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        match (self, other) {
+            (LuaNumber::Integer(a), LuaNumber::Integer(b)) => a.partial_cmp(b),
+            (LuaNumber::Float(a), LuaNumber::Float(b)) => a.partial_cmp(b),
+            (LuaNumber::Integer(a), LuaNumber::Float(b)) => (*a as f64).partial_cmp(b),
+            (LuaNumber::Float(a), LuaNumber::Integer(b)) => a.partial_cmp(&(*b as f64)),
         }
     }
 }

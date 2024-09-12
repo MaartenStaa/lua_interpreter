@@ -13,22 +13,29 @@ pub enum Instruction {
     Mod,
     Pow,
     IDiv,
-    // Band,
-    // Bor,
-    // Bxor,
-    // Shl,
-    // Shr,
+    Band,
+    Bor,
+    Bxor,
+    Shl,
+    Shr,
     // Unm,
     // BNot,
     // Not,
 
     // Comparison
-    // Eq,
-    // Lt,
-    // Le,
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
 
     // Concatenation
     Concat,
+
+    // Logical
+    And,
+    Or,
 
     // Unary operations
     Neg,

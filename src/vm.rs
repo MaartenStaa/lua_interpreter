@@ -118,8 +118,92 @@ impl VM {
                     self.push(a.idiv(b));
                     1
                 }
+                Instruction::Band => {
+                    let b = self.pop();
+                    let a = self.pop();
+                    self.push(a & b);
+                    1
+                }
+                Instruction::Bor => {
+                    let b = self.pop();
+                    let a = self.pop();
+                    self.push(a | b);
+                    1
+                }
+                Instruction::Bxor => {
+                    let b = self.pop();
+                    let a = self.pop();
+                    self.push(a ^ b);
+                    1
+                }
+                Instruction::Shl => {
+                    let b = self.pop();
+                    let a = self.pop();
+                    self.push(a << b);
+                    1
+                }
+                Instruction::Shr => {
+                    let b = self.pop();
+                    let a = self.pop();
+                    self.push(a >> b);
+                    1
+                }
 
                 // Comparison
+                Instruction::Eq => {
+                    let b = self.pop();
+                    let a = self.pop();
+                    self.push(LuaValue::Boolean(a == b));
+                    1
+                }
+                Instruction::Ne => {
+                    let b = self.pop();
+                    let a = self.pop();
+                    self.push(LuaValue::Boolean(a != b));
+                    1
+                }
+                Instruction::Lt => {
+                    let b = self.pop();
+                    let a = self.pop();
+                    self.push(LuaValue::Boolean(a < b));
+                    1
+                }
+                Instruction::Le => {
+                    let b = self.pop();
+                    let a = self.pop();
+                    self.push(LuaValue::Boolean(a <= b));
+                    1
+                }
+                Instruction::Gt => {
+                    let b = self.pop();
+                    let a = self.pop();
+                    // https://www.lua.org/manual/5.4/manual.html#3.4.4
+                    // A comparison a > b is translated to b < a and a >= b is translated to b <= a.
+                    self.push(LuaValue::Boolean(b < a));
+                    1
+                }
+                Instruction::Ge => {
+                    let b = self.pop();
+                    let a = self.pop();
+                    // https://www.lua.org/manual/5.4/manual.html#3.4.4
+                    // A comparison a > b is translated to b < a and a >= b is translated to b <= a.
+                    self.push(LuaValue::Boolean(b <= a));
+                    1
+                }
+
+                // Logical
+                Instruction::And => {
+                    let b = self.pop();
+                    let a = self.pop();
+                    self.push(LuaValue::Boolean(a.as_boolean() && b.as_boolean()));
+                    1
+                }
+                Instruction::Or => {
+                    let b = self.pop();
+                    let a = self.pop();
+                    self.push(LuaValue::Boolean(a.as_boolean() || b.as_boolean()));
+                    1
+                }
 
                 // Concatenation
                 Instruction::Concat => {

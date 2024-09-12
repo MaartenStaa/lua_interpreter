@@ -111,11 +111,27 @@ impl Compiler {
             BinaryOperator::Mod => self.vm.push_instruction(Instruction::Mod),
             BinaryOperator::Pow => self.vm.push_instruction(Instruction::Pow),
             BinaryOperator::FloorDiv => self.vm.push_instruction(Instruction::IDiv),
+            BinaryOperator::BitwiseAnd => self.vm.push_instruction(Instruction::Band),
+            BinaryOperator::BitwiseOr => self.vm.push_instruction(Instruction::Bor),
+            BinaryOperator::BitwiseXor => self.vm.push_instruction(Instruction::Bxor),
+            BinaryOperator::ShiftLeft => self.vm.push_instruction(Instruction::Shl),
+            BinaryOperator::ShiftRight => self.vm.push_instruction(Instruction::Shr),
+
+            // Comparison
+            BinaryOperator::Equal => self.vm.push_instruction(Instruction::Eq),
+            BinaryOperator::NotEqual => self.vm.push_instruction(Instruction::Ne),
+            BinaryOperator::LessThan => self.vm.push_instruction(Instruction::Lt),
+            BinaryOperator::LessThanOrEqual => self.vm.push_instruction(Instruction::Le),
+            BinaryOperator::GreaterThan => self.vm.push_instruction(Instruction::Gt),
+            BinaryOperator::GreaterThanOrEqual => self.vm.push_instruction(Instruction::Ge),
 
             // Strings
             BinaryOperator::Concat => self.vm.push_instruction(Instruction::Concat),
 
-            _ => todo!("compile_binary_operator {:?}", op),
+            // Logical
+            // TODO: Implement short-circuiting
+            BinaryOperator::And => self.vm.push_instruction(Instruction::And),
+            BinaryOperator::Or => self.vm.push_instruction(Instruction::Or),
         }
     }
 
