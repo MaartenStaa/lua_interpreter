@@ -1,5 +1,5 @@
 use crate::{
-    ast::{self, BinaryOperator, UnaryOperator},
+    ast::{self, BinaryOperator, Statement, UnaryOperator},
     instruction::Instruction,
     value,
     vm::VM,
@@ -27,10 +27,39 @@ impl Compiler {
         }
     }
 
-    fn compile_statement(&mut self, statement: crate::ast::Statement) {
+    fn compile_statement(&mut self, statement: Statement) {
         match statement {
-            crate::ast::Statement::FunctionCall(function_call) => {
+            Statement::FunctionCall(function_call) => {
                 self.compile_function_call(function_call);
+            }
+            Statement::If {
+                condition,
+                block,
+                else_ifs,
+                else_block,
+            } => {
+                self.compile_expression(condition);
+                self.vm.push_instruction(Instruction::JmpFalse);
+                let jmp_false_addr = self.vm.push_addr_placeholder();
+                self.compile_block(block);
+                self.vm.push_instruction(Instruction::Jmp);
+                let mut jmp_end_addrs = vec![self.vm.push_addr_placeholder()];
+                self.vm.patch_addr_placeholder(jmp_false_addr);
+                for else_if in else_ifs {
+                    self.compile_expression(else_if.condition);
+                    self.vm.push_instruction(Instruction::JmpFalse);
+                    let jmp_false_addr = self.vm.push_addr_placeholder();
+                    self.compile_block(else_if.block);
+                    self.vm.push_instruction(Instruction::Jmp);
+                    jmp_end_addrs.push(self.vm.push_addr_placeholder());
+                    self.vm.patch_addr_placeholder(jmp_false_addr);
+                }
+                if let Some(else_block) = else_block {
+                    self.compile_block(else_block);
+                }
+                for jmp_end_addr in jmp_end_addrs {
+                    self.vm.patch_addr_placeholder(jmp_end_addr);
+                }
             }
             _ => todo!("compile_statement {:?}", statement),
         }
