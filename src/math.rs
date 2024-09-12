@@ -1,3 +1,4 @@
+use miette::{miette, Context};
 use std::ops;
 
 use crate::{
@@ -106,67 +107,127 @@ impl PartialOrd for ast::Number {
 }
 
 impl ops::Add for LuaValue {
-    type Output = Self;
+    type Output = miette::Result<Self>;
 
-    fn add(self, other: Self) -> Self {
-        match (self, other) {
-            (LuaValue::Number(a), LuaValue::Number(b)) => LuaValue::Number(a + b),
-            _ => unimplemented!(),
+    fn add(self, other: Self) -> miette::Result<Self> {
+        match (&self, &other) {
+            (LuaValue::Number(a), LuaValue::Number(b)) => Ok(LuaValue::Number(a + b)),
+            (LuaValue::String(_), _) | (_, LuaValue::String(_)) => {
+                let left_type = self.type_name();
+                let right_type = other.type_name();
+
+                Err(miette!(
+                    help = "did you mean to use '..' instead of '+'?",
+                    "cannot add a '{}' with a '{}'",
+                    left_type,
+                    right_type
+                ))
+            }
+            _ => {
+                let left_type = self.type_name();
+                let right_type = other.type_name();
+
+                Err(miette!(
+                    "cannot add a '{}' with a '{}'",
+                    left_type,
+                    right_type
+                ))
+            }
         }
     }
 }
 
 impl ops::Sub for LuaValue {
-    type Output = Self;
+    type Output = miette::Result<Self>;
 
-    fn sub(self, other: Self) -> Self {
-        match (self, other) {
-            (LuaValue::Number(a), LuaValue::Number(b)) => LuaValue::Number(a - b),
-            _ => unimplemented!(),
+    fn sub(self, other: Self) -> miette::Result<Self> {
+        match (&self, &other) {
+            (LuaValue::Number(a), LuaValue::Number(b)) => Ok(LuaValue::Number(a - b)),
+            _ => {
+                let left_type = self.type_name();
+                let right_type = other.type_name();
+
+                Err(miette!(
+                    "cannot subtract a '{}' with a '{}'",
+                    left_type,
+                    right_type
+                ))
+            }
         }
     }
 }
 
 impl ops::Mul for LuaValue {
-    type Output = Self;
+    type Output = miette::Result<Self>;
 
-    fn mul(self, other: Self) -> Self {
-        match (self, other) {
-            (LuaValue::Number(a), LuaValue::Number(b)) => LuaValue::Number(a * b),
-            _ => unimplemented!(),
+    fn mul(self, other: Self) -> miette::Result<Self> {
+        match (&self, &other) {
+            (LuaValue::Number(a), LuaValue::Number(b)) => Ok(LuaValue::Number(a * b)),
+            _ => {
+                let left_type = self.type_name();
+                let right_type = other.type_name();
+
+                Err(miette!(
+                    "cannot multiply a '{}' with a '{}'",
+                    left_type,
+                    right_type
+                ))
+            }
         }
     }
 }
 
 impl ops::Div for LuaValue {
-    type Output = Self;
+    type Output = miette::Result<Self>;
 
-    fn div(self, other: Self) -> Self {
-        match (self, other) {
-            (LuaValue::Number(a), LuaValue::Number(b)) => LuaValue::Number(a / b),
-            _ => unimplemented!(),
+    fn div(self, other: Self) -> miette::Result<Self> {
+        match (&self, &other) {
+            (LuaValue::Number(a), LuaValue::Number(b)) => Ok(LuaValue::Number(a / b)),
+            _ => {
+                let left_type = self.type_name();
+                let right_type = other.type_name();
+
+                Err(miette!(
+                    "cannot divide a '{}' with a '{}'",
+                    left_type,
+                    right_type
+                ))
+            }
         }
     }
 }
 
 impl ops::Rem for LuaValue {
-    type Output = Self;
+    type Output = miette::Result<Self>;
 
-    fn rem(self, other: Self) -> Self {
-        match (self, other) {
-            (LuaValue::Number(a), LuaValue::Number(b)) => LuaValue::Number(a % b),
-            _ => unimplemented!(),
+    fn rem(self, other: Self) -> miette::Result<Self> {
+        match (&self, &other) {
+            (LuaValue::Number(a), LuaValue::Number(b)) => Ok(LuaValue::Number(a % b)),
+            _ => {
+                let left_type = self.type_name();
+                let right_type = other.type_name();
+
+                Err(miette!(
+                    "cannot modulo a '{}' with a '{}'",
+                    left_type,
+                    right_type
+                ))
+            }
         }
     }
 }
 
 impl ops::Neg for LuaValue {
-    type Output = Self;
+    type Output = miette::Result<Self>;
 
-    fn neg(self) -> Self {
-        match self {
-            LuaValue::Number(a) => LuaValue::Number(-a),
-            _ => unimplemented!(),
+    fn neg(self) -> miette::Result<Self> {
+        match &self {
+            LuaValue::Number(a) => Ok(LuaValue::Number(-a)),
+            _ => {
+                let type_name = self.type_name();
+
+                Err(miette!("cannot negate a '{}'", type_name))
+            }
         }
     }
 }
@@ -184,56 +245,101 @@ impl ops::Not for LuaValue {
 }
 
 impl ops::BitAnd for LuaValue {
-    type Output = Self;
+    type Output = miette::Result<Self>;
 
-    fn bitand(self, other: Self) -> Self {
-        match (self, other) {
-            (LuaValue::Number(a), LuaValue::Number(b)) => LuaValue::Number(a & b),
-            _ => unimplemented!(),
+    fn bitand(self, other: Self) -> miette::Result<Self> {
+        match (&self, &other) {
+            (LuaValue::Number(a), LuaValue::Number(b)) => Ok(LuaValue::Number((a & b)?)),
+            _ => {
+                let left_type = self.type_name();
+                let right_type = other.type_name();
+
+                Err(miette!(
+                    "cannot bitwise and a '{}' with a '{}'",
+                    left_type,
+                    right_type
+                ))
+            }
         }
     }
 }
 
 impl ops::BitOr for LuaValue {
-    type Output = Self;
+    type Output = miette::Result<Self>;
 
-    fn bitor(self, other: Self) -> Self {
-        match (self, other) {
-            (LuaValue::Number(a), LuaValue::Number(b)) => LuaValue::Number(a | b),
-            _ => unimplemented!(),
+    fn bitor(self, other: Self) -> miette::Result<Self> {
+        match (&self, &other) {
+            (LuaValue::Number(a), LuaValue::Number(b)) => Ok(LuaValue::Number((a | b)?)),
+            _ => {
+                let left_type = self.type_name();
+                let right_type = other.type_name();
+
+                Err(miette!(
+                    "cannot bitwise or a '{}' with a '{}'",
+                    left_type,
+                    right_type
+                ))
+            }
         }
     }
 }
 
 impl ops::BitXor for LuaValue {
-    type Output = Self;
+    type Output = miette::Result<Self>;
 
-    fn bitxor(self, other: Self) -> Self {
-        match (self, other) {
-            (LuaValue::Number(a), LuaValue::Number(b)) => LuaValue::Number(a ^ b),
-            _ => unimplemented!(),
+    fn bitxor(self, other: Self) -> miette::Result<Self> {
+        match (&self, &other) {
+            (LuaValue::Number(a), LuaValue::Number(b)) => Ok(LuaValue::Number((a ^ b)?)),
+            _ => {
+                let left_type = self.type_name();
+                let right_type = other.type_name();
+
+                Err(miette!(
+                    "cannot bitwise xor a '{}' with a '{}'",
+                    left_type,
+                    right_type
+                ))
+            }
         }
     }
 }
 
 impl ops::Shl for LuaValue {
-    type Output = Self;
+    type Output = miette::Result<Self>;
 
-    fn shl(self, other: Self) -> Self {
-        match (self, other) {
-            (LuaValue::Number(a), LuaValue::Number(b)) => LuaValue::Number(a << b),
-            _ => unimplemented!(),
+    fn shl(self, other: Self) -> miette::Result<Self> {
+        match (&self, &other) {
+            (LuaValue::Number(a), LuaValue::Number(b)) => Ok(LuaValue::Number((a << b)?)),
+            _ => {
+                let left_type = self.type_name();
+                let right_type = other.type_name();
+
+                Err(miette!(
+                    "cannot bitwise shift left a '{}' with a '{}'",
+                    left_type,
+                    right_type
+                ))
+            }
         }
     }
 }
 
 impl ops::Shr for LuaValue {
-    type Output = Self;
+    type Output = miette::Result<Self>;
 
-    fn shr(self, other: Self) -> Self {
-        match (self, other) {
-            (LuaValue::Number(a), LuaValue::Number(b)) => LuaValue::Number(a >> b),
-            _ => unimplemented!(),
+    fn shr(self, other: Self) -> miette::Result<Self> {
+        match (&self, &other) {
+            (LuaValue::Number(a), LuaValue::Number(b)) => Ok(LuaValue::Number((a >> b)?)),
+            _ => {
+                let left_type = self.type_name();
+                let right_type = other.type_name();
+
+                Err(miette!(
+                    "cannot bitwise shift right a '{}' with a '{}'",
+                    left_type,
+                    right_type
+                ))
+            }
         }
     }
 }
@@ -248,43 +354,70 @@ impl PartialOrd for LuaValue {
 }
 
 impl LuaValue {
-    pub fn concat(self, other: Self) -> Self {
+    pub fn concat(self, other: Self) -> miette::Result<Self> {
         match (self, other) {
             (LuaValue::String(mut a), LuaValue::String(b)) => {
                 a.extend(b);
-                LuaValue::String(a)
+                Ok(LuaValue::String(a))
             }
             (LuaValue::String(mut a), LuaValue::Number(b)) => {
                 a.extend(b.to_string().as_bytes());
-                LuaValue::String(a)
+                Ok(LuaValue::String(a))
             }
             (LuaValue::Number(a), LuaValue::String(b)) => {
                 // b.insert_str(0, &a.to_string());
-                LuaValue::String(Vec::from_iter(
+                Ok(LuaValue::String(Vec::from_iter(
                     a.to_string().into_bytes().into_iter().chain(b),
-                ))
+                )))
             }
-            (LuaValue::Number(a), LuaValue::Number(b)) => LuaValue::String(Vec::from_iter(
+            (LuaValue::Number(a), LuaValue::Number(b)) => Ok(LuaValue::String(Vec::from_iter(
                 a.to_string()
                     .into_bytes()
                     .into_iter()
                     .chain(b.to_string().into_bytes()),
-            )),
-            _ => unimplemented!(),
+            ))),
+            (self_, other) => {
+                let left_type = self_.type_name();
+                let right_type = other.type_name();
+
+                Err(miette!(
+                    "cannot concatenate a '{}' with a '{}'",
+                    left_type,
+                    right_type
+                ))
+            }
         }
     }
 
-    pub fn pow(self, other: Self) -> Self {
-        match (self, other) {
-            (LuaValue::Number(a), LuaValue::Number(b)) => LuaValue::Number(a.pow(b)),
-            _ => unimplemented!(),
+    pub fn pow(self, other: Self) -> miette::Result<Self> {
+        match (&self, &other) {
+            (LuaValue::Number(a), LuaValue::Number(b)) => Ok(LuaValue::Number(a.pow(b))),
+            _ => {
+                let left_type = self.type_name();
+                let right_type = other.type_name();
+
+                Err(miette!(
+                    "cannot raise a '{}' to the power of a '{}'",
+                    left_type,
+                    right_type
+                ))
+            }
         }
     }
 
-    pub fn idiv(self, other: Self) -> Self {
-        match (self, other) {
-            (LuaValue::Number(a), LuaValue::Number(b)) => LuaValue::Number((a / b).floor()),
-            _ => unimplemented!(),
+    pub fn idiv(self, other: Self) -> miette::Result<Self> {
+        match (&self, &other) {
+            (LuaValue::Number(a), LuaValue::Number(b)) => Ok(LuaValue::Number((a / b).floor())),
+            _ => {
+                let left_type = self.type_name();
+                let right_type = other.type_name();
+
+                Err(miette!(
+                    "cannot integer divide a '{}' with a '{}'",
+                    left_type,
+                    right_type
+                ))
+            }
         }
     }
 
@@ -297,75 +430,16 @@ impl LuaValue {
     }
 }
 
-impl ops::Add for LuaNumber {
-    type Output = Self;
+impl_number_ops!(Add, +, add, wrapping_add, LuaNumber);
+impl_number_ops!(Sub, -, sub, wrapping_sub, LuaNumber);
+impl_number_ops!(Mul, *, mul, wrapping_mul, LuaNumber);
+impl_number_ops!(Div, /, div, wrapping_div, LuaNumber);
+impl_number_ops!(Rem, %, rem, wrapping_rem, LuaNumber);
 
-    fn add(self, other: Self) -> Self {
-        match (self, other) {
-            (LuaNumber::Integer(a), LuaNumber::Integer(b)) => LuaNumber::Integer(a.wrapping_add(b)),
-            (LuaNumber::Float(a), LuaNumber::Float(b)) => LuaNumber::Float(a + b),
-            (LuaNumber::Integer(a), LuaNumber::Float(b)) => LuaNumber::Float(a as f64 + b),
-            (LuaNumber::Float(a), LuaNumber::Integer(b)) => LuaNumber::Float(a + b as f64),
-        }
-    }
-}
+impl ops::Neg for &LuaNumber {
+    type Output = LuaNumber;
 
-impl ops::Sub for LuaNumber {
-    type Output = Self;
-
-    fn sub(self, other: Self) -> Self {
-        match (self, other) {
-            (LuaNumber::Integer(a), LuaNumber::Integer(b)) => LuaNumber::Integer(a.wrapping_sub(b)),
-            (LuaNumber::Float(a), LuaNumber::Float(b)) => LuaNumber::Float(a - b),
-            (LuaNumber::Integer(a), LuaNumber::Float(b)) => LuaNumber::Float(a as f64 - b),
-            (LuaNumber::Float(a), LuaNumber::Integer(b)) => LuaNumber::Float(a - b as f64),
-        }
-    }
-}
-
-impl ops::Mul for LuaNumber {
-    type Output = Self;
-
-    fn mul(self, other: Self) -> Self {
-        match (self, other) {
-            (LuaNumber::Integer(a), LuaNumber::Integer(b)) => LuaNumber::Integer(a.wrapping_mul(b)),
-            (LuaNumber::Float(a), LuaNumber::Float(b)) => LuaNumber::Float(a * b),
-            (LuaNumber::Integer(a), LuaNumber::Float(b)) => LuaNumber::Float(a as f64 * b),
-            (LuaNumber::Float(a), LuaNumber::Integer(b)) => LuaNumber::Float(a * b as f64),
-        }
-    }
-}
-
-impl ops::Div for LuaNumber {
-    type Output = Self;
-
-    fn div(self, other: Self) -> Self {
-        match (self, other) {
-            (LuaNumber::Integer(a), LuaNumber::Integer(b)) => LuaNumber::Integer(a.wrapping_div(b)),
-            (LuaNumber::Float(a), LuaNumber::Float(b)) => LuaNumber::Float(a / b),
-            (LuaNumber::Integer(a), LuaNumber::Float(b)) => LuaNumber::Float(a as f64 / b),
-            (LuaNumber::Float(a), LuaNumber::Integer(b)) => LuaNumber::Float(a / b as f64),
-        }
-    }
-}
-
-impl ops::Rem for LuaNumber {
-    type Output = Self;
-
-    fn rem(self, other: Self) -> Self {
-        match (self, other) {
-            (LuaNumber::Integer(a), LuaNumber::Integer(b)) => LuaNumber::Integer(a.wrapping_rem(b)),
-            (LuaNumber::Float(a), LuaNumber::Float(b)) => LuaNumber::Float(a % b),
-            (LuaNumber::Integer(a), LuaNumber::Float(b)) => LuaNumber::Float(a as f64 % b),
-            (LuaNumber::Float(a), LuaNumber::Integer(b)) => LuaNumber::Float(a % b as f64),
-        }
-    }
-}
-
-impl ops::Neg for LuaNumber {
-    type Output = Self;
-
-    fn neg(self) -> Self {
+    fn neg(self) -> LuaNumber {
         match self {
             LuaNumber::Integer(a) => LuaNumber::Integer(-a),
             LuaNumber::Float(a) => LuaNumber::Float(-a),
@@ -373,60 +447,57 @@ impl ops::Neg for LuaNumber {
     }
 }
 
-impl ops::BitAnd for LuaNumber {
-    type Output = Self;
+impl ops::BitAnd for &LuaNumber {
+    type Output = miette::Result<LuaNumber>;
 
-    fn bitand(self, other: Self) -> Self {
-        match (self, other) {
-            (LuaNumber::Integer(a), LuaNumber::Integer(b)) => LuaNumber::Integer(a & b),
-            // TODO: This is wrong. Need to check if float has a decimal part, if so it's an error
-            (LuaNumber::Float(a), LuaNumber::Float(b)) => LuaNumber::Integer(a as i64 & b as i64),
-            (LuaNumber::Integer(a), LuaNumber::Float(b)) => LuaNumber::Integer(a & b as i64),
-            (LuaNumber::Float(a), LuaNumber::Integer(b)) => LuaNumber::Integer(a as i64 & b),
+    fn bitand(self, other: Self) -> miette::Result<LuaNumber> {
+        match (self.integer_repr(), other.integer_repr()) {
+            (Ok(a), Ok(b)) => Ok(LuaNumber::Integer(a & b)),
+            (Err(e), _) | (_, Err(e)) => Err(e).wrap_err("during bitwise and"),
         }
     }
 }
 
-impl ops::BitOr for LuaNumber {
-    type Output = Self;
+impl ops::BitOr for &LuaNumber {
+    type Output = miette::Result<LuaNumber>;
 
-    fn bitor(self, other: Self) -> Self {
-        match (self, other) {
-            (LuaNumber::Integer(a), LuaNumber::Integer(b)) => LuaNumber::Integer(a | b),
-            _ => todo!("LuaNumber::bitor"),
+    fn bitor(self, other: Self) -> miette::Result<LuaNumber> {
+        match (self.integer_repr(), other.integer_repr()) {
+            (Ok(a), Ok(b)) => Ok(LuaNumber::Integer(a | b)),
+            (Err(e), _) | (_, Err(e)) => Err(e).wrap_err("during bitwise or"),
         }
     }
 }
 
-impl ops::BitXor for LuaNumber {
-    type Output = Self;
+impl ops::BitXor for &LuaNumber {
+    type Output = miette::Result<LuaNumber>;
 
-    fn bitxor(self, other: Self) -> Self {
-        match (self, other) {
-            (LuaNumber::Integer(a), LuaNumber::Integer(b)) => LuaNumber::Integer(a ^ b),
-            _ => todo!("LuaNumber::bitxor"),
+    fn bitxor(self, other: Self) -> miette::Result<LuaNumber> {
+        match (self.integer_repr(), other.integer_repr()) {
+            (Ok(a), Ok(b)) => Ok(LuaNumber::Integer(a ^ b)),
+            (Err(e), _) | (_, Err(e)) => Err(e).wrap_err("during bitwise xor"),
         }
     }
 }
 
-impl ops::Shl for LuaNumber {
-    type Output = Self;
+impl ops::Shl for &LuaNumber {
+    type Output = miette::Result<LuaNumber>;
 
-    fn shl(self, other: Self) -> Self {
-        match (self, other) {
-            (LuaNumber::Integer(a), LuaNumber::Integer(b)) => LuaNumber::Integer(a << b),
-            _ => todo!("LuaNumber::shl"),
+    fn shl(self, other: Self) -> miette::Result<LuaNumber> {
+        match (self.integer_repr(), other.integer_repr()) {
+            (Ok(a), Ok(b)) => Ok(LuaNumber::Integer(a << b)),
+            (Err(e), _) | (_, Err(e)) => Err(e).wrap_err("during bitwise shift left"),
         }
     }
 }
 
-impl ops::Shr for LuaNumber {
-    type Output = Self;
+impl ops::Shr for &LuaNumber {
+    type Output = miette::Result<LuaNumber>;
 
-    fn shr(self, other: Self) -> Self {
-        match (self, other) {
-            (LuaNumber::Integer(a), LuaNumber::Integer(b)) => LuaNumber::Integer(a >> b),
-            _ => todo!("LuaNumber::shr"),
+    fn shr(self, other: Self) -> miette::Result<LuaNumber> {
+        match (self.integer_repr(), other.integer_repr()) {
+            (Ok(a), Ok(b)) => Ok(LuaNumber::Integer(a >> b)),
+            (Err(e), _) | (_, Err(e)) => Err(e).wrap_err("during bitwise shift right"),
         }
     }
 }
@@ -443,14 +514,14 @@ impl PartialOrd for LuaNumber {
 }
 
 impl LuaNumber {
-    pub fn pow(self, other: Self) -> Self {
+    pub fn pow(&self, other: &Self) -> Self {
         match (self, other) {
             (LuaNumber::Integer(a), LuaNumber::Integer(b)) => {
-                LuaNumber::Integer(a.wrapping_pow(b as u32))
+                LuaNumber::Integer(a.wrapping_pow(*b as u32))
             }
-            (LuaNumber::Float(a), LuaNumber::Float(b)) => LuaNumber::Float(a.powf(b)),
-            (LuaNumber::Integer(a), LuaNumber::Float(b)) => LuaNumber::Float((a as f64).powf(b)),
-            (LuaNumber::Float(a), LuaNumber::Integer(b)) => LuaNumber::Float(a.powi(b as i32)),
+            (LuaNumber::Float(a), LuaNumber::Float(b)) => LuaNumber::Float(a.powf(*b)),
+            (LuaNumber::Integer(a), LuaNumber::Float(b)) => LuaNumber::Float((*a as f64).powf(*b)),
+            (LuaNumber::Float(a), LuaNumber::Integer(b)) => LuaNumber::Float(a.powi(*b as i32)),
         }
     }
 

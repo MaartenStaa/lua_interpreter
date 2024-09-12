@@ -1,3 +1,4 @@
+use miette::miette;
 use std::fmt::Display;
 
 use crate::ast;
@@ -54,6 +55,29 @@ impl LuaValue {
 pub enum LuaNumber {
     Integer(i64),
     Float(f64),
+}
+
+impl LuaNumber {
+    pub fn integer_repr(&self) -> miette::Result<i64> {
+        match self {
+            LuaNumber::Integer(i) => Ok(*i),
+            LuaNumber::Float(f) => {
+                if f.is_nan() {
+                    return Err(miette!("NaN has no integer representation",));
+                }
+
+                if f.is_infinite() {
+                    return Err(miette!("infinity has no integer representation",));
+                }
+
+                if f.fract() != 0.0 {
+                    return Err(miette!("float has no integer representation",));
+                }
+
+                Ok(*f as i64)
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -13,8 +13,6 @@ const MAX_STACK_SIZE: usize = 256;
 pub type JumpAddr = u16;
 pub type JumpRelOffset = i16;
 
-pub struct Chunk {}
-
 #[derive(Debug)]
 pub struct VM<'path, 'source> {
     filename: &'path Path,
@@ -108,10 +106,14 @@ impl<'path, 'source> VM<'path, 'source> {
                 vec![]
             };
 
-            let err = miette!(labels = labels, "{err}").with_source_code(
+            // FIXME: This is a workaround for the fact that miette doesn't support
+            // adding labels ad-hoc, but it ends up printing the error message
+            // kind of weirdly.
+            let err = miette!(labels = labels, "{err:?}").with_source_code(
                 NamedSource::new(self.filename.to_string_lossy(), self.source.to_string())
                     .with_language("lua"),
             );
+
             eprintln!("{:?}", err);
             std::process::exit(1);
         }
@@ -134,73 +136,73 @@ impl<'path, 'source> VM<'path, 'source> {
                 Instruction::Add => {
                     let b = self.pop();
                     let a = self.pop();
-                    self.push(a + b);
+                    self.push((a + b)?);
                     1
                 }
                 Instruction::Sub => {
                     let b = self.pop();
                     let a = self.pop();
-                    self.push(a - b);
+                    self.push((a - b)?);
                     1
                 }
                 Instruction::Mul => {
                     let b = self.pop();
                     let a = self.pop();
-                    self.push(a * b);
+                    self.push((a * b)?);
                     1
                 }
                 Instruction::Div => {
                     let b = self.pop();
                     let a = self.pop();
-                    self.push(a / b);
+                    self.push((a / b)?);
                     1
                 }
                 Instruction::Mod => {
                     let b = self.pop();
                     let a = self.pop();
-                    self.push(a % b);
+                    self.push((a % b)?);
                     1
                 }
                 Instruction::Pow => {
                     let b = self.pop();
                     let a = self.pop();
-                    self.push(a.pow(b));
+                    self.push(a.pow(b)?);
                     1
                 }
                 Instruction::IDiv => {
                     let b = self.pop();
                     let a = self.pop();
-                    self.push(a.idiv(b));
+                    self.push(a.idiv(b)?);
                     1
                 }
                 Instruction::Band => {
                     let b = self.pop();
                     let a = self.pop();
-                    self.push(a & b);
+                    self.push((a & b)?);
                     1
                 }
                 Instruction::Bor => {
                     let b = self.pop();
                     let a = self.pop();
-                    self.push(a | b);
+                    self.push((a | b)?);
                     1
                 }
                 Instruction::Bxor => {
                     let b = self.pop();
                     let a = self.pop();
-                    self.push(a ^ b);
+                    self.push((a ^ b)?);
                     1
                 }
                 Instruction::Shl => {
                     let b = self.pop();
                     let a = self.pop();
-                    self.push(a << b);
+                    self.push((a << b)?);
                     1
                 }
                 Instruction::Shr => {
                     let b = self.pop();
                     let a = self.pop();
-                    self.push(a >> b);
+                    self.push((a >> b)?);
                     1
                 }
 
@@ -250,14 +252,14 @@ impl<'path, 'source> VM<'path, 'source> {
                 Instruction::Concat => {
                     let b = self.pop();
                     let a = self.pop();
-                    self.push(a.concat(b));
+                    self.push(a.concat(b)?);
                     1
                 }
 
                 // Unary operations
                 Instruction::Neg => {
                     let a = self.pop();
-                    self.push(-a);
+                    self.push((-a)?);
                     1
                 }
                 Instruction::Not => {
