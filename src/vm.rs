@@ -1,4 +1,6 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, path::Path};
+
+use miette::{miette, NamedSource};
 
 use crate::{
     instruction::Instruction,
@@ -14,20 +16,26 @@ pub type JumpRelOffset = i16;
 pub struct Chunk {}
 
 #[derive(Debug)]
-pub struct VM {
+pub struct VM<'path, 'source> {
+    filename: &'path Path,
+    source: &'source str,
     instructions: Vec<u8>,
     instruction_spans: HashMap<usize, Span>,
+    ip: usize,
     consts: Vec<LuaConst>,
     const_index: u8,
     stack: Vec<LuaValue>,
     stack_index: usize,
 }
 
-impl VM {
-    pub fn new() -> Self {
+impl<'path, 'source> VM<'path, 'source> {
+    pub fn new(filename: &'path Path, source: &'source str) -> Self {
         Self {
+            filename,
+            source,
             instructions: vec![],
             instruction_spans: HashMap::new(),
+            ip: 0,
             consts: vec![LuaConst::Nil; u8::MAX as usize],
             const_index: 0,
             stack: vec![LuaValue::Nil; MAX_STACK_SIZE],
@@ -93,13 +101,29 @@ impl VM {
     }
 
     pub fn run(&mut self) {
-        let mut ip = 0;
+        if let Err(err) = self.run_inner() {
+            let labels = if let Some(span) = self.instruction_spans.get(&self.ip) {
+                vec![span.labeled("here")]
+            } else {
+                vec![]
+            };
+
+            let err = miette!(labels = labels, "{err}").with_source_code(
+                NamedSource::new(self.filename.to_string_lossy(), self.source.to_string())
+                    .with_language("lua"),
+            );
+            eprintln!("{:?}", err);
+            std::process::exit(1);
+        }
+    }
+
+    fn run_inner(&mut self) -> miette::Result<()> {
         loop {
-            let instruction = self.instructions[ip];
+            let instruction = self.instructions[self.ip];
             let instruction_increment = match Instruction::from(instruction) {
                 // Constants
                 Instruction::LoadConst => {
-                    let const_index = self.instructions[ip + 1];
+                    let const_index = self.instructions[self.ip + 1];
                     let constant = self.consts[const_index as usize].clone();
                     self.push(constant.into());
                     2
@@ -245,20 +269,20 @@ impl VM {
                 // Control
                 Instruction::Jmp => {
                     // Absolute jump
-                    let addr_bytes =
-                        &self.instructions[ip + 1..ip + 1 + std::mem::size_of::<JumpAddr>()];
+                    let addr_bytes = &self.instructions
+                        [self.ip + 1..self.ip + 1 + std::mem::size_of::<JumpAddr>()];
                     let addr = JumpAddr::from_be_bytes(addr_bytes.try_into().unwrap());
-                    ip = addr as usize;
+                    self.ip = addr as usize;
                     continue;
                 }
                 Instruction::JmpTrue => {
                     let value = self.peek();
                     if value.as_boolean() {
                         // Absolute jump
-                        let addr_bytes =
-                            &self.instructions[ip + 1..ip + 1 + std::mem::size_of::<JumpAddr>()];
+                        let addr_bytes = &self.instructions
+                            [self.ip + 1..self.ip + 1 + std::mem::size_of::<JumpAddr>()];
                         let addr = JumpAddr::from_be_bytes(addr_bytes.try_into().unwrap());
-                        ip = addr as usize;
+                        self.ip = addr as usize;
                         continue;
                     }
                     1 + std::mem::size_of::<JumpAddr>()
@@ -267,10 +291,10 @@ impl VM {
                     let value = self.peek();
                     if !value.as_boolean() {
                         // Absolute jump
-                        let addr_bytes =
-                            &self.instructions[ip + 1..ip + 1 + std::mem::size_of::<JumpAddr>()];
+                        let addr_bytes = &self.instructions
+                            [self.ip + 1..self.ip + 1 + std::mem::size_of::<JumpAddr>()];
                         let addr = JumpAddr::from_be_bytes(addr_bytes.try_into().unwrap());
-                        ip = addr as usize;
+                        self.ip = addr as usize;
                         continue;
                     }
                     1 + std::mem::size_of::<JumpAddr>()
@@ -286,13 +310,9 @@ impl VM {
                 // Halt
                 Instruction::Halt => break,
             };
-            ip += instruction_increment;
+            self.ip += instruction_increment;
         }
-    }
-}
 
-impl Default for VM {
-    fn default() -> Self {
-        Self::new()
+        Ok(())
     }
 }

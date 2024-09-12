@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::Path;
 
 use crate::ast::*;
 use crate::lexer::Lexer;
@@ -6,17 +6,17 @@ use crate::scope::{DraftScope, NameLocation};
 use crate::token::{Span, Token, TokenKind};
 use miette::{miette, Context, LabeledSpan};
 
-pub struct Parser<'source> {
-    pub filename: PathBuf,
+pub struct Parser<'path, 'source> {
+    pub filename: &'path Path,
     source: &'source str,
-    lexer: Lexer<'source>,
+    lexer: Lexer<'path, 'source>,
     scopes: Vec<DraftScope>,
 }
 
-impl<'source> Parser<'source> {
-    pub fn new(filename: PathBuf, source: &'source str) -> Self {
+impl<'path, 'source> Parser<'path, 'source> {
+    pub fn new(filename: &'path Path, source: &'source str) -> Self {
         Self {
-            filename: filename.clone(),
+            filename,
             source,
             lexer: Lexer::new(filename, source),
             scopes: vec![DraftScope::new()],
@@ -1474,7 +1474,7 @@ fn infix_binding_power(kind: &TokenKind) -> Option<(u8, u8)> {
 }
 
 /// Scoping methods
-impl<'source> Parser<'source> {
+impl<'path, 'source> Parser<'path, 'source> {
     fn begin_scope(&mut self) {
         self.scopes.push(DraftScope::new());
     }

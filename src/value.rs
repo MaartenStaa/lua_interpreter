@@ -35,6 +35,21 @@ impl From<LuaConst> for LuaValue {
     }
 }
 
+impl LuaValue {
+    pub fn type_name(&self) -> &'static str {
+        match self {
+            LuaValue::Nil => "nil",
+            LuaValue::Boolean(_) => "boolean",
+            LuaValue::Number(_) => "number",
+            LuaValue::String(_) => "string",
+            LuaValue::Table(_) => "table",
+            LuaValue::Function(_) => "function",
+            LuaValue::UserData => "userdata",
+            LuaValue::Thread => "thread",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum LuaNumber {
     Integer(i64),

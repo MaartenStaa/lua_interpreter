@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use crate::{
     ast::{
         BinaryOperator, Block, Expression, FunctionCall, Literal, Number, PrefixExpression,
@@ -9,16 +11,18 @@ use crate::{
     vm::VM,
 };
 
-pub struct Compiler {
-    vm: VM,
+pub struct Compiler<'path, 'source> {
+    vm: VM<'path, 'source>,
 }
 
-impl Compiler {
-    pub fn new() -> Self {
-        Self { vm: VM::new() }
+impl<'path, 'source> Compiler<'path, 'source> {
+    pub fn new(filename: &'path Path, source: &'source str) -> Self {
+        Self {
+            vm: VM::new(filename, source),
+        }
     }
 
-    pub fn compile(mut self, ast: TokenTree<Block>) -> VM {
+    pub fn compile(mut self, ast: TokenTree<Block>) -> VM<'path, 'source> {
         self.compile_block(ast);
         self.vm.push_instruction(Instruction::Halt, None);
 
@@ -203,11 +207,5 @@ impl Compiler {
             UnaryOperator::Not => self.vm.push_instruction(Instruction::Not, Some(span)),
             _ => todo!("compile_expression UnaryOp {:?}", op),
         }
-    }
-}
-
-impl Default for Compiler {
-    fn default() -> Self {
-        Self::new()
     }
 }

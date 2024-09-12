@@ -1,18 +1,18 @@
-use std::path::PathBuf;
+use std::path::Path;
 
 use crate::token::{Span, Token, TokenKind};
 use miette::{miette, Context, LabeledSpan, NamedSource};
 
-pub struct Lexer<'source> {
-    filename: PathBuf,
+pub struct Lexer<'path, 'source> {
+    filename: &'path Path,
     source: &'source str,
     rest: &'source str,
     pub position: usize,
     peeked: Option<Token<'source>>,
 }
 
-impl<'source> Lexer<'source> {
-    pub fn new(filename: PathBuf, source: &'source str) -> Self {
+impl<'path, 'source> Lexer<'path, 'source> {
+    pub fn new(filename: &'path Path, source: &'source str) -> Self {
         Self {
             filename,
             source,
@@ -57,7 +57,7 @@ macro_rules! token {
     };
 }
 
-impl<'source> Iterator for Lexer<'source> {
+impl<'path, 'source> Iterator for Lexer<'path, 'source> {
     type Item = miette::Result<Token<'source>>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -252,7 +252,7 @@ impl<'source> Iterator for Lexer<'source> {
     }
 }
 
-impl<'source> Lexer<'source> {
+impl<'path, 'source> Lexer<'path, 'source> {
     pub fn peek(&mut self) -> miette::Result<Option<&Token<'source>>> {
         if self.peeked.is_none() {
             self.peeked = self.next().transpose()?;
@@ -943,14 +943,14 @@ mod tests {
             ("0X1.921FB54442D18P+1", TokenKind::Float(3.141592653589793)),
             ("0x.0p-3", TokenKind::Float(0.0)),
         ] {
-            let mut lexer = Lexer::new(PathBuf::from("test.lua"), input);
+            let mut lexer = Lexer::new(Path::new("test.lua"), input);
             let token = lexer.next().unwrap().unwrap();
             assert_eq!(token.kind, expected, "when parsing '{input}'");
         }
 
         // Invalid numbers
         for input in &["0x5pf", "0xi"] {
-            let mut lexer = Lexer::new(PathBuf::from("test.lua"), input);
+            let mut lexer = Lexer::new(Path::new("test.lua"), input);
             let token = lexer.next().unwrap();
             assert!(token.is_err());
         }
@@ -966,7 +966,7 @@ mod tests {
             "[[alo\n123\"]]",
             "[==[alo\n123\"]==]",
         ] {
-            let mut lexer = Lexer::new(PathBuf::from("test.lua"), example);
+            let mut lexer = Lexer::new(Path::new("test.lua"), example);
             let token = lexer.next().unwrap().unwrap();
             assert_eq!(
                 token.kind,
@@ -983,7 +983,7 @@ mod tests {
                 vec![b' ', b' ', b'f', b'o', b'o', b' ', b'b', b'a', b'r'],
             ),
         ] {
-            let mut lexer = Lexer::new(PathBuf::from("test.lua"), input);
+            let mut lexer = Lexer::new(Path::new("test.lua"), input);
             let token = lexer.next().unwrap().unwrap();
             assert_eq!(token.kind, TokenKind::String(expected));
         }
@@ -995,13 +995,13 @@ mod tests {
             "-- this is a comment\n",
             "--[=[\n  example of a long [comment],\n  [[spanning several [lines]]]\n\n]=]",
         ] {
-            let mut lexer = Lexer::new(PathBuf::from("test.lua"), input);
+            let mut lexer = Lexer::new(Path::new("test.lua"), input);
             let token = lexer.next();
             assert!(token.is_none(), "when parsing '{input}'");
 
             // Also check that we can find tokens after the comment
             let input = format!("{} 3", input);
-            let mut lexer = Lexer::new(PathBuf::from("test.lua"), &input);
+            let mut lexer = Lexer::new(Path::new("test.lua"), &input);
             let token = lexer.next().unwrap().unwrap();
             assert_eq!(token.kind, TokenKind::Integer(3));
         }

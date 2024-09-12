@@ -2,7 +2,8 @@ use std::path::PathBuf;
 
 use clap::Parser;
 use lua_interpreter::{
-    debug, lexer, optimizer::optimize as optimize_ast, parser, token::TokenKind,
+    compiler::Compiler, debug, lexer::Lexer, optimizer::optimize as optimize_ast, parser,
+    token::TokenKind,
 };
 use miette::LabeledSpan;
 
@@ -41,14 +42,14 @@ fn main() {
     let source = std::fs::read_to_string(&filename).expect("failed to read source code file");
 
     if debug_lexer {
-        let lexer = lexer::Lexer::new(filename.clone(), &source);
+        let lexer = Lexer::new(&filename, &source);
         let source_code = lexer.get_source_code();
 
         run_debug_lexer(lexer, source_code);
         return;
     }
 
-    let mut parser = parser::Parser::new(filename, &source);
+    let mut parser = parser::Parser::new(&filename, &source);
     if debug_parser {
         run_debug_parser(parser);
         return;
@@ -67,7 +68,7 @@ fn main() {
         optimize_ast(ast)
     };
 
-    let mut vm = lua_interpreter::compiler::Compiler::new().compile(ast);
+    let mut vm = Compiler::new(&filename, &source).compile(ast);
     if print_bytecode {
         debug::print_instructions(&vm);
     }
@@ -75,7 +76,7 @@ fn main() {
     vm.run();
 }
 
-fn run_debug_lexer(lexer: lexer::Lexer, source_code: miette::NamedSource<String>) {
+fn run_debug_lexer(lexer: Lexer, source_code: miette::NamedSource<String>) {
     for token in lexer {
         match token {
             Ok(t) => {
