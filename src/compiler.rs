@@ -1,7 +1,10 @@
 use crate::{
-    ast::{self, BinaryOperator, Statement, UnaryOperator},
+    ast::{
+        BinaryOperator, Block, Expression, FunctionCall, Literal, Number, PrefixExpression,
+        Statement, TokenTree, UnaryOperator, Variable,
+    },
     instruction::Instruction,
-    value,
+    value::{LuaConst, LuaNumber},
     vm::VM,
 };
 
@@ -14,21 +17,21 @@ impl Compiler {
         Self { vm: VM::new() }
     }
 
-    pub fn compile(mut self, ast: crate::ast::Block) -> VM {
+    pub fn compile(mut self, ast: TokenTree<Block>) -> VM {
         self.compile_block(ast);
         self.vm.push_instruction(Instruction::Halt);
 
         self.vm
     }
 
-    fn compile_block(&mut self, ast: ast::Block) {
-        for statement in ast.statements {
+    fn compile_block(&mut self, ast: TokenTree<Block>) {
+        for statement in ast.node.statements {
             self.compile_statement(statement);
         }
     }
 
-    fn compile_statement(&mut self, statement: Statement) {
-        match statement {
+    fn compile_statement(&mut self, statement: TokenTree<Statement>) {
+        match statement.node {
             Statement::FunctionCall(function_call) => {
                 self.compile_function_call(function_call);
             }
@@ -46,10 +49,10 @@ impl Compiler {
                 let mut jmp_end_addrs = vec![self.vm.push_addr_placeholder()];
                 self.vm.patch_addr_placeholder(jmp_false_addr);
                 for else_if in else_ifs {
-                    self.compile_expression(else_if.condition);
+                    self.compile_expression(else_if.node.condition);
                     self.vm.push_instruction(Instruction::JmpFalse);
                     let jmp_false_addr = self.vm.push_addr_placeholder();
-                    self.compile_block(else_if.block);
+                    self.compile_block(else_if.node.block);
                     self.vm.push_instruction(Instruction::Jmp);
                     jmp_end_addrs.push(self.vm.push_addr_placeholder());
                     self.vm.patch_addr_placeholder(jmp_false_addr);
@@ -65,27 +68,32 @@ impl Compiler {
         }
     }
 
-    fn compile_function_call(&mut self, function_call: crate::ast::FunctionCall) {
-        for argument in function_call.args {
+    fn compile_function_call(&mut self, function_call: TokenTree<FunctionCall>) {
+        for argument in function_call.node.args {
             self.compile_expression(argument);
         }
 
-        match &*function_call.function {
-            ast::PrefixExpression::Variable(ast::Variable::Name(name))
-                if name.identifier == "print" =>
-            {
+        match &*function_call.node.function {
+            TokenTree {
+                node:
+                    PrefixExpression::Variable(TokenTree {
+                        node: Variable::Name(name),
+                        ..
+                    }),
+                ..
+            } if name.node.identifier == "print" => {
                 self.vm.push_instruction(Instruction::Print);
             }
             _ => todo!("compile_function_call for other than `print`"),
         }
     }
 
-    fn compile_expression(&mut self, expression: crate::ast::Expression) {
-        match expression {
-            crate::ast::Expression::Literal(literal) => {
+    fn compile_expression(&mut self, expression: TokenTree<Expression>) {
+        match expression.node {
+            Expression::Literal(literal) => {
                 self.compile_load_literal(literal);
             }
-            crate::ast::Expression::BinaryOp { op, lhs, rhs } => match &op {
+            Expression::BinaryOp { op, lhs, rhs } => match &op.node {
                 BinaryOperator::And => {
                     self.compile_expression(*lhs);
                     self.vm.push_instruction(Instruction::JmpFalse);
@@ -106,10 +114,10 @@ impl Compiler {
                     self.compile_binary_operator(op);
                 }
             },
-            crate::ast::Expression::PrefixExpression(function_call) => {
+            Expression::PrefixExpression(function_call) => {
                 self.compile_prefix_expression(function_call);
             }
-            crate::ast::Expression::UnaryOp { op, rhs } => {
+            Expression::UnaryOp { op, rhs } => {
                 self.compile_expression(*rhs);
                 self.compile_unary_operator(op);
             }
@@ -117,37 +125,37 @@ impl Compiler {
         }
     }
 
-    fn compile_prefix_expression(&mut self, prefix_expression: crate::ast::PrefixExpression) {
-        match prefix_expression {
-            crate::ast::PrefixExpression::FunctionCall(function_call) => {
+    fn compile_prefix_expression(&mut self, prefix_expression: TokenTree<PrefixExpression>) {
+        match prefix_expression.node {
+            PrefixExpression::FunctionCall(function_call) => {
                 self.compile_function_call(function_call);
             }
-            crate::ast::PrefixExpression::Parenthesized(expression) => {
+            PrefixExpression::Parenthesized(expression) => {
                 self.compile_expression(*expression);
             }
             _ => todo!("compile_prefix_expression {:?}", prefix_expression),
         }
     }
 
-    fn compile_load_literal(&mut self, literal: crate::ast::Literal) {
-        let const_index = match literal {
-            crate::ast::Literal::Nil => self.vm.register_const(value::LuaConst::Nil),
-            crate::ast::Literal::Boolean(b) => self.vm.register_const(value::LuaConst::Boolean(b)),
-            crate::ast::Literal::Number(ast::Number::Float(f)) => self
+    fn compile_load_literal(&mut self, literal: TokenTree<Literal>) {
+        let const_index = match literal.node {
+            Literal::Nil => self.vm.register_const(LuaConst::Nil),
+            Literal::Boolean(b) => self.vm.register_const(LuaConst::Boolean(b)),
+            Literal::Number(Number::Float(f)) => self
                 .vm
-                .register_const(value::LuaConst::Number(value::LuaNumber::Float(f))),
-            crate::ast::Literal::Number(ast::Number::Integer(i)) => self
+                .register_const(LuaConst::Number(LuaNumber::Float(f))),
+            Literal::Number(Number::Integer(i)) => self
                 .vm
-                .register_const(value::LuaConst::Number(value::LuaNumber::Integer(i))),
-            crate::ast::Literal::String(s) => self.vm.register_const(value::LuaConst::String(s)),
+                .register_const(LuaConst::Number(LuaNumber::Integer(i))),
+            Literal::String(s) => self.vm.register_const(LuaConst::String(s)),
         };
 
         self.vm.push_instruction(Instruction::LoadConst);
         self.vm.push_instruction(const_index);
     }
 
-    fn compile_binary_operator(&mut self, op: BinaryOperator) {
-        match op {
+    fn compile_binary_operator(&mut self, op: TokenTree<BinaryOperator>) {
+        match op.node {
             // Arithmetic
             BinaryOperator::Add => self.vm.push_instruction(Instruction::Add),
             BinaryOperator::Sub => self.vm.push_instruction(Instruction::Sub),
@@ -182,8 +190,8 @@ impl Compiler {
         }
     }
 
-    fn compile_unary_operator(&mut self, op: ast::UnaryOperator) {
-        match op {
+    fn compile_unary_operator(&mut self, op: TokenTree<UnaryOperator>) {
+        match op.node {
             UnaryOperator::Neg => self.vm.push_instruction(Instruction::Neg),
             UnaryOperator::Not => self.vm.push_instruction(Instruction::Not),
             _ => todo!("compile_expression UnaryOp {:?}", op),

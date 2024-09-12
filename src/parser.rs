@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::ast::{self, AttributedName, LocalAttribute};
+use crate::ast::*;
 use crate::lexer::Lexer;
 use crate::scope::{DraftScope, NameLocation};
 use crate::token::{Span, Token, TokenKind};
@@ -23,7 +23,7 @@ impl<'source> Parser<'source> {
         }
     }
 
-    pub fn parse(&mut self) -> miette::Result<ast::Block> {
+    pub fn parse(&mut self) -> miette::Result<TokenTree<Block>> {
         let result = self.parse_block().map_err(|r| self.with_source_code(r))?;
 
         // Ensure we've consumed all tokens
@@ -47,7 +47,8 @@ impl<'source> Parser<'source> {
         )
     }
 
-    fn parse_block(&mut self) -> miette::Result<ast::Block> {
+    fn parse_block(&mut self) -> miette::Result<TokenTree<Block>> {
+        let start = self.lexer.position;
         let mut statements = Vec::new();
         while let Some(statement) = self.parse_statement()? {
             statements.push(statement);
@@ -84,66 +85,112 @@ impl<'source> Parser<'source> {
             _ => None,
         };
 
-        Ok(ast::Block {
-            statements,
-            return_statement,
+        Ok(TokenTree {
+            node: Block {
+                statements,
+                return_statement,
+            },
+            span: Span::new(start, self.lexer.position),
         })
     }
 
-    fn parse_statement(&mut self) -> miette::Result<Option<ast::Statement>> {
+    fn parse_statement(&mut self) -> miette::Result<Option<TokenTree<Statement>>> {
         loop {
             let next_token = self.lexer.peek()?;
-            break match next_token.map(|t| &t.kind) {
-                Some(TokenKind::Semicolon) => {
+            break match next_token {
+                Some(Token {
+                    kind: TokenKind::Semicolon,
+                    ..
+                }) => {
                     self.lexer.next();
                     continue;
                 }
-                Some(TokenKind::Break) => {
+                Some(Token {
+                    kind: TokenKind::Break,
+                    span,
+                }) => {
+                    let span = *span;
                     self.lexer.next();
-                    Ok(Some(ast::Statement::Break))
+                    Ok(Some(TokenTree::new(Statement::Break, span)))
                 }
-                Some(TokenKind::Goto) => {
+                Some(Token {
+                    kind: TokenKind::Goto,
+                    span,
+                }) => {
+                    let span = *span;
                     self.lexer.next();
                     let name = self.parse_name().wrap_err("in goto statement")?;
-                    Ok(Some(ast::Statement::Goto(name)))
+                    Ok(Some(TokenTree::new(Statement::Goto(name), span)))
                 }
-                Some(TokenKind::DoubleColon) => {
-                    let start = self.lexer.position;
+                Some(Token {
+                    kind: TokenKind::DoubleColon,
+                    span,
+                }) => {
+                    let span = *span;
                     self.lexer.next();
                     let name = self.parse_name().wrap_err("in label")?;
                     self.lexer.expect(|k| k == &TokenKind::DoubleColon, "::")?;
                     let end = self.lexer.position;
-                    self.declare_label(&name, Span::new(start, end))?;
-                    Ok(Some(ast::Statement::Label(name)))
+                    self.declare_label(&name.node, Span::new(span.start, end))?;
+                    Ok(Some(TokenTree::new(Statement::Label(name), span)))
                 }
-                Some(TokenKind::Local) => {
+                Some(Token {
+                    kind: TokenKind::Local,
+                    span,
+                }) => {
+                    let Span { start, .. } = *span;
                     self.lexer.next();
-                    self.parse_local_declaration()
+                    self.parse_local_declaration(start)
                         .wrap_err("in local declaration")
                         .map(Some)
                 }
-                Some(TokenKind::Do) => {
+                Some(Token {
+                    kind: TokenKind::Do,
+                    span,
+                }) => {
+                    let Span { start, .. } = *span;
                     self.lexer.next();
                     let block = self.parse_block().wrap_err("in do statement")?;
                     self.lexer.expect(|k| k == &TokenKind::End, "end")?;
-                    Ok(Some(ast::Statement::Block(block)))
+                    Ok(Some(TokenTree::new(
+                        Statement::Block(block),
+                        Span::new(start, self.lexer.position),
+                    )))
                 }
-                Some(TokenKind::While) => {
+                Some(Token {
+                    kind: TokenKind::While,
+                    span,
+                }) => {
+                    let Span { start, .. } = *span;
                     self.lexer.next();
                     let condition = self.expect_expression().wrap_err("in while statement")?;
                     self.lexer.expect(|k| k == &TokenKind::Do, "do")?;
                     let block = self.parse_block().wrap_err("in while statement")?;
                     self.lexer.expect(|k| k == &TokenKind::End, "end")?;
-                    Ok(Some(ast::Statement::While { condition, block }))
+                    Ok(Some(TokenTree::new(
+                        Statement::While { condition, block },
+                        Span::new(start, self.lexer.position),
+                    )))
                 }
-                Some(TokenKind::Repeat) => {
+                Some(Token {
+                    kind: TokenKind::Repeat,
+                    span,
+                }) => {
+                    let Span { start, .. } = *span;
                     self.lexer.next();
                     let block = self.parse_block().wrap_err("in repeat statement")?;
                     self.lexer.expect(|k| k == &TokenKind::Until, "until")?;
                     let condition = self.expect_expression().wrap_err("in repeat statement")?;
-                    Ok(Some(ast::Statement::Repeat { block, condition }))
+                    Ok(Some(TokenTree::new(
+                        Statement::Repeat { block, condition },
+                        Span::new(start, self.lexer.position),
+                    )))
                 }
-                Some(TokenKind::If) => {
+                Some(Token {
+                    kind: TokenKind::If,
+                    span,
+                }) => {
+                    let Span { start, .. } = *span;
                     self.lexer.next();
                     let condition = self.expect_expression().wrap_err("in if statement")?;
                     self.lexer.expect(|k| k == &TokenKind::Then, "then")?;
@@ -152,11 +199,15 @@ impl<'source> Parser<'source> {
                     loop {
                         match self.lexer.peek()? {
                             Some(token) if token.kind == TokenKind::ElseIf => {
+                                let else_if_start = self.lexer.position;
                                 self.lexer.next();
                                 let condition = self.expect_expression().wrap_err("in elseif")?;
                                 self.lexer.expect(|k| k == &TokenKind::Then, "then")?;
                                 let block = self.parse_block().wrap_err("in elseif")?;
-                                else_ifs.push(ast::ElseIf { condition, block });
+                                else_ifs.push(TokenTree::new(
+                                    ElseIf { condition, block },
+                                    Span::new(else_if_start, self.lexer.position),
+                                ));
                             }
                             _ => break,
                         }
@@ -171,18 +222,27 @@ impl<'source> Parser<'source> {
 
                     self.lexer.expect(|k| k == &TokenKind::End, "end")?;
 
-                    Ok(Some(ast::Statement::If {
-                        condition,
-                        block,
-                        else_ifs,
-                        else_block,
-                    }))
+                    Ok(Some(TokenTree::new(
+                        Statement::If {
+                            condition,
+                            block,
+                            else_ifs,
+                            else_block,
+                        },
+                        Span::new(start, self.lexer.position),
+                    )))
                 }
-                Some(TokenKind::Function) => {
+                Some(Token {
+                    kind: TokenKind::Function,
+                    ..
+                }) => {
+                    let start = self.lexer.position;
                     self.lexer.next();
                     let (name, implicit_self_parameter) = {
                         let name = self.parse_name().wrap_err("in function declaration")?;
-                        let mut name = ast::Variable::Name(self.declare_variable(name));
+                        let mut name_span = name.span;
+                        let mut name =
+                            TokenTree::new(Variable::Name(self.declare_variable(name)), name_span);
                         let mut implicit_self_parameter = None;
 
                         loop {
@@ -194,10 +254,18 @@ impl<'source> Parser<'source> {
                                     self.lexer.next();
                                     let field =
                                         self.parse_name().wrap_err("in function declaration")?;
-                                    name = ast::Variable::Field(
-                                        Box::new(ast::PrefixExpression::Variable(name)),
-                                        field,
+                                    let field_span = field.span;
+                                    name = TokenTree::new(
+                                        Variable::Field(
+                                            Box::new(TokenTree::new(
+                                                PrefixExpression::Variable(name),
+                                                name_span,
+                                            )),
+                                            field,
+                                        ),
+                                        Span::new(name_span.start, field_span.end),
                                     );
+                                    name_span = name.span;
                                     continue;
                                 }
                                 Some(Token {
@@ -207,12 +275,19 @@ impl<'source> Parser<'source> {
                                     self.lexer.next();
                                     let method_name =
                                         self.parse_name().wrap_err("in function declaration")?;
-                                    name = ast::Variable::Field(
-                                        Box::new(ast::PrefixExpression::Variable(name)),
-                                        method_name,
+                                    let method_name_span = method_name.span;
+                                    name = TokenTree::new(
+                                        Variable::Field(
+                                            Box::new(TokenTree::new(
+                                                PrefixExpression::Variable(name),
+                                                name_span,
+                                            )),
+                                            method_name,
+                                        ),
+                                        Span::new(name_span.start, method_name_span.end),
                                     );
                                     implicit_self_parameter =
-                                        Some(ast::Name::unresolved("self".to_string()));
+                                        Some(Name::unresolved("self".to_string()));
                                     break;
                                 }
                                 _ => break,
@@ -225,29 +300,45 @@ impl<'source> Parser<'source> {
                     let function_def = self
                         .parse_function_body(implicit_self_parameter)
                         .wrap_err("in function declaration")?;
+                    let function_def_span = function_def.span;
 
-                    Ok(Some(ast::Statement::Assignment {
-                        varlist: vec![name],
-                        explist: vec![ast::Expression::FunctionDef(function_def)],
-                    }))
+                    Ok(Some(TokenTree::new(
+                        Statement::Assignment {
+                            varlist: vec![name],
+                            explist: vec![TokenTree::new(
+                                Expression::FunctionDef(function_def),
+                                function_def_span,
+                            )],
+                        },
+                        Span::new(start, self.lexer.position),
+                    )))
                 }
-                Some(TokenKind::For) => {
+                Some(Token {
+                    kind: TokenKind::For,
+                    ..
+                }) => {
+                    let start = self.lexer.position;
                     self.lexer.next();
-                    self.parse_for_statement()
+                    self.parse_for_statement(start)
                         .wrap_err("in for statement")
                         .map(Some)
                 }
-                Some(
-                    TokenKind::Return
-                    | TokenKind::End
-                    | TokenKind::ElseIf
-                    | TokenKind::Else
-                    | TokenKind::Until,
-                ) => {
+                Some(Token {
+                    kind:
+                        TokenKind::Return
+                        | TokenKind::End
+                        | TokenKind::ElseIf
+                        | TokenKind::Else
+                        | TokenKind::Until,
+                    ..
+                }) => {
                     // Handled by the block parser or outside of it
                     Ok(None)
                 }
-                Some(TokenKind::Identifier(_) | TokenKind::OpenParen) => self
+                Some(Token {
+                    kind: TokenKind::Identifier(_) | TokenKind::OpenParen,
+                    ..
+                }) => self
                     .parse_varlist_or_functioncall()
                     .wrap_err("in variable assignment or function call")
                     .map(Some),
@@ -264,7 +355,7 @@ impl<'source> Parser<'source> {
         }
     }
 
-    fn parse_local_declaration(&mut self) -> miette::Result<ast::Statement> {
+    fn parse_local_declaration(&mut self, start: usize) -> miette::Result<TokenTree<Statement>> {
         if matches!(
             self.lexer.peek()?.map(|t| &t.kind),
             Some(TokenKind::Function)
@@ -274,16 +365,27 @@ impl<'source> Parser<'source> {
                 .parse_name()
                 .wrap_err("in local function declaration")?;
             let name = self.declare_variable(name);
-            let function_def = self
-                .parse_function_body(None)
-                .wrap_err_with(|| format!("in local {} function declaration", name.identifier))?;
+            let function_def = self.parse_function_body(None).wrap_err_with(|| {
+                format!("in local {} function declaration", name.node.identifier)
+            })?;
 
-            Ok(ast::Statement::LocalDeclaraction(
-                vec![AttributedName {
-                    name,
-                    attribute: None,
-                }],
-                vec![ast::Expression::FunctionDef(function_def)],
+            let name_span = name.span;
+            let function_def_span = function_def.span;
+            Ok(TokenTree::new(
+                Statement::LocalDeclaraction(
+                    vec![TokenTree::new(
+                        AttributedName {
+                            name,
+                            attribute: None,
+                        },
+                        name_span,
+                    )],
+                    vec![TokenTree::new(
+                        Expression::FunctionDef(function_def),
+                        function_def_span,
+                    )],
+                ),
+                Span::new(start, self.lexer.position),
             ))
         } else {
             let mut attributed_names = Vec::new();
@@ -314,18 +416,21 @@ impl<'source> Parser<'source> {
                             _ => unreachable!(),
                         };
 
-                        let attr = match attr_str {
-                            "const" => LocalAttribute::Const,
-                            "close" => LocalAttribute::Close,
-                            _ => {
-                                return Err(miette!(
-                                    labels = vec![attr_token
-                                        .span
-                                        .labeled("expected 'const' or 'close'")],
-                                    "unexpected token"
-                                ))
-                            }
-                        };
+                        let attr = TokenTree::new(
+                            match attr_str {
+                                "const" => LocalAttribute::Const,
+                                "close" => LocalAttribute::Close,
+                                _ => {
+                                    return Err(miette!(
+                                        labels = vec![attr_token
+                                            .span
+                                            .labeled("expected 'const' or 'close'")],
+                                        "unexpected token"
+                                    ))
+                                }
+                            },
+                            attr_token.span,
+                        );
 
                         self.lexer.expect(|k| k == &TokenKind::Greater, ">")?;
 
@@ -377,20 +482,30 @@ impl<'source> Parser<'source> {
 
             let attributed_names = attributed_names
                 .into_iter()
-                .map(|n| AttributedName {
-                    name: self.declare_variable(n.name),
-                    attribute: n.attribute,
+                .map(|n| {
+                    let start = n.name.span.start;
+                    let end = n.attribute.as_ref().map_or(n.name.span.end, |a| a.span.end);
+                    TokenTree::new(
+                        AttributedName {
+                            name: self.declare_variable(n.name),
+                            attribute: n.attribute,
+                        },
+                        Span::new(start, end),
+                    )
                 })
                 .collect();
 
-            Ok(ast::Statement::LocalDeclaraction(
-                attributed_names,
-                expressions,
+            Ok(TokenTree::new(
+                Statement::LocalDeclaraction(attributed_names, expressions),
+                Span::new(start, self.lexer.position),
             ))
         }
     }
 
-    fn parse_for_statement(&mut self) -> miette::Result<ast::Statement> {
+    fn parse_for_statement(
+        &mut self,
+        start_position: usize,
+    ) -> miette::Result<TokenTree<Statement>> {
         self.begin_scope();
 
         let name = self.parse_name().wrap_err("name in for statement")?;
@@ -418,12 +533,15 @@ impl<'source> Parser<'source> {
                     _ => None,
                 };
 
-                ast::ForCondition::NumericFor {
-                    name,
-                    initial,
-                    limit,
-                    step,
-                }
+                TokenTree::new(
+                    ForCondition::NumericFor {
+                        name,
+                        initial,
+                        limit,
+                        step,
+                    },
+                    Span::new(start_position, self.lexer.position),
+                )
             }
             Some(Token {
                 kind: TokenKind::Comma | TokenKind::In,
@@ -463,7 +581,10 @@ impl<'source> Parser<'source> {
                     .map(|n| self.declare_variable(n))
                     .collect();
 
-                ast::ForCondition::GenericFor { names, expressions }
+                TokenTree::new(
+                    ForCondition::GenericFor { names, expressions },
+                    Span::new(start_position, self.lexer.position),
+                )
             }
             Some(token) => {
                 return Err(miette!(
@@ -486,10 +607,13 @@ impl<'source> Parser<'source> {
         let block = self.parse_block().wrap_err("in block of for statement")?;
         self.lexer.expect(|k| k == &TokenKind::End, "end")?;
 
-        Ok(ast::Statement::For { condition, block })
+        Ok(TokenTree::new(
+            Statement::For { condition, block },
+            Span::new(start_position, self.lexer.position),
+        ))
     }
 
-    fn parse_varlist_or_functioncall(&mut self) -> miette::Result<ast::Statement> {
+    fn parse_varlist_or_functioncall(&mut self) -> miette::Result<TokenTree<Statement>> {
         // This can be one of a few things:
         // - An assignment (ident1, ident2 = expr1, expr2)
         // - A function call (ident(args) or ident arg or ident:method(args))
@@ -511,6 +635,7 @@ impl<'source> Parser<'source> {
         let prefix_expression = self
             .parse_prefix_expression()
             .wrap_err("in varlist or functioncall")?;
+        let start = prefix_expression.span.start;
 
         match self.lexer.peek()? {
             Some(Token {
@@ -534,7 +659,10 @@ impl<'source> Parser<'source> {
                 let mut varlist = Vec::with_capacity(prefix_expressions.len());
                 for var in prefix_expressions {
                     varlist.push(match var {
-                        ast::PrefixExpression::Variable(v) => v,
+                        TokenTree {
+                            node: PrefixExpression::Variable(v),
+                            ..
+                        } => v,
                         _ => {
                             return Err(miette!(
                                 labels = vec![LabeledSpan::at(
@@ -565,13 +693,19 @@ impl<'source> Parser<'source> {
                     }
                 }
 
-                return Ok(ast::Statement::Assignment { varlist, explist });
+                return Ok(TokenTree::new(
+                    Statement::Assignment { varlist, explist },
+                    Span::new(start, self.lexer.position),
+                ));
             }
             _ => {}
         }
 
         match prefix_expression {
-            ast::PrefixExpression::FunctionCall(f) => Ok(ast::Statement::FunctionCall(f)),
+            TokenTree {
+                node: PrefixExpression::FunctionCall(f),
+                span,
+            } => Ok(TokenTree::new(Statement::FunctionCall(f), span)),
             _ => Err(miette!(
                 labels = vec![LabeledSpan::at(
                     self.lexer.position..self.lexer.position,
@@ -582,22 +716,32 @@ impl<'source> Parser<'source> {
         }
     }
 
-    fn parse_prefix_expression(&mut self) -> miette::Result<ast::PrefixExpression> {
+    fn parse_prefix_expression(&mut self) -> miette::Result<TokenTree<PrefixExpression>> {
         let mut prefix = match self.lexer.next().transpose()? {
             Some(Token {
                 kind: TokenKind::OpenParen,
                 ..
             }) => {
+                let start = self.lexer.position;
                 let expression = self.expect_expression()?;
                 self.lexer.expect(|k| k == &TokenKind::CloseParen, ")")?;
-                ast::PrefixExpression::Parenthesized(Box::new(expression))
+                TokenTree::new(
+                    PrefixExpression::Parenthesized(Box::new(expression)),
+                    Span::new(start, self.lexer.position),
+                )
             }
             Some(Token {
                 kind: TokenKind::Identifier(ident),
-                ..
+                span,
             }) => {
-                let name = self.lookup_variable(ast::Name::unresolved(ident.to_string()));
-                ast::PrefixExpression::Variable(ast::Variable::Name(name))
+                let name = self.lookup_variable(Name::unresolved(ident.to_string()));
+                TokenTree::new(
+                    PrefixExpression::Variable(TokenTree::new(
+                        Variable::Name(TokenTree::new(name, span)),
+                        span,
+                    )),
+                    span,
+                )
             }
             Some(t) => {
                 return Err(miette!(
@@ -628,10 +772,14 @@ impl<'source> Parser<'source> {
                     self.lexer.next();
                     let expression = self.expect_expression()?;
                     self.lexer.expect(|k| k == &TokenKind::CloseBracket, "]")?;
-                    prefix = ast::PrefixExpression::Variable(ast::Variable::Indexed(
-                        Box::new(prefix),
-                        Box::new(expression),
-                    ));
+                    let span = Span::new(prefix.span.start, self.lexer.position);
+                    prefix = TokenTree::new(
+                        PrefixExpression::Variable(TokenTree::new(
+                            Variable::Indexed(Box::new(prefix), Box::new(expression)),
+                            span,
+                        )),
+                        span,
+                    );
                 }
                 Some(Token {
                     kind: TokenKind::Dot,
@@ -639,10 +787,14 @@ impl<'source> Parser<'source> {
                 }) => {
                     self.lexer.next();
                     let name = self.parse_name().wrap_err("in prefix expression")?;
-                    prefix = ast::PrefixExpression::Variable(ast::Variable::Field(
-                        Box::new(prefix),
-                        name,
-                    ));
+                    let span = Span::new(prefix.span.start, name.span.end);
+                    prefix = TokenTree::new(
+                        PrefixExpression::Variable(TokenTree::new(
+                            Variable::Field(Box::new(prefix), name),
+                            span,
+                        )),
+                        span,
+                    );
                 }
                 Some(Token {
                     kind: TokenKind::Colon,
@@ -651,24 +803,38 @@ impl<'source> Parser<'source> {
                     self.lexer.next();
                     let name = self.parse_name().wrap_err("in prefix expression")?;
                     let args = self.parse_args().wrap_err("in prefix expression")?;
-                    prefix = ast::PrefixExpression::FunctionCall(ast::FunctionCall {
-                        function: Box::new(prefix),
-                        as_method: true,
-                        name: Some(name),
-                        args,
-                    });
+                    let span = Span::new(prefix.span.start, self.lexer.position);
+                    prefix = TokenTree::new(
+                        PrefixExpression::FunctionCall(TokenTree::new(
+                            FunctionCall {
+                                function: Box::new(prefix),
+                                as_method: true,
+                                name: Some(name),
+                                args,
+                            },
+                            span,
+                        )),
+                        span,
+                    );
                 }
                 Some(Token {
                     kind: TokenKind::OpenParen | TokenKind::String(_),
                     ..
                 }) => {
                     let args = self.parse_args().wrap_err("in prefix expression")?;
-                    prefix = ast::PrefixExpression::FunctionCall(ast::FunctionCall {
-                        function: Box::new(prefix),
-                        as_method: false,
-                        name: None,
-                        args,
-                    });
+                    let span = Span::new(prefix.span.start, self.lexer.position);
+                    prefix = TokenTree::new(
+                        PrefixExpression::FunctionCall(TokenTree::new(
+                            FunctionCall {
+                                function: Box::new(prefix),
+                                as_method: false,
+                                name: None,
+                                args,
+                            },
+                            span,
+                        )),
+                        span,
+                    );
                 }
                 Some(Token {
                     kind: TokenKind::OpenBrace,
@@ -677,12 +843,23 @@ impl<'source> Parser<'source> {
                     let table = self
                         .parse_table_constructor()
                         .wrap_err("in prefix expression")?;
-                    prefix = ast::PrefixExpression::FunctionCall(ast::FunctionCall {
-                        function: Box::new(prefix),
-                        as_method: false,
-                        name: None,
-                        args: vec![ast::Expression::TableConstructor(table)],
-                    });
+                    let table_span = table.span;
+                    let span = Span::new(prefix.span.start, table_span.end);
+                    prefix = TokenTree::new(
+                        PrefixExpression::FunctionCall(TokenTree::new(
+                            FunctionCall {
+                                function: Box::new(prefix),
+                                as_method: false,
+                                name: None,
+                                args: vec![TokenTree::new(
+                                    Expression::TableConstructor(table),
+                                    table_span,
+                                )],
+                            },
+                            span,
+                        )),
+                        span,
+                    );
                 }
                 _ => break,
             }
@@ -691,7 +868,7 @@ impl<'source> Parser<'source> {
         Ok(prefix)
     }
 
-    fn parse_args(&mut self) -> miette::Result<Vec<ast::Expression>> {
+    fn parse_args(&mut self) -> miette::Result<Vec<TokenTree<Expression>>> {
         let mut args = Vec::new();
         if matches!(
             self.lexer.peek()?.map(|t| &t.kind),
@@ -719,7 +896,7 @@ impl<'source> Parser<'source> {
         Ok(args)
     }
 
-    fn parse_table_constructor(&mut self) -> miette::Result<ast::TableConstructor> {
+    fn parse_table_constructor(&mut self) -> miette::Result<TokenTree<TableConstructor>> {
         macro_rules! expect_end_of_field {
             () => {
                 match self.lexer.peek()? {
@@ -759,6 +936,8 @@ impl<'source> Parser<'source> {
             };
         }
 
+        let start = self.lexer.position;
+
         self.lexer.expect(|k| k == &TokenKind::OpenBrace, "{")?;
         let mut fields = vec![];
         loop {
@@ -774,6 +953,7 @@ impl<'source> Parser<'source> {
                     kind: TokenKind::OpenBracket,
                     ..
                 }) => {
+                    let field_start = self.lexer.position;
                     self.lexer.next();
                     let key = self
                         .expect_expression()
@@ -783,7 +963,10 @@ impl<'source> Parser<'source> {
                     let value = self
                         .expect_expression()
                         .wrap_err("field value in table constructor")?;
-                    fields.push(ast::Field::Indexed(key, value));
+                    fields.push(TokenTree::new(
+                        Field::Indexed(key, value),
+                        Span::new(field_start, self.lexer.position),
+                    ));
 
                     expect_end_of_field!();
                 }
@@ -793,9 +976,19 @@ impl<'source> Parser<'source> {
                 }) => {
                     // Try to parse it as a sequence expression first (without an index or name)
                     let (name, value) = match self.parse_expression()? {
-                        Some(ast::Expression::PrefixExpression(
-                            ast::PrefixExpression::Variable(ast::Variable::Name(name)),
-                        )) if self.lexer.peek()?.map(|t| &t.kind) == Some(&TokenKind::Equals) => {
+                        // What a horrendous pattern this is
+                        Some(TokenTree {
+                            node:
+                                Expression::PrefixExpression(TokenTree {
+                                    node:
+                                        PrefixExpression::Variable(TokenTree {
+                                            node: Variable::Name(name),
+                                            ..
+                                        }),
+                                    ..
+                                }),
+                            ..
+                        }) if self.lexer.peek()?.map(|t| &t.kind) == Some(&TokenKind::Equals) => {
                             // This is an indexed field
                             self.lexer.next();
                             let value = self
@@ -817,10 +1010,15 @@ impl<'source> Parser<'source> {
                     };
 
                     if let Some(name) = name {
-                        // TODO: We resolve and then unresolve? That's annoying.
-                        fields.push(ast::Field::Named(name.unresolve(), value));
+                        let value_span = value.span;
+                        fields.push(TokenTree::new(
+                            // TODO: We resolve and then unresolve? That's annoying.
+                            Field::Named(TokenTree::new(name.node.unresolve(), name.span), value),
+                            Span::new(name.span.start, value_span.end),
+                        ));
                     } else {
-                        fields.push(ast::Field::Value(value));
+                        let value_span = value.span;
+                        fields.push(TokenTree::new(Field::Value(value), value_span));
                     }
 
                     expect_end_of_field!();
@@ -833,7 +1031,8 @@ impl<'source> Parser<'source> {
                     let expression = self.parse_expression().wrap_err("in table constructor")?;
                     match expression {
                         Some(expression) => {
-                            fields.push(ast::Field::Value(expression));
+                            let span = expression.span;
+                            fields.push(TokenTree::new(Field::Value(expression), span));
                             expect_end_of_field!();
                         }
                         None => {
@@ -853,14 +1052,17 @@ impl<'source> Parser<'source> {
             }
         }
 
-        Ok(ast::TableConstructor { fields })
+        Ok(TokenTree {
+            node: TableConstructor { fields },
+            span: Span::new(start, self.lexer.position),
+        })
     }
 
-    fn expect_expression(&mut self) -> miette::Result<ast::Expression> {
+    fn expect_expression(&mut self) -> miette::Result<TokenTree<Expression>> {
         self.expect_expression_within(0)
     }
 
-    fn expect_expression_within(&mut self, min_bp: u8) -> miette::Result<ast::Expression> {
+    fn expect_expression_within(&mut self, min_bp: u8) -> miette::Result<TokenTree<Expression>> {
         match self.parse_expression_within(min_bp)? {
             Some(expression) => Ok(expression),
             None => Err(miette!(
@@ -873,59 +1075,89 @@ impl<'source> Parser<'source> {
         }
     }
 
-    fn parse_expression(&mut self) -> miette::Result<Option<ast::Expression>> {
+    fn parse_expression(&mut self) -> miette::Result<Option<TokenTree<Expression>>> {
         self.parse_expression_within(0)
     }
 
-    fn parse_expression_within(&mut self, min_bp: u8) -> miette::Result<Option<ast::Expression>> {
+    fn parse_expression_within(
+        &mut self,
+        min_bp: u8,
+    ) -> miette::Result<Option<TokenTree<Expression>>> {
         let mut lhs = match self.lexer.peek()? {
             Some(Token {
                 kind: TokenKind::Identifier(_) | TokenKind::OpenParen,
                 ..
-            }) => ast::Expression::PrefixExpression(
-                self.parse_prefix_expression().wrap_err("in expression")?,
-            ),
+            }) => {
+                let start = self.lexer.position;
+                TokenTree::new(
+                    Expression::PrefixExpression(
+                        self.parse_prefix_expression().wrap_err("in expression")?,
+                    ),
+                    Span::new(start, self.lexer.position),
+                )
+            }
             Some(Token {
                 kind: TokenKind::Nil,
-                ..
+                span,
             }) => {
+                let span = *span;
                 self.lexer.next();
-                ast::Expression::Literal(ast::Literal::Nil)
+                TokenTree::new(
+                    Expression::Literal(TokenTree::new(Literal::Nil, span)),
+                    span,
+                )
             }
             Some(Token {
                 kind: TokenKind::True,
-                ..
+                span,
             }) => {
+                let span = *span;
                 self.lexer.next();
-                ast::Expression::Literal(ast::Literal::Boolean(true))
+                TokenTree::new(
+                    Expression::Literal(TokenTree::new(Literal::Boolean(true), span)),
+                    span,
+                )
             }
             Some(Token {
                 kind: TokenKind::False,
-                ..
+                span,
             }) => {
+                let span = *span;
                 self.lexer.next();
-                ast::Expression::Literal(ast::Literal::Boolean(false))
+                TokenTree::new(
+                    Expression::Literal(TokenTree::new(Literal::Boolean(false), span)),
+                    span,
+                )
             }
             Some(Token {
                 kind: TokenKind::Integer(i),
-                ..
+                span,
             }) => {
+                let span = *span;
                 let i = *i;
                 self.lexer.next();
-                ast::Expression::Literal(ast::Literal::Number(ast::Number::Integer(i)))
+                TokenTree::new(
+                    Expression::Literal(TokenTree::new(Literal::Number(Number::Integer(i)), span)),
+                    span,
+                )
             }
             Some(Token {
                 kind: TokenKind::Float(f),
-                ..
+                span,
             }) => {
+                let span = *span;
                 let f = *f;
                 self.lexer.next();
-                ast::Expression::Literal(ast::Literal::Number(ast::Number::Float(f)))
+                TokenTree::new(
+                    Expression::Literal(TokenTree::new(Literal::Number(Number::Float(f)), span)),
+                    span,
+                )
             }
             Some(Token {
                 kind: TokenKind::String(_),
-                ..
+                span,
             }) => {
+                let span = *span;
                 let s = match self.lexer.next() {
                     Some(Ok(Token {
                         kind: TokenKind::String(s),
@@ -933,76 +1165,104 @@ impl<'source> Parser<'source> {
                     })) => s,
                     _ => unreachable!(),
                 };
-                ast::Expression::Literal(ast::Literal::String(s))
+                TokenTree::new(
+                    Expression::Literal(TokenTree::new(Literal::String(s), span)),
+                    span,
+                )
             }
             Some(Token {
                 kind: TokenKind::DotDotDot,
-                ..
+                span,
             }) => {
+                let span = *span;
                 self.lexer.next();
-                ast::Expression::Ellipsis
+                TokenTree::new(Expression::Ellipsis, span)
             }
             Some(Token {
                 kind: TokenKind::Minus,
-                ..
+                span,
             }) => {
+                let span = *span;
                 self.lexer.next();
                 let ((), r_bp) = prefix_binding_power(&TokenKind::Minus);
                 let rhs = self.expect_expression_within(r_bp)?;
-                ast::Expression::UnaryOp {
-                    op: ast::UnaryOperator::Neg,
-                    rhs: Box::new(rhs),
-                }
+                TokenTree::new(
+                    Expression::UnaryOp {
+                        op: TokenTree::new(UnaryOperator::Neg, span),
+                        rhs: Box::new(rhs),
+                    },
+                    span,
+                )
             }
             Some(Token {
                 kind: TokenKind::Not,
-                ..
+                span,
             }) => {
+                let span = *span;
+                let start = self.lexer.position;
                 self.lexer.next();
                 let ((), r_bp) = prefix_binding_power(&TokenKind::Not);
                 let rhs = self.expect_expression_within(r_bp)?;
-                ast::Expression::UnaryOp {
-                    op: ast::UnaryOperator::Not,
-                    rhs: Box::new(rhs),
-                }
+                TokenTree::new(
+                    Expression::UnaryOp {
+                        op: TokenTree::new(UnaryOperator::Not, span),
+                        rhs: Box::new(rhs),
+                    },
+                    Span::new(start, self.lexer.position),
+                )
             }
             Some(Token {
                 kind: TokenKind::Hash,
-                ..
+                span,
             }) => {
+                let span = *span;
+                let start = self.lexer.position;
                 self.lexer.next();
                 let ((), r_bp) = prefix_binding_power(&TokenKind::Hash);
                 let rhs = self.expect_expression_within(r_bp)?;
-                ast::Expression::UnaryOp {
-                    op: ast::UnaryOperator::Length,
-                    rhs: Box::new(rhs),
-                }
+                TokenTree::new(
+                    Expression::UnaryOp {
+                        op: TokenTree::new(UnaryOperator::Length, span),
+                        rhs: Box::new(rhs),
+                    },
+                    Span::new(start, self.lexer.position),
+                )
             }
             Some(Token {
                 kind: TokenKind::Tilde,
-                ..
+                span,
             }) => {
+                let span = *span;
+                let start = self.lexer.position;
                 self.lexer.next();
                 let ((), r_bp) = prefix_binding_power(&TokenKind::Tilde);
                 let rhs = self.expect_expression_within(r_bp)?;
-                ast::Expression::UnaryOp {
-                    op: ast::UnaryOperator::BitwiseNot,
-                    rhs: Box::new(rhs),
-                }
+                TokenTree::new(
+                    Expression::UnaryOp {
+                        op: TokenTree::new(UnaryOperator::BitwiseNot, span),
+                        rhs: Box::new(rhs),
+                    },
+                    Span::new(start, self.lexer.position),
+                )
             }
             Some(Token {
                 kind: TokenKind::Function,
                 ..
             }) => {
+                let start = self.lexer.position;
                 self.lexer.next();
-                ast::Expression::FunctionDef(self.parse_function_body(None)?)
+                TokenTree::new(
+                    Expression::FunctionDef(self.parse_function_body(None)?),
+                    Span::new(start, self.lexer.position),
+                )
             }
             Some(Token {
                 kind: TokenKind::OpenBrace,
                 ..
             }) => {
                 let table = self.parse_table_constructor().wrap_err("in expression")?;
-                ast::Expression::TableConstructor(table)
+                let span = table.span;
+                TokenTree::new(Expression::TableConstructor(table), span)
             }
 
             _ => {
@@ -1018,7 +1278,10 @@ impl<'source> Parser<'source> {
                     ..
                 }) => {
                     let prefix = match lhs {
-                        ast::Expression::PrefixExpression(p) => p,
+                        TokenTree {
+                            node: Expression::PrefixExpression(p),
+                            ..
+                        } => p,
                         _ => {
                             return Ok(Some(lhs));
                         }
@@ -1027,43 +1290,47 @@ impl<'source> Parser<'source> {
                     self.lexer.next();
                     let name = self.parse_name().wrap_err("in expression method call")?;
                     let args = self.parse_args().wrap_err("in expression method call")?;
-                    lhs = ast::Expression::PrefixExpression(ast::PrefixExpression::FunctionCall(
-                        ast::FunctionCall {
-                            function: Box::new(prefix),
-                            as_method: true,
-                            name: Some(name),
-                            args,
-                        },
-                    ));
+
+                    let span = Span::new(prefix.span.start, self.lexer.position);
+
+                    lhs = TokenTree::new(
+                        Expression::PrefixExpression(TokenTree::new(
+                            PrefixExpression::FunctionCall(TokenTree::new(
+                                FunctionCall {
+                                    function: Box::new(prefix),
+                                    as_method: true,
+                                    name: Some(name),
+                                    args,
+                                },
+                                span,
+                            )),
+                            span,
+                        )),
+                        span,
+                    );
                     continue;
                 }
-                // TODO: Is this really correct?
                 _ => break,
-                // None => break,
-                // Some(token) => {
-                //     return Err(miette!(
-                //         labels = vec![token.span.labeled("expected operator")],
-                //         "unexpected token"
-                //     ))
-                // }
             };
-
-            // TODO: Do we have postfix operators? Maybe `:` is one?
 
             if let Some((l_bp, r_bp)) = infix_binding_power(&op.kind) {
                 if l_bp < min_bp {
                     break;
                 }
 
-                let op = ast::BinaryOperator::from(&op.kind);
+                let op = TokenTree::new(BinaryOperator::from(&op.kind), op.span);
                 self.lexer.next();
 
                 let rhs = self.expect_expression_within(r_bp)?;
-                lhs = ast::Expression::BinaryOp {
-                    op,
-                    lhs: Box::new(lhs),
-                    rhs: Box::new(rhs),
-                }
+                let span = Span::new(lhs.span.start, rhs.span.end);
+                lhs = TokenTree::new(
+                    Expression::BinaryOp {
+                        op,
+                        lhs: Box::new(lhs),
+                        rhs: Box::new(rhs),
+                    },
+                    span,
+                );
             }
         }
 
@@ -1072,14 +1339,19 @@ impl<'source> Parser<'source> {
 
     fn parse_function_body(
         &mut self,
-        implicit_self_parameter: Option<ast::Name<()>>,
-    ) -> miette::Result<ast::FunctionDef> {
+        implicit_self_parameter: Option<Name<()>>,
+    ) -> miette::Result<TokenTree<FunctionDef>> {
         self.begin_scope();
+
+        let start = self.lexer.position;
 
         self.lexer.expect(|k| k == &TokenKind::OpenParen, "(")?;
         let mut parameters = Vec::new();
         if let Some(name) = implicit_self_parameter {
-            parameters.push(name);
+            parameters.push(TokenTree::new(
+                name,
+                Span::new(self.lexer.position, self.lexer.position),
+            ));
         }
         let mut has_varargs = false;
 
@@ -1144,14 +1416,17 @@ impl<'source> Parser<'source> {
 
         self.end_scope();
 
-        Ok(ast::FunctionDef {
-            parameters,
-            has_varargs,
-            block,
-        })
+        Ok(TokenTree::new(
+            FunctionDef {
+                parameters,
+                has_varargs,
+                block,
+            },
+            Span::new(start, self.lexer.position),
+        ))
     }
 
-    fn parse_name(&mut self) -> miette::Result<ast::Name<()>> {
+    fn parse_name(&mut self) -> miette::Result<TokenTree<Name<()>>> {
         let token = self
             .lexer
             .expect(|k| matches!(k, &TokenKind::Identifier(_)), "identifier")?;
@@ -1160,7 +1435,10 @@ impl<'source> Parser<'source> {
             _ => unreachable!(),
         };
 
-        Ok(ast::Name::unresolved(name.to_string()))
+        Ok(TokenTree::new(
+            Name::unresolved(name.to_string()),
+            token.span,
+        ))
     }
 }
 
@@ -1205,18 +1483,21 @@ impl<'source> Parser<'source> {
         self.scopes.pop();
     }
 
-    fn declare_variable<T>(&mut self, name: ast::Name<T>) -> ast::Name<NameLocation> {
+    fn declare_variable<T>(&mut self, name: TokenTree<Name<T>>) -> TokenTree<Name<NameLocation>> {
         let current_scope = self.scopes.len() - 1;
         let current_scope = &mut self.scopes[current_scope];
-        current_scope.register_variable(&name.identifier);
+        current_scope.register_variable(&name.node.identifier);
 
-        ast::Name {
-            location: NameLocation { scope_offset: 0 },
-            identifier: name.identifier,
-        }
+        TokenTree::new(
+            Name {
+                location: NameLocation { scope_offset: 0 },
+                identifier: name.node.identifier,
+            },
+            name.span,
+        )
     }
 
-    fn declare_label<T>(&mut self, name: &ast::Name<T>, span: Span) -> miette::Result<()> {
+    fn declare_label<T>(&mut self, name: &Name<T>, span: Span) -> miette::Result<()> {
         for scope in self.scopes.iter_mut().rev() {
             if scope.has_label(&name.identifier) {
                 return Err(miette!(
@@ -1231,10 +1512,10 @@ impl<'source> Parser<'source> {
         Ok(())
     }
 
-    fn lookup_variable<T>(&mut self, name: ast::Name<T>) -> ast::Name<NameLocation> {
+    fn lookup_variable<T>(&mut self, name: Name<T>) -> Name<NameLocation> {
         for (scope_offset, scope) in self.scopes.iter().rev().enumerate() {
             if scope.has_variable(&name.identifier) {
-                return ast::Name {
+                return Name {
                     location: NameLocation { scope_offset },
                     identifier: name.identifier,
                 };
@@ -1244,7 +1525,7 @@ impl<'source> Parser<'source> {
         // We've reached the global scope. Undefined variables are
         // implicitly declared as global (though without an initial value)
         self.scopes[0].register_variable(&name.identifier);
-        ast::Name {
+        Name {
             location: NameLocation {
                 scope_offset: self.scopes.len() - 1,
             },

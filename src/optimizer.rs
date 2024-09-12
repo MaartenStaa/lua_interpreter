@@ -1,345 +1,655 @@
-use crate::ast::*;
+use crate::{ast::*, token::Span};
 
 /// Apply optimizations to the AST
 /// At the moment, we only do constant folding
-pub fn optimize(program: Block) -> Block {
-    Block {
-        statements: program
-            .statements
-            .into_iter()
-            .map(optimize_statement)
-            .collect(),
-        return_statement: program
-            .return_statement
-            .map(|exprs| exprs.into_iter().map(optimize_expression).collect()),
-    }
+pub fn optimize(program: TokenTree<Block>) -> TokenTree<Block> {
+    let span = program.span;
+    TokenTree::new(
+        Block {
+            statements: program
+                .node
+                .statements
+                .into_iter()
+                .map(optimize_statement)
+                .collect(),
+            return_statement: program
+                .node
+                .return_statement
+                .map(|exprs| exprs.into_iter().map(optimize_expression).collect()),
+        },
+        span,
+    )
 }
 
-fn optimize_statement(statement: Statement) -> Statement {
-    match statement {
-        Statement::Assignment { varlist, explist } => Statement::Assignment {
-            varlist: varlist.into_iter().map(optimize_variable).collect(),
-            explist: explist.into_iter().map(optimize_expression).collect(),
-        },
-        Statement::Block(block) => Statement::Block(optimize(block)),
-        Statement::While { condition, block } => Statement::While {
-            condition: optimize_expression(condition),
-            block: optimize(block),
-        },
-        Statement::Repeat { block, condition } => Statement::Repeat {
-            block: optimize(block),
-            condition: optimize_expression(condition),
-        },
-        Statement::If {
-            condition,
-            block,
-            else_ifs,
-            else_block,
-        } => Statement::If {
-            condition: optimize_expression(condition),
-            block: optimize(block),
-            else_ifs: else_ifs.into_iter().map(optimize_else_if).collect(),
-            else_block: else_block.map(optimize),
-        },
-        Statement::For { condition, block } => Statement::For {
-            condition: optimize_for_condition(condition),
-            block: optimize(block),
-        },
-        Statement::FunctionCall(function_call) => {
-            Statement::FunctionCall(optimize_function_call(function_call))
-        }
-        Statement::LocalDeclaraction(names, expressions) => Statement::LocalDeclaraction(
-            names,
-            expressions.into_iter().map(optimize_expression).collect(),
-        ),
-
-        // No optimization to be done
-        Statement::Goto(label) => Statement::Goto(label),
-        Statement::Label(label) => Statement::Label(label),
-        Statement::Break => Statement::Break,
-    }
-}
-
-fn optimize_else_if(else_if: ElseIf) -> ElseIf {
-    ElseIf {
-        condition: optimize_expression(else_if.condition),
-        block: optimize(else_if.block),
-    }
-}
-
-fn optimize_for_condition(condition: ForCondition) -> ForCondition {
-    match condition {
-        ForCondition::NumericFor {
-            name,
-            initial,
-            step,
-            limit,
-        } => ForCondition::NumericFor {
-            name,
-            initial: optimize_expression(initial),
-            step: step.map(optimize_expression),
-            limit: optimize_expression(limit),
-        },
-        ForCondition::GenericFor { names, expressions } => ForCondition::GenericFor {
-            names,
-            expressions: expressions.into_iter().map(optimize_expression).collect(),
-        },
-    }
-}
-
-fn optimize_function_call(function_call: FunctionCall) -> FunctionCall {
-    FunctionCall {
-        function: Box::new(optimize_prefix_expression(*function_call.function)),
-        as_method: function_call.as_method,
-        name: function_call.name,
-        args: function_call
-            .args
-            .into_iter()
-            .map(optimize_expression)
-            .collect(),
-    }
-}
-
-fn optimize_expression(expression: Expression) -> Expression {
-    match expression {
-        Expression::PrefixExpression(prefix) => {
-            let optimized_prefix = optimize_prefix_expression(prefix);
-            match optimized_prefix {
-                PrefixExpression::Parenthesized(parenthesized) => {
-                    if matches!(&*parenthesized, Expression::Literal(_)) {
-                        *parenthesized
-                    } else {
-                        Expression::PrefixExpression(PrefixExpression::Parenthesized(parenthesized))
-                    }
-                }
-                other => Expression::PrefixExpression(other),
+fn optimize_statement(statement: TokenTree<Statement>) -> TokenTree<Statement> {
+    let span = statement.span;
+    TokenTree::new(
+        match statement.node {
+            Statement::Assignment { varlist, explist } => Statement::Assignment {
+                varlist: varlist.into_iter().map(optimize_variable).collect(),
+                explist: explist.into_iter().map(optimize_expression).collect(),
+            },
+            Statement::Block(block) => Statement::Block(optimize(block)),
+            Statement::While { condition, block } => Statement::While {
+                condition: optimize_expression(condition),
+                block: optimize(block),
+            },
+            Statement::Repeat { block, condition } => Statement::Repeat {
+                block: optimize(block),
+                condition: optimize_expression(condition),
+            },
+            Statement::If {
+                condition,
+                block,
+                else_ifs,
+                else_block,
+            } => Statement::If {
+                condition: optimize_expression(condition),
+                block: optimize(block),
+                else_ifs: else_ifs.into_iter().map(optimize_else_if).collect(),
+                else_block: else_block.map(optimize),
+            },
+            Statement::For { condition, block } => Statement::For {
+                condition: optimize_for_condition(condition),
+                block: optimize(block),
+            },
+            Statement::FunctionCall(function_call) => {
+                Statement::FunctionCall(optimize_function_call(function_call))
             }
-        }
-        Expression::FunctionDef(func) => Expression::FunctionDef(optimize_function_def(func)),
-        Expression::TableConstructor(table) => {
-            Expression::TableConstructor(optimize_table_constructor(table))
-        }
-        Expression::BinaryOp { op, lhs, rhs } => optimize_binary_op(op, *lhs, *rhs),
-        Expression::UnaryOp { op, rhs } => optimize_unary_op(op, *rhs),
+            Statement::LocalDeclaraction(names, expressions) => Statement::LocalDeclaraction(
+                names,
+                expressions.into_iter().map(optimize_expression).collect(),
+            ),
 
-        // No optimization to be done
-        Expression::Literal(literal) => Expression::Literal(literal),
-        Expression::Ellipsis => Expression::Ellipsis,
-    }
+            // No optimization to be done
+            Statement::Goto(label) => Statement::Goto(label),
+            Statement::Label(label) => Statement::Label(label),
+            Statement::Break => Statement::Break,
+        },
+        span,
+    )
 }
 
-fn optimize_prefix_expression(prefix: PrefixExpression) -> PrefixExpression {
-    match prefix {
-        PrefixExpression::Variable(var) => PrefixExpression::Variable(optimize_variable(var)),
-        PrefixExpression::Parenthesized(expr) => {
-            PrefixExpression::Parenthesized(Box::new(optimize_expression(*expr)))
-        }
-        PrefixExpression::FunctionCall(func) => {
-            PrefixExpression::FunctionCall(optimize_function_call(func))
-        }
-    }
+fn optimize_else_if(else_if: TokenTree<ElseIf>) -> TokenTree<ElseIf> {
+    let span = else_if.span;
+    TokenTree::new(
+        ElseIf {
+            condition: optimize_expression(else_if.node.condition),
+            block: optimize(else_if.node.block),
+        },
+        span,
+    )
 }
 
-fn optimize_variable<T>(var: Variable<T>) -> Variable<T> {
-    match var {
-        Variable::Name(name) => Variable::Name(name),
-        Variable::Field(prefix, name) => {
-            Variable::Field(Box::new(optimize_prefix_expression(*prefix)), name)
-        }
-        Variable::Indexed(prefix, index_expression) => Variable::Indexed(
-            Box::new(optimize_prefix_expression(*prefix)),
-            Box::new(optimize_expression(*index_expression)),
-        ),
-    }
+fn optimize_for_condition(condition: TokenTree<ForCondition>) -> TokenTree<ForCondition> {
+    let span = condition.span;
+    TokenTree::new(
+        match condition.node {
+            ForCondition::NumericFor {
+                name,
+                initial,
+                step,
+                limit,
+            } => ForCondition::NumericFor {
+                name,
+                initial: optimize_expression(initial),
+                step: step.map(optimize_expression),
+                limit: optimize_expression(limit),
+            },
+            ForCondition::GenericFor { names, expressions } => ForCondition::GenericFor {
+                names,
+                expressions: expressions.into_iter().map(optimize_expression).collect(),
+            },
+        },
+        span,
+    )
 }
 
-fn optimize_function_def(func: FunctionDef) -> FunctionDef {
-    FunctionDef {
-        parameters: func.parameters,
-        has_varargs: func.has_varargs,
-        block: optimize(func.block),
-    }
+fn optimize_function_call(function_call: TokenTree<FunctionCall>) -> TokenTree<FunctionCall> {
+    let span = function_call.span;
+    TokenTree::new(
+        FunctionCall {
+            function: Box::new(optimize_prefix_expression(*function_call.node.function)),
+            as_method: function_call.node.as_method,
+            name: function_call.node.name,
+            args: function_call
+                .node
+                .args
+                .into_iter()
+                .map(optimize_expression)
+                .collect(),
+        },
+        span,
+    )
 }
 
-fn optimize_table_constructor(table: TableConstructor) -> TableConstructor {
-    TableConstructor {
-        fields: table.fields.into_iter().map(optimize_table_field).collect(),
-    }
+fn optimize_expression(expression: TokenTree<Expression>) -> TokenTree<Expression> {
+    let span = expression.span;
+    TokenTree::new(
+        match expression.node {
+            Expression::PrefixExpression(prefix) => {
+                let optimized_prefix = optimize_prefix_expression(prefix);
+                match optimized_prefix {
+                    TokenTree {
+                        node: PrefixExpression::Parenthesized(parenthesized),
+                        ..
+                    } => {
+                        if matches!(
+                            &*parenthesized,
+                            TokenTree {
+                                node: Expression::Literal(_),
+                                ..
+                            }
+                        ) {
+                            return *parenthesized;
+                        } else {
+                            let span = parenthesized.span;
+                            Expression::PrefixExpression(TokenTree::new(
+                                PrefixExpression::Parenthesized(parenthesized),
+                                span,
+                            ))
+                        }
+                    }
+                    other => Expression::PrefixExpression(other),
+                }
+            }
+            Expression::FunctionDef(func) => Expression::FunctionDef(optimize_function_def(func)),
+            Expression::TableConstructor(table) => {
+                Expression::TableConstructor(optimize_table_constructor(table))
+            }
+            Expression::BinaryOp { op, lhs, rhs } => return optimize_binary_op(op, *lhs, *rhs),
+            Expression::UnaryOp { op, rhs } => return optimize_unary_op(op, *rhs),
+
+            // No optimization to be done
+            Expression::Literal(literal) => Expression::Literal(literal),
+            Expression::Ellipsis => Expression::Ellipsis,
+        },
+        span,
+    )
 }
 
-fn optimize_table_field(field: Field) -> Field {
-    match field {
-        Field::Value(expression) => Field::Value(optimize_expression(expression)),
-        Field::Named(name, expression) => Field::Named(name, optimize_expression(expression)),
-        Field::Indexed(index, value) => {
-            Field::Indexed(optimize_expression(index), optimize_expression(value))
-        }
-    }
+fn optimize_prefix_expression(prefix: TokenTree<PrefixExpression>) -> TokenTree<PrefixExpression> {
+    let span = prefix.span;
+    TokenTree::new(
+        match prefix.node {
+            PrefixExpression::Variable(var) => PrefixExpression::Variable(optimize_variable(var)),
+            PrefixExpression::Parenthesized(expr) => {
+                PrefixExpression::Parenthesized(Box::new(optimize_expression(*expr)))
+            }
+            PrefixExpression::FunctionCall(func) => {
+                PrefixExpression::FunctionCall(optimize_function_call(func))
+            }
+        },
+        span,
+    )
 }
 
-fn optimize_binary_op(op: BinaryOperator, lhs: Expression, rhs: Expression) -> Expression {
+fn optimize_variable<T>(var: TokenTree<Variable<T>>) -> TokenTree<Variable<T>> {
+    let span = var.span;
+    TokenTree::new(
+        match var.node {
+            Variable::Name(name) => Variable::Name(name),
+            Variable::Field(prefix, name) => {
+                Variable::Field(Box::new(optimize_prefix_expression(*prefix)), name)
+            }
+            Variable::Indexed(prefix, index_expression) => Variable::Indexed(
+                Box::new(optimize_prefix_expression(*prefix)),
+                Box::new(optimize_expression(*index_expression)),
+            ),
+        },
+        span,
+    )
+}
+
+fn optimize_function_def(func: TokenTree<FunctionDef>) -> TokenTree<FunctionDef> {
+    let span = func.span;
+    TokenTree::new(
+        FunctionDef {
+            parameters: func.node.parameters,
+            has_varargs: func.node.has_varargs,
+            block: optimize(func.node.block),
+        },
+        span,
+    )
+}
+
+fn optimize_table_constructor(table: TokenTree<TableConstructor>) -> TokenTree<TableConstructor> {
+    let span = table.span;
+    TokenTree::new(
+        TableConstructor {
+            fields: table
+                .node
+                .fields
+                .into_iter()
+                .map(optimize_table_field)
+                .collect(),
+        },
+        span,
+    )
+}
+
+fn optimize_table_field(field: TokenTree<Field>) -> TokenTree<Field> {
+    let span = field.span;
+    TokenTree::new(
+        match field.node {
+            Field::Value(expression) => Field::Value(optimize_expression(expression)),
+            Field::Named(name, expression) => Field::Named(name, optimize_expression(expression)),
+            Field::Indexed(index, value) => {
+                Field::Indexed(optimize_expression(index), optimize_expression(value))
+            }
+        },
+        span,
+    )
+}
+
+fn optimize_binary_op(
+    op: TokenTree<BinaryOperator>,
+    lhs: TokenTree<Expression>,
+    rhs: TokenTree<Expression>,
+) -> TokenTree<Expression> {
+    let span = Span::new(lhs.span.start, rhs.span.end);
+    let op_span = op.span;
+    let lhs_span = lhs.span;
+    let rhs_span = rhs.span;
+
     let lhs = optimize_expression(lhs);
     let rhs = optimize_expression(rhs);
 
-    match (op, lhs, rhs) {
-        (
-            BinaryOperator::Add,
-            Expression::Literal(Literal::Number(lhs)),
-            Expression::Literal(Literal::Number(rhs)),
-        ) => Expression::Literal(Literal::Number(lhs + rhs)),
-        (
-            BinaryOperator::Sub,
-            Expression::Literal(Literal::Number(lhs)),
-            Expression::Literal(Literal::Number(rhs)),
-        ) => Expression::Literal(Literal::Number(lhs - rhs)),
-        (
-            BinaryOperator::Mul,
-            Expression::Literal(Literal::Number(lhs)),
-            Expression::Literal(Literal::Number(rhs)),
-        ) => Expression::Literal(Literal::Number(lhs * rhs)),
-        (
-            BinaryOperator::Div,
-            Expression::Literal(Literal::Number(lhs)),
-            Expression::Literal(Literal::Number(rhs)),
-        ) => Expression::Literal(Literal::Number(lhs / rhs)),
-        (
-            BinaryOperator::Mod,
-            Expression::Literal(Literal::Number(lhs)),
-            Expression::Literal(Literal::Number(rhs)),
-        ) => Expression::Literal(Literal::Number(lhs % rhs)),
-        (
-            BinaryOperator::Pow,
-            Expression::Literal(Literal::Number(lhs)),
-            Expression::Literal(Literal::Number(rhs)),
-        ) => Expression::Literal(Literal::Number(lhs.pow(rhs))),
-        (
-            BinaryOperator::Concat,
-            Expression::Literal(Literal::String(mut lhs)),
-            Expression::Literal(Literal::String(rhs)),
-        ) => {
-            lhs.extend(rhs);
-            Expression::Literal(Literal::String(lhs))
-        }
-        (
-            BinaryOperator::Concat,
-            Expression::Literal(Literal::String(mut lhs)),
-            Expression::Literal(Literal::Number(rhs)),
-        ) => {
-            lhs.extend(rhs.to_string().into_bytes());
-            Expression::Literal(Literal::String(lhs))
-        }
-        (
-            BinaryOperator::Concat,
-            Expression::Literal(Literal::Number(lhs)),
-            Expression::Literal(Literal::String(rhs)),
-        ) => Expression::Literal(Literal::String(Vec::from_iter(
-            lhs.to_string().into_bytes().into_iter().chain(rhs),
-        ))),
-        (
-            BinaryOperator::Concat,
-            Expression::Literal(Literal::Number(lhs)),
-            Expression::Literal(Literal::Number(rhs)),
-        ) => {
-            let mut lhs = lhs.to_string();
-            lhs.push_str(&rhs.to_string());
-            Expression::Literal(Literal::String(lhs.into_bytes()))
-        }
-        (
-            BinaryOperator::FloorDiv,
-            Expression::Literal(Literal::Number(lhs)),
-            Expression::Literal(Literal::Number(rhs)),
-        ) => Expression::Literal(Literal::Number((lhs / rhs).floor())),
-        (
-            BinaryOperator::And,
-            Expression::Literal(Literal::Boolean(lhs)),
-            Expression::Literal(Literal::Boolean(rhs)),
-        ) => Expression::Literal(Literal::Boolean(lhs && rhs)),
-        (
-            BinaryOperator::Or,
-            Expression::Literal(Literal::Boolean(lhs)),
-            Expression::Literal(Literal::Boolean(rhs)),
-        ) => Expression::Literal(Literal::Boolean(lhs || rhs)),
-        (
-            BinaryOperator::LessThan,
-            Expression::Literal(Literal::Number(lhs)),
-            Expression::Literal(Literal::Number(rhs)),
-        ) => Expression::Literal(Literal::Boolean(lhs < rhs)),
-        (
-            BinaryOperator::GreaterThan,
-            Expression::Literal(Literal::Number(lhs)),
-            Expression::Literal(Literal::Number(rhs)),
-        ) => Expression::Literal(Literal::Boolean(lhs > rhs)),
-        (
-            BinaryOperator::LessThanOrEqual,
-            Expression::Literal(Literal::Number(lhs)),
-            Expression::Literal(Literal::Number(rhs)),
-        ) => Expression::Literal(Literal::Boolean(lhs <= rhs)),
-        (
-            BinaryOperator::GreaterThanOrEqual,
-            Expression::Literal(Literal::Number(lhs)),
-            Expression::Literal(Literal::Number(rhs)),
-        ) => Expression::Literal(Literal::Boolean(lhs >= rhs)),
-        (BinaryOperator::Equal, Expression::Literal(lhs), Expression::Literal(rhs)) => {
-            Expression::Literal(Literal::Boolean(lhs == rhs))
-        }
-        (BinaryOperator::NotEqual, Expression::Literal(lhs), Expression::Literal(rhs)) => {
-            Expression::Literal(Literal::Boolean(lhs != rhs))
-        }
-        (
-            BinaryOperator::BitwiseOr,
-            Expression::Literal(Literal::Number(Number::Integer(lhs))),
-            Expression::Literal(Literal::Number(Number::Integer(rhs))),
-        ) => Expression::Literal(Literal::Number(Number::Integer(lhs | rhs))),
-        (
-            BinaryOperator::BitwiseXor,
-            Expression::Literal(Literal::Number(Number::Integer(lhs))),
-            Expression::Literal(Literal::Number(Number::Integer(rhs))),
-        ) => Expression::Literal(Literal::Number(Number::Integer(lhs ^ rhs))),
-        (
-            BinaryOperator::BitwiseAnd,
-            Expression::Literal(Literal::Number(Number::Integer(lhs))),
-            Expression::Literal(Literal::Number(Number::Integer(rhs))),
-        ) => Expression::Literal(Literal::Number(Number::Integer(lhs & rhs))),
-        (
-            BinaryOperator::ShiftLeft,
-            Expression::Literal(Literal::Number(Number::Integer(lhs))),
-            Expression::Literal(Literal::Number(Number::Integer(rhs))),
-        ) => Expression::Literal(Literal::Number(Number::Integer(lhs << rhs))),
-        (
-            BinaryOperator::ShiftRight,
-            Expression::Literal(Literal::Number(Number::Integer(lhs))),
-            Expression::Literal(Literal::Number(Number::Integer(rhs))),
-        ) => Expression::Literal(Literal::Number(Number::Integer(lhs >> rhs))),
-        (op, lhs, rhs) => Expression::BinaryOp {
-            lhs: Box::new(lhs),
-            op,
-            rhs: Box::new(rhs),
+    TokenTree::new(
+        match (op.node, lhs.node, rhs.node) {
+            (
+                BinaryOperator::Add,
+                Expression::Literal(TokenTree {
+                    node: Literal::Number(lhs),
+                    ..
+                }),
+                Expression::Literal(TokenTree {
+                    node: Literal::Number(rhs),
+                    ..
+                }),
+            ) => Expression::Literal(TokenTree {
+                node: Literal::Number(lhs + rhs),
+                span,
+            }),
+            (
+                BinaryOperator::Sub,
+                Expression::Literal(TokenTree {
+                    node: Literal::Number(lhs),
+                    ..
+                }),
+                Expression::Literal(TokenTree {
+                    node: Literal::Number(rhs),
+                    ..
+                }),
+            ) => Expression::Literal(TokenTree {
+                node: Literal::Number(lhs - rhs),
+                span,
+            }),
+            (
+                BinaryOperator::Mul,
+                Expression::Literal(TokenTree {
+                    node: Literal::Number(lhs),
+                    ..
+                }),
+                Expression::Literal(TokenTree {
+                    node: Literal::Number(rhs),
+                    ..
+                }),
+            ) => Expression::Literal(TokenTree {
+                node: Literal::Number(lhs * rhs),
+                span,
+            }),
+            (
+                BinaryOperator::Div,
+                Expression::Literal(TokenTree {
+                    node: Literal::Number(lhs),
+                    ..
+                }),
+                Expression::Literal(TokenTree {
+                    node: Literal::Number(rhs),
+                    ..
+                }),
+            ) => Expression::Literal(TokenTree {
+                node: Literal::Number(lhs / rhs),
+                span,
+            }),
+            (
+                BinaryOperator::Mod,
+                Expression::Literal(TokenTree {
+                    node: Literal::Number(lhs),
+                    ..
+                }),
+                Expression::Literal(TokenTree {
+                    node: Literal::Number(rhs),
+                    ..
+                }),
+            ) => Expression::Literal(TokenTree {
+                node: Literal::Number(lhs % rhs),
+                span,
+            }),
+            (
+                BinaryOperator::Pow,
+                Expression::Literal(TokenTree {
+                    node: Literal::Number(lhs),
+                    ..
+                }),
+                Expression::Literal(TokenTree {
+                    node: Literal::Number(rhs),
+                    ..
+                }),
+            ) => Expression::Literal(TokenTree {
+                node: Literal::Number(lhs.pow(&rhs)),
+                span,
+            }),
+            (
+                BinaryOperator::Concat,
+                Expression::Literal(TokenTree {
+                    node: Literal::String(mut lhs),
+                    ..
+                }),
+                Expression::Literal(TokenTree {
+                    node: Literal::String(rhs),
+                    ..
+                }),
+            ) => {
+                lhs.extend(rhs);
+                Expression::Literal(TokenTree {
+                    node: Literal::String(lhs),
+                    span,
+                })
+            }
+            (
+                BinaryOperator::Concat,
+                Expression::Literal(TokenTree {
+                    node: Literal::String(mut lhs),
+                    ..
+                }),
+                Expression::Literal(TokenTree {
+                    node: Literal::Number(rhs),
+                    ..
+                }),
+            ) => {
+                lhs.extend(rhs.to_string().into_bytes());
+                Expression::Literal(TokenTree {
+                    node: Literal::String(lhs),
+                    span,
+                })
+            }
+            (
+                BinaryOperator::Concat,
+                Expression::Literal(TokenTree {
+                    node: Literal::Number(lhs),
+                    ..
+                }),
+                Expression::Literal(TokenTree {
+                    node: Literal::String(rhs),
+                    ..
+                }),
+            ) => Expression::Literal(TokenTree::new(
+                Literal::String(Vec::from_iter(
+                    lhs.to_string().into_bytes().into_iter().chain(rhs),
+                )),
+                span,
+            )),
+            (
+                BinaryOperator::Concat,
+                Expression::Literal(TokenTree {
+                    node: Literal::Number(lhs),
+                    ..
+                }),
+                Expression::Literal(TokenTree {
+                    node: Literal::Number(rhs),
+                    ..
+                }),
+            ) => {
+                let mut lhs = lhs.to_string();
+                lhs.push_str(&rhs.to_string());
+                Expression::Literal(TokenTree {
+                    node: Literal::String(lhs.into_bytes()),
+                    span,
+                })
+            }
+            (
+                BinaryOperator::FloorDiv,
+                Expression::Literal(TokenTree {
+                    node: Literal::Number(lhs),
+                    ..
+                }),
+                Expression::Literal(TokenTree {
+                    node: Literal::Number(rhs),
+                    ..
+                }),
+            ) => Expression::Literal(TokenTree {
+                node: Literal::Number((lhs / rhs).floor()),
+                span,
+            }),
+            (
+                BinaryOperator::And,
+                Expression::Literal(TokenTree {
+                    node: Literal::Boolean(lhs),
+                    ..
+                }),
+                Expression::Literal(TokenTree {
+                    node: Literal::Boolean(rhs),
+                    ..
+                }),
+            ) => Expression::Literal(TokenTree {
+                node: Literal::Boolean(lhs && rhs),
+                span,
+            }),
+            (
+                BinaryOperator::Or,
+                Expression::Literal(TokenTree {
+                    node: Literal::Boolean(lhs),
+                    ..
+                }),
+                Expression::Literal(TokenTree {
+                    node: Literal::Boolean(rhs),
+                    ..
+                }),
+            ) => Expression::Literal(TokenTree {
+                node: Literal::Boolean(lhs || rhs),
+                span,
+            }),
+            (
+                BinaryOperator::LessThan,
+                Expression::Literal(TokenTree {
+                    node: Literal::Number(lhs),
+                    ..
+                }),
+                Expression::Literal(TokenTree {
+                    node: Literal::Number(rhs),
+                    ..
+                }),
+            ) => Expression::Literal(TokenTree {
+                node: Literal::Boolean(lhs < rhs),
+                span,
+            }),
+            (
+                BinaryOperator::GreaterThan,
+                Expression::Literal(TokenTree {
+                    node: Literal::Number(lhs),
+                    ..
+                }),
+                Expression::Literal(TokenTree {
+                    node: Literal::Number(rhs),
+                    ..
+                }),
+            ) => Expression::Literal(TokenTree {
+                node: Literal::Boolean(lhs > rhs),
+                span,
+            }),
+            (
+                BinaryOperator::LessThanOrEqual,
+                Expression::Literal(TokenTree {
+                    node: Literal::Number(lhs),
+                    ..
+                }),
+                Expression::Literal(TokenTree {
+                    node: Literal::Number(rhs),
+                    ..
+                }),
+            ) => Expression::Literal(TokenTree {
+                node: Literal::Boolean(lhs <= rhs),
+                span,
+            }),
+            (
+                BinaryOperator::GreaterThanOrEqual,
+                Expression::Literal(TokenTree {
+                    node: Literal::Number(lhs),
+                    ..
+                }),
+                Expression::Literal(TokenTree {
+                    node: Literal::Number(rhs),
+                    ..
+                }),
+            ) => Expression::Literal(TokenTree {
+                node: Literal::Boolean(lhs >= rhs),
+                span,
+            }),
+            (BinaryOperator::Equal, Expression::Literal(lhs), Expression::Literal(rhs)) => {
+                Expression::Literal(TokenTree {
+                    node: Literal::Boolean(lhs == rhs),
+                    span,
+                })
+            }
+            (BinaryOperator::NotEqual, Expression::Literal(lhs), Expression::Literal(rhs)) => {
+                Expression::Literal(TokenTree {
+                    node: Literal::Boolean(lhs != rhs),
+                    span,
+                })
+            }
+            (
+                BinaryOperator::BitwiseOr,
+                Expression::Literal(TokenTree {
+                    node: Literal::Number(Number::Integer(lhs)),
+                    ..
+                }),
+                Expression::Literal(TokenTree {
+                    node: Literal::Number(Number::Integer(rhs)),
+                    ..
+                }),
+            ) => Expression::Literal(TokenTree {
+                node: Literal::Number(Number::Integer(lhs | rhs)),
+                span,
+            }),
+            (
+                BinaryOperator::BitwiseXor,
+                Expression::Literal(TokenTree {
+                    node: Literal::Number(Number::Integer(lhs)),
+                    ..
+                }),
+                Expression::Literal(TokenTree {
+                    node: Literal::Number(Number::Integer(rhs)),
+                    ..
+                }),
+            ) => Expression::Literal(TokenTree {
+                node: Literal::Number(Number::Integer(lhs ^ rhs)),
+                span,
+            }),
+            (
+                BinaryOperator::BitwiseAnd,
+                Expression::Literal(TokenTree {
+                    node: Literal::Number(Number::Integer(lhs)),
+                    ..
+                }),
+                Expression::Literal(TokenTree {
+                    node: Literal::Number(Number::Integer(rhs)),
+                    ..
+                }),
+            ) => Expression::Literal(TokenTree {
+                node: Literal::Number(Number::Integer(lhs & rhs)),
+                span,
+            }),
+            (
+                BinaryOperator::ShiftLeft,
+                Expression::Literal(TokenTree {
+                    node: Literal::Number(Number::Integer(lhs)),
+                    ..
+                }),
+                Expression::Literal(TokenTree {
+                    node: Literal::Number(Number::Integer(rhs)),
+                    ..
+                }),
+            ) => Expression::Literal(TokenTree {
+                node: Literal::Number(Number::Integer(lhs << rhs)),
+                span,
+            }),
+            (
+                BinaryOperator::ShiftRight,
+                Expression::Literal(TokenTree {
+                    node: Literal::Number(Number::Integer(lhs)),
+                    ..
+                }),
+                Expression::Literal(TokenTree {
+                    node: Literal::Number(Number::Integer(rhs)),
+                    ..
+                }),
+            ) => Expression::Literal(TokenTree {
+                node: Literal::Number(Number::Integer(lhs >> rhs)),
+                span,
+            }),
+            (op, lhs, rhs) => Expression::BinaryOp {
+                lhs: Box::new(TokenTree::new(lhs, lhs_span)),
+                op: TokenTree::new(op, op_span),
+                rhs: Box::new(TokenTree::new(rhs, rhs_span)),
+            },
         },
-    }
+        span,
+    )
 }
 
-fn optimize_unary_op(op: UnaryOperator, rhs: Expression) -> Expression {
+fn optimize_unary_op(
+    op: TokenTree<UnaryOperator>,
+    rhs: TokenTree<Expression>,
+) -> TokenTree<Expression> {
     let rhs = optimize_expression(rhs);
+    let span = Span::new(op.span.start, rhs.span.end);
 
-    match (op, rhs) {
-        (UnaryOperator::Neg, Expression::Literal(Literal::Number(rhs))) => {
-            Expression::Literal(Literal::Number(-rhs))
-        }
-        (UnaryOperator::BitwiseNot, Expression::Literal(Literal::Number(Number::Integer(rhs)))) => {
-            Expression::Literal(Literal::Number(Number::Integer(!rhs)))
-        }
-        (UnaryOperator::Not, Expression::Literal(Literal::Boolean(rhs))) => {
-            Expression::Literal(Literal::Boolean(!rhs))
-        }
-        (UnaryOperator::Not, Expression::Literal(Literal::Nil)) => {
-            Expression::Literal(Literal::Boolean(true))
-        }
-        (UnaryOperator::Not, Expression::Literal(_)) => {
-            Expression::Literal(Literal::Boolean(false))
-        }
-        (op, rhs) => Expression::UnaryOp {
-            op,
-            rhs: Box::new(rhs),
+    TokenTree::new(
+        match (&op.node, &rhs.node) {
+            (
+                UnaryOperator::Neg,
+                Expression::Literal(TokenTree {
+                    node: Literal::Number(rhs),
+                    ..
+                }),
+            ) => Expression::Literal(TokenTree::new(Literal::Number(-*rhs), span)),
+            (
+                UnaryOperator::BitwiseNot,
+                Expression::Literal(TokenTree {
+                    node: Literal::Number(Number::Integer(rhs)),
+                    ..
+                }),
+            ) => Expression::Literal(TokenTree::new(Literal::Number(Number::Integer(!rhs)), span)),
+            (
+                UnaryOperator::Not,
+                Expression::Literal(TokenTree {
+                    node: Literal::Boolean(rhs),
+                    ..
+                }),
+            ) => Expression::Literal(TokenTree {
+                node: Literal::Boolean(!rhs),
+                span,
+            }),
+            (
+                UnaryOperator::Not,
+                Expression::Literal(TokenTree {
+                    node: Literal::Nil, ..
+                }),
+            ) => Expression::Literal(TokenTree {
+                node: Literal::Boolean(true),
+                span,
+            }),
+            (UnaryOperator::Not, Expression::Literal(_)) => Expression::Literal(TokenTree {
+                node: Literal::Boolean(false),
+                span,
+            }),
+            (_, _) => Expression::UnaryOp {
+                op,
+                rhs: Box::new(rhs),
+            },
         },
-    }
+        span,
+    )
 }

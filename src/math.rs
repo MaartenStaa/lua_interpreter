@@ -5,80 +5,41 @@ use crate::{
     value::{LuaNumber, LuaValue},
 };
 
-impl ops::Add for ast::Number {
-    type Output = Self;
+macro_rules! impl_number_ops {
+    ($opname:ident, $op:tt, $method:ident, $wrapping_method:ident, $($target:tt)+) => {
+        impl ops::$opname for $($target)+ {
+            type Output = $($target)+;
 
-    fn add(self, other: Self) -> Self {
-        match (self, other) {
-            (ast::Number::Integer(a), ast::Number::Integer(b)) => {
-                ast::Number::Integer(a.wrapping_add(b))
+            fn $method(self, other: Self) -> Self {
+                match (self, other) {
+                    ($($target)+::Integer(a), $($target)+::Integer(b)) => $($target)+::Integer(a.$wrapping_method(b)),
+                    ($($target)+::Float(a), $($target)+::Float(b)) => $($target)+::Float(a $op b),
+                    ($($target)+::Integer(a), $($target)+::Float(b)) => $($target)+::Float(a as f64 $op b),
+                    ($($target)+::Float(a), $($target)+::Integer(b)) => $($target)+::Float(a $op b as f64),
+                }
             }
-            (ast::Number::Float(a), ast::Number::Float(b)) => ast::Number::Float(a + b),
-            (ast::Number::Integer(a), ast::Number::Float(b)) => ast::Number::Float(a as f64 + b),
-            (ast::Number::Float(a), ast::Number::Integer(b)) => ast::Number::Float(a + b as f64),
+        }
+
+        impl ops::$opname for &$($target)+ {
+            type Output = $($target)+;
+
+            fn $method(self, other: Self) -> $($target)+ {
+                match (self, other) {
+                    ($($target)+::Integer(a), $($target)+::Integer(b)) => $($target)+::Integer(a.$wrapping_method(*b)),
+                    ($($target)+::Float(a), $($target)+::Float(b)) => $($target)+::Float(a $op b),
+                    ($($target)+::Integer(a), $($target)+::Float(b)) => $($target)+::Float(*a as f64 $op b),
+                    ($($target)+::Float(a), $($target)+::Integer(b)) => $($target)+::Float(a $op *b as f64),
+                }
+            }
         }
     }
 }
 
-impl ops::Sub for ast::Number {
-    type Output = Self;
-
-    fn sub(self, other: Self) -> Self {
-        match (self, other) {
-            (ast::Number::Integer(a), ast::Number::Integer(b)) => {
-                ast::Number::Integer(a.wrapping_sub(b))
-            }
-            (ast::Number::Float(a), ast::Number::Float(b)) => ast::Number::Float(a - b),
-            (ast::Number::Integer(a), ast::Number::Float(b)) => ast::Number::Float(a as f64 - b),
-            (ast::Number::Float(a), ast::Number::Integer(b)) => ast::Number::Float(a - b as f64),
-        }
-    }
-}
-
-impl ops::Mul for ast::Number {
-    type Output = Self;
-
-    fn mul(self, other: Self) -> Self {
-        match (self, other) {
-            (ast::Number::Integer(a), ast::Number::Integer(b)) => {
-                ast::Number::Integer(a.wrapping_mul(b))
-            }
-            (ast::Number::Float(a), ast::Number::Float(b)) => ast::Number::Float(a * b),
-            (ast::Number::Integer(a), ast::Number::Float(b)) => ast::Number::Float(a as f64 * b),
-            (ast::Number::Float(a), ast::Number::Integer(b)) => ast::Number::Float(a * b as f64),
-        }
-    }
-}
-
-impl ops::Div for ast::Number {
-    type Output = Self;
-
-    fn div(self, other: Self) -> Self {
-        match (self, other) {
-            (ast::Number::Integer(a), ast::Number::Integer(b)) => {
-                ast::Number::Integer(a.wrapping_div(b))
-            }
-            (ast::Number::Float(a), ast::Number::Float(b)) => ast::Number::Float(a / b),
-            (ast::Number::Integer(a), ast::Number::Float(b)) => ast::Number::Float(a as f64 / b),
-            (ast::Number::Float(a), ast::Number::Integer(b)) => ast::Number::Float(a / b as f64),
-        }
-    }
-}
-
-impl ops::Rem for ast::Number {
-    type Output = Self;
-
-    fn rem(self, other: Self) -> Self {
-        match (self, other) {
-            (ast::Number::Integer(a), ast::Number::Integer(b)) => {
-                ast::Number::Integer(a.wrapping_rem(b))
-            }
-            (ast::Number::Float(a), ast::Number::Float(b)) => ast::Number::Float(a % b),
-            (ast::Number::Integer(a), ast::Number::Float(b)) => ast::Number::Float(a as f64 % b),
-            (ast::Number::Float(a), ast::Number::Integer(b)) => ast::Number::Float(a % b as f64),
-        }
-    }
-}
+impl_number_ops!(Add, +, add, wrapping_add, ast::Number);
+impl_number_ops!(Sub, -, sub, wrapping_sub, ast::Number);
+impl_number_ops!(Mul, *, mul, wrapping_mul, ast::Number);
+impl_number_ops!(Div, /, div, wrapping_div, ast::Number);
+impl_number_ops!(Rem, %, rem, wrapping_rem, ast::Number);
 
 impl ops::Neg for ast::Number {
     type Output = Self;
@@ -91,18 +52,29 @@ impl ops::Neg for ast::Number {
     }
 }
 
+impl ops::Neg for &ast::Number {
+    type Output = ast::Number;
+
+    fn neg(self) -> ast::Number {
+        match self {
+            ast::Number::Integer(a) => ast::Number::Integer(-*a),
+            ast::Number::Float(a) => ast::Number::Float(-*a),
+        }
+    }
+}
+
 impl ast::Number {
-    pub fn pow(self, other: Self) -> Self {
+    pub fn pow(&self, other: &Self) -> Self {
         match (self, other) {
             (ast::Number::Integer(a), ast::Number::Integer(b)) => {
-                ast::Number::Integer(a.wrapping_pow(b as u32))
+                ast::Number::Integer(a.wrapping_pow(*b as u32))
             }
-            (ast::Number::Float(a), ast::Number::Float(b)) => ast::Number::Float(a.powf(b)),
+            (ast::Number::Float(a), ast::Number::Float(b)) => ast::Number::Float(a.powf(*b)),
             (ast::Number::Integer(a), ast::Number::Float(b)) => {
-                ast::Number::Float((a as f64).powf(b))
+                ast::Number::Float((*a as f64).powf(*b))
             }
             (ast::Number::Float(a), ast::Number::Integer(b)) => {
-                ast::Number::Float(a.powi(b as i32))
+                ast::Number::Float(a.powi(*b as i32))
             }
         }
     }

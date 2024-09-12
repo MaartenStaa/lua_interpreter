@@ -16,10 +16,10 @@ pub enum LuaValue {
     Boolean(bool),
     Number(LuaNumber),
     String(Vec<u8>),
-    Table(LuaTable),
-    Function(ast::FunctionDef),
 
     // TODO: Implement these
+    Table(LuaTable),
+    Function(ast::FunctionDef),
     UserData,
     Thread,
 }
