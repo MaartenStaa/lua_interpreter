@@ -333,6 +333,8 @@ impl<'path, 'source> VM<'path, 'source> {
             self.ip += instruction_increment;
         }
 
+        assert!(self.stack_index == 0, "stack is not empty");
+
         Ok(())
     }
 }
