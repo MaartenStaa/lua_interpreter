@@ -309,7 +309,8 @@ impl<'path, 'source> Compiler<'path, 'source> {
         match op.node {
             UnaryOperator::Neg => self.vm.push_instruction(Instruction::Neg, Some(span)),
             UnaryOperator::Not => self.vm.push_instruction(Instruction::Not, Some(span)),
-            _ => todo!("compile_expression UnaryOp {:?}", op),
+            UnaryOperator::Length => self.vm.push_instruction(Instruction::Len, Some(span)),
+            UnaryOperator::BitwiseNot => self.vm.push_instruction(Instruction::BNot, Some(span)),
         }
     }
 }

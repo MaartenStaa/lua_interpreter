@@ -37,7 +37,8 @@ pub enum Instruction {
     // Unary operations
     Neg,
     Not,
-    // Len,
+    Len,
+    BNot,
 
     // Variables
     SetGlobal,

@@ -428,6 +428,23 @@ impl LuaValue {
             _ => true,
         }
     }
+
+    pub fn len(&self) -> miette::Result<LuaValue> {
+        match self {
+            LuaValue::String(s) => Ok(LuaValue::Number(LuaNumber::Integer(s.len() as i64))),
+            LuaValue::Table(_) => todo!("LuaValue::len for table"),
+            _ => Err(miette!("attempt to get length of a non-string value")),
+        }
+    }
+
+    pub fn bitwise_not(&self) -> miette::Result<Self> {
+        match self {
+            LuaValue::Number(n) => Ok(LuaValue::Number((!n)?)),
+            _ => Err(miette!(
+                "attempt to perform bitwise not on a non-number value"
+            )),
+        }
+    }
 }
 
 impl_number_ops!(Add, +, add, wrapping_add, LuaNumber);
@@ -498,6 +515,17 @@ impl ops::Shr for &LuaNumber {
         match (self.integer_repr(), other.integer_repr()) {
             (Ok(a), Ok(b)) => Ok(LuaNumber::Integer(a >> b)),
             (Err(e), _) | (_, Err(e)) => Err(e).wrap_err("during bitwise shift right"),
+        }
+    }
+}
+
+impl ops::Not for &LuaNumber {
+    type Output = miette::Result<LuaNumber>;
+
+    fn not(self) -> miette::Result<LuaNumber> {
+        match self.integer_repr() {
+            Ok(a) => Ok(LuaNumber::Integer(!a)),
+            Err(e) => Err(e).wrap_err("during bitwise not"),
         }
     }
 }

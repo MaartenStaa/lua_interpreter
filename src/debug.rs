@@ -127,6 +127,14 @@ pub fn print_instructions(vm: &VM) {
                 println!("NOT");
                 1
             }
+            Instruction::Len => {
+                println!("LEN");
+                1
+            }
+            Instruction::BNot => {
+                println!("BNOT");
+                1
+            }
 
             // Variables
             Instruction::SetGlobal => {

@@ -288,6 +288,16 @@ impl<'path, 'source> VM<'path, 'source> {
                     self.push(!a);
                     1
                 }
+                Instruction::Len => {
+                    let a = self.pop();
+                    self.push(a.len()?);
+                    1
+                }
+                Instruction::BNot => {
+                    let a = self.pop();
+                    self.push(a.bitwise_not()?);
+                    1
+                }
 
                 // Variables
                 Instruction::SetGlobal => {
