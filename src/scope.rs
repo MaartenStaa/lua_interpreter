@@ -6,6 +6,12 @@ pub struct DraftScope {
     labels: HashSet<String>,
 }
 
+impl Default for DraftScope {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DraftScope {
     pub fn new() -> Self {
         Self {

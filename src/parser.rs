@@ -1244,11 +1244,11 @@ impl<'source> Parser<'source> {
         // We've reached the global scope. Undefined variables are
         // implicitly declared as global (though without an initial value)
         self.scopes[0].register_variable(&name.identifier);
-        return ast::Name {
+        ast::Name {
             location: NameLocation {
                 scope_offset: self.scopes.len() - 1,
             },
             identifier: name.identifier,
-        };
+        }
     }
 }

@@ -731,9 +731,7 @@ impl<'source> Lexer<'source> {
                 // Hex float
                 (true, true) => {
                     let exponent_start = if has_exponent {
-                        literal
-                            .find(|c: char| c == 'p' || c == 'P')
-                            .expect("has exponent")
+                        literal.find(['p', 'P']).expect("has exponent")
                     } else {
                         literal.len()
                     };
