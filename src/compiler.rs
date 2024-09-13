@@ -2,7 +2,7 @@ use std::path::Path;
 
 use crate::{
     ast::{
-        BinaryOperator, Block, Expression, ForCondition, FunctionCall, Literal, Number,
+        BinaryOperator, Block, Expression, ForCondition, FunctionCall, Literal, Name, Number,
         PrefixExpression, Statement, TokenTree, UnaryOperator, Variable,
     },
     instruction::Instruction,
@@ -11,14 +11,27 @@ use crate::{
     vm::VM,
 };
 
+#[derive(Debug, Clone)]
+pub struct Local {
+    name: String,
+    depth: u8,
+}
+
+#[derive(Debug)]
 pub struct Compiler<'path, 'source> {
     vm: VM<'path, 'source>,
+    locals: Vec<Option<Local>>,
+    local_count: u8,
+    scope_depth: u8,
 }
 
 impl<'path, 'source> Compiler<'path, 'source> {
     pub fn new(filename: &'path Path, source: &'source str) -> Self {
         Self {
             vm: VM::new(filename, source),
+            locals: vec![None; u8::MAX as usize + 1],
+            local_count: 0,
+            scope_depth: 0,
         }
     }
 
@@ -37,11 +50,18 @@ impl<'path, 'source> Compiler<'path, 'source> {
     }
 
     fn compile_block(&mut self, ast: TokenTree<Block>) -> Vec<usize> {
-        ast.node
+        self.begin_scope();
+
+        let breaks = ast
+            .node
             .statements
             .into_iter()
             .flat_map(|statement| self.compile_statement(statement))
-            .collect()
+            .collect();
+
+        self.end_scope();
+
+        breaks
     }
 
     fn compile_statement(&mut self, statement: TokenTree<Statement>) -> Vec<usize> {
@@ -49,6 +69,27 @@ impl<'path, 'source> Compiler<'path, 'source> {
         match statement.node {
             Statement::FunctionCall(function_call) => {
                 self.compile_function_call(function_call);
+                vec![]
+            }
+            Statement::LocalDeclaraction(names, expressions) => {
+                let expression_count = expressions.len();
+                for expression in expressions {
+                    self.compile_expression(expression);
+                }
+
+                // Ensure we have enough expressions to match the names
+                for _ in expression_count..names.len() {
+                    self.compile_load_literal(TokenTree {
+                        node: Literal::Nil,
+                        span,
+                    });
+                }
+
+                for name in names {
+                    // TODO: Handle the attributes.
+                    self.add_local(name.node.name.node.identifier);
+                }
+
                 vec![]
             }
             Statement::Assignment { varlist, explist } => {
@@ -59,11 +100,7 @@ impl<'path, 'source> Compiler<'path, 'source> {
                 for variable in varlist {
                     match variable.node {
                         Variable::Name(name) => {
-                            // TODO: Is this global or local?
-                            let const_index =
-                                self.get_global_name_index(name.node.identifier.into_bytes());
-                            self.vm.push_instruction(Instruction::SetGlobal, Some(span));
-                            self.vm.push_instruction(const_index, None);
+                            self.assign_variable(name);
                         }
                         _ => todo!("compile_statement Assignment {:#?}", variable),
                     }
@@ -165,6 +202,8 @@ impl<'path, 'source> Compiler<'path, 'source> {
                 vec![]
             }
             Statement::For { condition, block } => {
+                self.begin_scope();
+
                 let (continue_addr, jmp_false_addr) = match condition.node {
                     ForCondition::NumericFor {
                         name,
@@ -175,21 +214,15 @@ impl<'path, 'source> Compiler<'path, 'source> {
                         // FIXME: Coerce all to float if initial and step are floats
 
                         // Define the initial value and variable
-                        let identifier_const_index =
-                            self.get_global_name_index(name.node.identifier.into_bytes());
                         self.compile_expression(initial);
-                        self.vm.push_instruction(Instruction::SetGlobal, Some(span));
-                        self.vm.push_instruction(identifier_const_index, None);
+                        let identifier_local = self.add_local(name.node.identifier);
 
                         // Create fake variables to hold the limit and step. Note that we use
                         // variable names that are invalid in Lua to avoid conflicts with user
                         // variables.
-                        let limit_const_index = self.get_global_name_index(b"#limit".to_vec());
                         self.compile_expression(limit);
-                        self.vm.push_instruction(Instruction::SetGlobal, Some(span));
-                        self.vm.push_instruction(limit_const_index, None);
+                        let limit_local = self.add_local("#limit".to_string());
 
-                        let step_const_index = self.get_global_name_index(b"#step".to_vec());
                         if let Some(step) = step {
                             self.compile_expression(step);
                         } else {
@@ -199,17 +232,16 @@ impl<'path, 'source> Compiler<'path, 'source> {
                                 span,
                             });
                         }
-                        self.vm.push_instruction(Instruction::SetGlobal, Some(span));
-                        self.vm.push_instruction(step_const_index, None);
+                        let step_local = self.add_local("#step".to_string());
 
                         // Label to jump back to the start of the loop
                         let condition_addr = self.vm.get_current_addr();
 
                         // Evaluate the limit
-                        self.vm.push_instruction(Instruction::GetGlobal, Some(span));
-                        self.vm.push_instruction(identifier_const_index, None);
-                        self.vm.push_instruction(Instruction::GetGlobal, Some(span));
-                        self.vm.push_instruction(limit_const_index, None);
+                        self.vm.push_instruction(Instruction::GetLocal, Some(span));
+                        self.vm.push_instruction(identifier_local, None);
+                        self.vm.push_instruction(Instruction::GetLocal, Some(span));
+                        self.vm.push_instruction(limit_local, None);
                         // TODO: Handle decreasing loops
                         self.vm.push_instruction(Instruction::Le, None);
                         self.vm.push_instruction(Instruction::JmpFalse, None);
@@ -224,13 +256,13 @@ impl<'path, 'source> Compiler<'path, 'source> {
 
                         // Compile the step
                         let step_addr = self.vm.get_current_addr();
-                        self.vm.push_instruction(Instruction::GetGlobal, Some(span));
-                        self.vm.push_instruction(identifier_const_index, None);
-                        self.vm.push_instruction(Instruction::GetGlobal, Some(span));
-                        self.vm.push_instruction(step_const_index, None);
+                        self.vm.push_instruction(Instruction::GetLocal, Some(span));
+                        self.vm.push_instruction(identifier_local, None);
+                        self.vm.push_instruction(Instruction::GetLocal, Some(span));
+                        self.vm.push_instruction(step_local, None);
                         self.vm.push_instruction(Instruction::Add, None);
-                        self.vm.push_instruction(Instruction::SetGlobal, Some(span));
-                        self.vm.push_instruction(identifier_const_index, None);
+                        self.vm.push_instruction(Instruction::SetLocal, Some(span));
+                        self.vm.push_instruction(identifier_local, None);
 
                         // After step, jump to the condition
                         self.vm.push_instruction(Instruction::Jmp, None);
@@ -259,6 +291,7 @@ impl<'path, 'source> Compiler<'path, 'source> {
                     self.vm.patch_addr_placeholder(break_jump);
                 }
 
+                self.end_scope();
                 vec![]
             }
             _ => todo!("compile_statement {:#?}", statement),
@@ -331,19 +364,10 @@ impl<'path, 'source> Compiler<'path, 'source> {
             PrefixExpression::Parenthesized(expression) => {
                 self.compile_expression(*expression);
             }
-            PrefixExpression::Variable(variable) => {
-                match variable.node {
-                    Variable::Name(name) => {
-                        // TODO: Is this global or local?
-                        let const_index =
-                            self.get_global_name_index(name.node.identifier.into_bytes());
-                        self.vm
-                            .push_instruction(Instruction::GetGlobal, Some(variable.span));
-                        self.vm.push_instruction(const_index, None);
-                    }
-                    _ => todo!("compile_prefix_expression Variable {:#?}", variable),
-                }
-            }
+            PrefixExpression::Variable(variable) => match variable.node {
+                Variable::Name(name) => self.load_variable(name),
+                _ => todo!("compile_prefix_expression Variable {:#?}", variable),
+            },
         }
     }
 
@@ -412,5 +436,74 @@ impl<'path, 'source> Compiler<'path, 'source> {
             UnaryOperator::Length => self.vm.push_instruction(Instruction::Len, Some(span)),
             UnaryOperator::BitwiseNot => self.vm.push_instruction(Instruction::BNot, Some(span)),
         }
+    }
+
+    fn assign_variable<T>(&mut self, name: TokenTree<Name<T>>) {
+        if let Some(local) = self.resolve_local(&name.node.identifier) {
+            self.vm
+                .push_instruction(Instruction::SetLocal, Some(name.span));
+            self.vm.push_instruction(local, None);
+        } else {
+            let const_index = self.get_global_name_index(name.node.identifier.into_bytes());
+            self.vm
+                .push_instruction(Instruction::SetGlobal, Some(name.span));
+            self.vm.push_instruction(const_index, None);
+        }
+    }
+
+    fn load_variable<T>(&mut self, name: TokenTree<Name<T>>) {
+        if let Some(local) = self.resolve_local(&name.node.identifier) {
+            self.vm
+                .push_instruction(Instruction::GetLocal, Some(name.span));
+            self.vm.push_instruction(local, None);
+        } else {
+            let const_index = self.get_global_name_index(name.node.identifier.into_bytes());
+            self.vm
+                .push_instruction(Instruction::GetGlobal, Some(name.span));
+            self.vm.push_instruction(const_index, None);
+        }
+    }
+
+    pub fn begin_scope(&mut self) {
+        self.scope_depth += 1;
+    }
+
+    pub fn end_scope(&mut self) {
+        self.scope_depth -= 1;
+
+        while self.local_count > 0
+            && self.locals[self.local_count as usize - 1]
+                .as_ref()
+                .map_or(false, |local| local.depth > self.scope_depth)
+        {
+            self.vm.push_instruction(Instruction::Pop, None);
+            self.local_count -= 1;
+        }
+    }
+
+    pub fn add_local(&mut self, name: String) -> u8 {
+        let local = Local {
+            name,
+            depth: self.scope_depth,
+        };
+        let index = self.local_count;
+
+        self.locals[index as usize] = Some(local);
+        self.local_count += 1;
+
+        index
+    }
+
+    pub fn resolve_local(&mut self, name: &str) -> Option<u8> {
+        self.locals[0..self.local_count as usize]
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(i, local)| {
+                local
+                    .as_ref()
+                    .filter(|local| local.name == name)
+                    .map(|_| i as u8)
+            })
     }
 }

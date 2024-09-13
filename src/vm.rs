@@ -317,6 +317,20 @@ impl<'path, 'source> VM<'path, 'source> {
                     self.push(value);
                     2
                 }
+                Instruction::SetLocal => {
+                    let local_index = self.instructions[self.ip + 1];
+                    // TODO: This is a clone, but we should probably be able to move it
+                    let value = self.pop();
+                    self.stack[local_index as usize] = value;
+                    2
+                }
+                Instruction::GetLocal => {
+                    let local_index = self.instructions[self.ip + 1];
+                    // TODO: This is a clone, but we should probably be able to move it
+                    let value = self.stack[local_index as usize].clone();
+                    self.push(value);
+                    2
+                }
 
                 // Control
                 Instruction::Jmp => {

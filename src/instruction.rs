@@ -43,6 +43,8 @@ pub enum Instruction {
     // Variables
     SetGlobal,
     GetGlobal,
+    SetLocal,
+    GetLocal,
 
     // // Table
     // NewTable,

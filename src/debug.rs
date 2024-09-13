@@ -151,6 +151,16 @@ pub fn print_instructions(vm: &VM) {
                 println!("   ({name_index})");
                 2
             }
+            Instruction::SetLocal => {
+                let local_index = instructions[instruction_pointer + 1];
+                println!("SET_LOCAL     {local_index}");
+                2
+            }
+            Instruction::GetLocal => {
+                let local_index = instructions[instruction_pointer + 1];
+                println!("GET_LOCAL     {local_index}");
+                2
+            }
 
             // Control
             Instruction::Jmp => {
