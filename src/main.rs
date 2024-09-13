@@ -109,5 +109,5 @@ fn run_debug_parser(mut parser: parser::Parser) {
         }
     };
 
-    dbg!(ast);
+    println!("{:#?}", ast);
 }
