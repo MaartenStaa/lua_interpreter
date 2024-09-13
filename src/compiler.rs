@@ -2,8 +2,8 @@ use std::path::Path;
 
 use crate::{
     ast::{
-        BinaryOperator, Block, Expression, FunctionCall, Literal, Number, PrefixExpression,
-        Statement, TokenTree, UnaryOperator, Variable,
+        BinaryOperator, Block, Expression, ForCondition, FunctionCall, Literal, Name, Number,
+        PrefixExpression, Statement, TokenTree, UnaryOperator, Variable,
     },
     instruction::Instruction,
     token::Span,
@@ -161,6 +161,88 @@ impl<'path, 'source> Compiler<'path, 'source> {
                     self.vm.patch_addr_placeholder(break_jump);
                 }
                 self.vm.patch_addr_placeholder(jmp_false_addr);
+                vec![]
+            }
+            Statement::For { condition, block } => {
+                let (continue_addr, jmp_false_addr) = match condition.node {
+                    ForCondition::NumericFor {
+                        name,
+                        initial,
+                        limit,
+                        step,
+                    } => {
+                        // FIXME: Ensure the initial, limit, and step are all only evaluated once
+                        // FIXME: Coerce all to float if initial and step are floats
+
+                        // Define the initial value and variable
+                        self.compile_expression(initial);
+                        let const_index = self.get_global_name_index(name);
+                        self.vm.push_instruction(Instruction::SetGlobal, Some(span));
+                        self.vm.push_instruction(const_index, None);
+
+                        // Label to jump back to the start of the loop
+                        let condition_addr = self.vm.get_current_addr();
+
+                        // Evaluate the limit
+                        self.vm.push_instruction(Instruction::GetGlobal, Some(span));
+                        self.vm.push_instruction(const_index, None);
+                        self.compile_expression(limit);
+                        // TODO: Handle decreasing loops
+                        self.vm.push_instruction(Instruction::Le, None);
+                        self.vm.push_instruction(Instruction::JmpFalse, None);
+                        let jmp_false_addr = self.vm.push_addr_placeholder();
+
+                        // Pop the condition value
+                        self.vm.push_instruction(Instruction::Pop, None);
+
+                        // Jump into the loop
+                        self.vm.push_instruction(Instruction::Jmp, None);
+                        let inside_block_jump = self.vm.push_addr_placeholder();
+
+                        // Compile the step
+                        let step_addr = self.vm.get_current_addr();
+                        self.vm.push_instruction(Instruction::GetGlobal, Some(span));
+                        self.vm.push_instruction(const_index, None);
+                        if let Some(step) = step {
+                            self.compile_expression(step);
+                        } else {
+                            // TODO: Decrementing loops
+                            self.compile_load_literal(TokenTree {
+                                node: Literal::Number(Number::Integer(1)),
+                                span,
+                            });
+                        }
+                        self.vm.push_instruction(Instruction::Add, None);
+                        self.vm.push_instruction(Instruction::SetGlobal, Some(span));
+                        self.vm.push_instruction(const_index, None);
+
+                        // After step, jump to the condition
+                        self.vm.push_instruction(Instruction::Jmp, None);
+                        self.vm.push_addr(condition_addr);
+
+                        // Path the inside block jump
+                        self.vm.patch_addr_placeholder(inside_block_jump);
+
+                        (step_addr, jmp_false_addr)
+                    }
+                    _ => todo!("compile_statement For {:#?}", condition),
+                };
+
+                let break_jumps = self.compile_block(block);
+
+                // Jump back to the step evaluation
+                self.vm.push_instruction(Instruction::Jmp, None);
+                self.vm.push_addr(continue_addr);
+
+                // Patch the false condition jump
+                self.vm.patch_addr_placeholder(jmp_false_addr);
+                self.vm.push_instruction(Instruction::Pop, None);
+
+                // Patch any break jumps
+                for break_jump in break_jumps {
+                    self.vm.patch_addr_placeholder(break_jump);
+                }
+
                 vec![]
             }
             _ => todo!("compile_statement {:#?}", statement),
