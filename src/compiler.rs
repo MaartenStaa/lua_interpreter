@@ -29,6 +29,13 @@ impl<'path, 'source> Compiler<'path, 'source> {
         self.vm
     }
 
+    fn get_global_name_index<T>(&mut self, name: TokenTree<Name<T>>) -> u8 {
+        let lua_const = LuaConst::String(name.node.identifier.into_bytes());
+        self.vm
+            .lookup_const(&lua_const)
+            .unwrap_or_else(|| self.vm.register_const(lua_const))
+    }
+
     fn compile_block(&mut self, ast: TokenTree<Block>) -> Vec<usize> {
         ast.node
             .statements
@@ -53,9 +60,7 @@ impl<'path, 'source> Compiler<'path, 'source> {
                     match variable.node {
                         Variable::Name(name) => {
                             // TODO: Is this global or local?
-                            let const_index = self.vm.register_const(LuaConst::String(
-                                name.node.identifier.into_bytes(),
-                            ));
+                            let const_index = self.get_global_name_index(name);
                             self.vm.push_instruction(Instruction::SetGlobal, Some(span));
                             self.vm.push_instruction(const_index, None);
                         }
@@ -232,11 +237,7 @@ impl<'path, 'source> Compiler<'path, 'source> {
                 match variable.node {
                     Variable::Name(name) => {
                         // TODO: Is this global or local?
-                        let name_lua_string = LuaConst::String(name.node.identifier.into_bytes());
-                        let const_index = self
-                            .vm
-                            .lookup_const(&name_lua_string)
-                            .unwrap_or_else(|| self.vm.register_const(name_lua_string));
+                        let const_index = self.get_global_name_index(name);
                         self.vm
                             .push_instruction(Instruction::GetGlobal, Some(variable.span));
                         self.vm.push_instruction(const_index, None);
