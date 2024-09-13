@@ -2,7 +2,7 @@ use std::path::Path;
 
 use crate::{
     ast::{
-        BinaryOperator, Block, Expression, ForCondition, FunctionCall, Literal, Name, Number,
+        BinaryOperator, Block, Expression, ForCondition, FunctionCall, Literal, Number,
         PrefixExpression, Statement, TokenTree, UnaryOperator, Variable,
     },
     instruction::Instruction,
@@ -29,8 +29,8 @@ impl<'path, 'source> Compiler<'path, 'source> {
         self.vm
     }
 
-    fn get_global_name_index<T>(&mut self, name: TokenTree<Name<T>>) -> u8 {
-        let lua_const = LuaConst::String(name.node.identifier.into_bytes());
+    fn get_global_name_index(&mut self, name: Vec<u8>) -> u8 {
+        let lua_const = LuaConst::String(name);
         self.vm
             .lookup_const(&lua_const)
             .unwrap_or_else(|| self.vm.register_const(lua_const))
@@ -60,7 +60,8 @@ impl<'path, 'source> Compiler<'path, 'source> {
                     match variable.node {
                         Variable::Name(name) => {
                             // TODO: Is this global or local?
-                            let const_index = self.get_global_name_index(name);
+                            let const_index =
+                                self.get_global_name_index(name.node.identifier.into_bytes());
                             self.vm.push_instruction(Instruction::SetGlobal, Some(span));
                             self.vm.push_instruction(const_index, None);
                         }
@@ -171,22 +172,44 @@ impl<'path, 'source> Compiler<'path, 'source> {
                         limit,
                         step,
                     } => {
-                        // FIXME: Ensure the initial, limit, and step are all only evaluated once
                         // FIXME: Coerce all to float if initial and step are floats
 
                         // Define the initial value and variable
+                        let identifier_const_index =
+                            self.get_global_name_index(name.node.identifier.into_bytes());
                         self.compile_expression(initial);
-                        let const_index = self.get_global_name_index(name);
                         self.vm.push_instruction(Instruction::SetGlobal, Some(span));
-                        self.vm.push_instruction(const_index, None);
+                        self.vm.push_instruction(identifier_const_index, None);
+
+                        // Create fake variables to hold the limit and step. Note that we use
+                        // variable names that are invalid in Lua to avoid conflicts with user
+                        // variables.
+                        let limit_const_index = self.get_global_name_index(b"#limit".to_vec());
+                        self.compile_expression(limit);
+                        self.vm.push_instruction(Instruction::SetGlobal, Some(span));
+                        self.vm.push_instruction(limit_const_index, None);
+
+                        let step_const_index = self.get_global_name_index(b"#step".to_vec());
+                        if let Some(step) = step {
+                            self.compile_expression(step);
+                        } else {
+                            // TODO: Decrementing loops
+                            self.compile_load_literal(TokenTree {
+                                node: Literal::Number(Number::Integer(1)),
+                                span,
+                            });
+                        }
+                        self.vm.push_instruction(Instruction::SetGlobal, Some(span));
+                        self.vm.push_instruction(step_const_index, None);
 
                         // Label to jump back to the start of the loop
                         let condition_addr = self.vm.get_current_addr();
 
                         // Evaluate the limit
                         self.vm.push_instruction(Instruction::GetGlobal, Some(span));
-                        self.vm.push_instruction(const_index, None);
-                        self.compile_expression(limit);
+                        self.vm.push_instruction(identifier_const_index, None);
+                        self.vm.push_instruction(Instruction::GetGlobal, Some(span));
+                        self.vm.push_instruction(limit_const_index, None);
                         // TODO: Handle decreasing loops
                         self.vm.push_instruction(Instruction::Le, None);
                         self.vm.push_instruction(Instruction::JmpFalse, None);
@@ -202,19 +225,12 @@ impl<'path, 'source> Compiler<'path, 'source> {
                         // Compile the step
                         let step_addr = self.vm.get_current_addr();
                         self.vm.push_instruction(Instruction::GetGlobal, Some(span));
-                        self.vm.push_instruction(const_index, None);
-                        if let Some(step) = step {
-                            self.compile_expression(step);
-                        } else {
-                            // TODO: Decrementing loops
-                            self.compile_load_literal(TokenTree {
-                                node: Literal::Number(Number::Integer(1)),
-                                span,
-                            });
-                        }
+                        self.vm.push_instruction(identifier_const_index, None);
+                        self.vm.push_instruction(Instruction::GetGlobal, Some(span));
+                        self.vm.push_instruction(step_const_index, None);
                         self.vm.push_instruction(Instruction::Add, None);
                         self.vm.push_instruction(Instruction::SetGlobal, Some(span));
-                        self.vm.push_instruction(const_index, None);
+                        self.vm.push_instruction(identifier_const_index, None);
 
                         // After step, jump to the condition
                         self.vm.push_instruction(Instruction::Jmp, None);
@@ -319,7 +335,8 @@ impl<'path, 'source> Compiler<'path, 'source> {
                 match variable.node {
                     Variable::Name(name) => {
                         // TODO: Is this global or local?
-                        let const_index = self.get_global_name_index(name);
+                        let const_index =
+                            self.get_global_name_index(name.node.identifier.into_bytes());
                         self.vm
                             .push_instruction(Instruction::GetGlobal, Some(variable.span));
                         self.vm.push_instruction(const_index, None);
