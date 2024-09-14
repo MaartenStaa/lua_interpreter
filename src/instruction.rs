@@ -55,8 +55,8 @@ pub enum Instruction {
     // Self_,
     // // Function
     // Closure,
-    // Call,
-    // Return,
+    Call,
+    Return,
 
     // Control
     Jmp,
@@ -65,9 +65,6 @@ pub enum Instruction {
     // JmpRel,
     // Test,
 
-    // // Upvalue
-    // GetUpval,
-    // SetUpval,
     // // Vararg
     // Vararg,
     // // Extra

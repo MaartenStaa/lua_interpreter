@@ -25,6 +25,14 @@ pub struct VM<'path, 'source> {
     stack: Vec<LuaValue>,
     stack_index: usize,
     globals: HashMap<u8, LuaValue>,
+    call_stack: Vec<CallFrame>,
+}
+
+#[derive(Debug)]
+struct CallFrame {
+    name: Option<String>,
+    frame_pointer: usize,
+    return_addr: usize,
 }
 
 impl<'path, 'source> VM<'path, 'source> {
@@ -40,6 +48,8 @@ impl<'path, 'source> VM<'path, 'source> {
             stack: vec![LuaValue::Nil; MAX_STACK_SIZE],
             stack_index: 0,
             globals: HashMap::new(),
+            // TODO: Allocate all of this up front like the stack.
+            call_stack: vec![],
         }
     }
 
@@ -116,6 +126,12 @@ impl<'path, 'source> VM<'path, 'source> {
     }
 
     pub fn run(&mut self) {
+        self.call_stack.push(CallFrame {
+            name: Some(format!("<file> {}", self.filename.to_string_lossy())),
+            frame_pointer: 0,
+            return_addr: self.get_current_addr() as usize,
+        });
+
         if let Err(err) = self.run_inner() {
             let labels = if let Some(span) = self.instruction_spans.get(&self.ip) {
                 vec![span.labeled("here")]
@@ -126,7 +142,16 @@ impl<'path, 'source> VM<'path, 'source> {
             // FIXME: This is a workaround for the fact that miette doesn't support
             // adding labels ad-hoc, but it ends up printing the error message
             // kind of weirdly.
-            let err = miette!(labels = labels, "{err:?}").with_source_code(
+            let mut err = miette!(labels = labels, "{err:?}");
+            // Attach stack trace
+            for (i, frame) in self.call_stack.iter().rev().enumerate() {
+                err = err.wrap_err(format!(
+                    "#{i} {}",
+                    // TODO: Maybe anonymous is a better name?
+                    frame.name.as_deref().unwrap_or("<unknown>")
+                ));
+            }
+            err = err.with_source_code(
                 NamedSource::new(self.filename.to_string_lossy(), self.source.to_string())
                     .with_language("lua"),
             );
@@ -319,17 +344,50 @@ impl<'path, 'source> VM<'path, 'source> {
                 }
                 Instruction::SetLocal => {
                     let local_index = self.instructions[self.ip + 1];
+                    let frame_pointer = self.call_stack.last().unwrap().frame_pointer;
                     // TODO: This is a clone, but we should probably be able to move it
                     let value = self.pop();
-                    self.stack[local_index as usize] = value;
+                    self.stack[frame_pointer + local_index as usize] = value;
                     2
                 }
                 Instruction::GetLocal => {
                     let local_index = self.instructions[self.ip + 1];
+                    let current_frame = self.call_stack.last().unwrap();
                     // TODO: This is a clone, but we should probably be able to move it
-                    let value = self.stack[local_index as usize].clone();
+                    let value =
+                        self.stack[current_frame.frame_pointer + local_index as usize].clone();
                     self.push(value);
                     2
+                }
+
+                // Function
+                Instruction::Call => {
+                    let function = self.pop();
+                    match function {
+                        LuaValue::Function(name, f) => {
+                            self.call_stack.push(CallFrame {
+                                name,
+                                frame_pointer: self.stack_index,
+                                return_addr: self.ip + 2,
+                            });
+                            self.ip = f as usize;
+                            continue;
+                        }
+                        _ => {
+                            return Err(miette!("attempt to call a non-function"));
+                        }
+                    }
+                }
+                Instruction::Return => {
+                    // TODO: Handle return values
+                    let frame = self.call_stack.pop().unwrap();
+                    self.ip = frame.return_addr;
+                    // Check if this is the root frame
+                    if self.call_stack.is_empty() {
+                        break;
+                    } else {
+                        continue;
+                    }
                 }
 
                 // Control

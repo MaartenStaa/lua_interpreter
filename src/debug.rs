@@ -1,5 +1,6 @@
 use crate::{
     instruction::Instruction,
+    value::LuaConst,
     vm::{JumpAddr, VM},
 };
 
@@ -162,6 +163,16 @@ pub fn print_instructions(vm: &VM) {
                 2
             }
 
+            // Function
+            Instruction::Call => {
+                println!("CALL");
+                1
+            }
+            Instruction::Return => {
+                println!("RETURN");
+                1
+            }
+
             // Control
             Instruction::Jmp => {
                 let offset_bytes = &instructions[instruction_pointer + 1
@@ -189,12 +200,13 @@ pub fn print_instructions(vm: &VM) {
     }
 }
 
-fn print_const(constant: &crate::value::LuaConst) {
+fn print_const(constant: &LuaConst) {
     match constant {
-        crate::value::LuaConst::Nil => print!("NIL"),
-        crate::value::LuaConst::Boolean(b) => print!("{b}"),
-        crate::value::LuaConst::Number(n) => print_number(n),
-        crate::value::LuaConst::String(s) => print!("STRING    \"{}\"", String::from_utf8_lossy(s)),
+        LuaConst::Nil => print!("NIL"),
+        LuaConst::Boolean(b) => print!("{b}"),
+        LuaConst::Number(n) => print_number(n),
+        LuaConst::String(s) => print!("STRING    \"{}\"", String::from_utf8_lossy(s)),
+        LuaConst::Function(name, f) => print!("FUNCTION  {name:?} {f:04}"),
     }
 }
 

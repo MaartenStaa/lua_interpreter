@@ -1,14 +1,13 @@
 use miette::miette;
 use std::fmt::Display;
 
-use crate::ast;
-
 #[derive(Debug, Clone, PartialEq)]
 pub enum LuaConst {
     Nil,
     Boolean(bool),
     Number(LuaNumber),
     String(Vec<u8>),
+    Function(Option<String>, u16),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -20,7 +19,7 @@ pub enum LuaValue {
 
     // TODO: Implement these
     Table(LuaTable),
-    Function(ast::FunctionDef),
+    Function(Option<String>, u16),
     UserData,
     Thread,
 }
@@ -32,6 +31,7 @@ impl From<LuaConst> for LuaValue {
             LuaConst::Boolean(b) => LuaValue::Boolean(b),
             LuaConst::Number(n) => LuaValue::Number(n),
             LuaConst::String(s) => LuaValue::String(s),
+            LuaConst::Function(name, f) => LuaValue::Function(name, f),
         }
     }
 }
@@ -44,7 +44,7 @@ impl LuaValue {
             LuaValue::Number(_) => "number",
             LuaValue::String(_) => "string",
             LuaValue::Table(_) => "table",
-            LuaValue::Function(_) => "function",
+            LuaValue::Function(_, _) => "function",
             LuaValue::UserData => "userdata",
             LuaValue::Thread => "thread",
         }
@@ -92,6 +92,13 @@ impl Display for LuaValue {
             LuaValue::Boolean(b) => write!(f, "{}", b),
             LuaValue::Number(n) => write!(f, "{}", n),
             LuaValue::String(s) => write!(f, "{}", String::from_utf8_lossy(s)),
+            LuaValue::Function(name, a) => {
+                if let Some(name) = name {
+                    write!(f, "function<{name}:{a:04}>")
+                } else {
+                    write!(f, "function<{a:04}>")
+                }
+            }
             _ => todo!("formatting a {self:?}"),
         }
     }

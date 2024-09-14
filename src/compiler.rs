@@ -2,8 +2,8 @@ use std::path::Path;
 
 use crate::{
     ast::{
-        BinaryOperator, Block, Expression, ForCondition, FunctionCall, Literal, Name, Number,
-        PrefixExpression, Statement, TokenTree, UnaryOperator, Variable,
+        BinaryOperator, Block, Expression, ForCondition, FunctionCall, FunctionDef, Literal, Name,
+        Number, PrefixExpression, Statement, TokenTree, UnaryOperator, Variable,
     },
     instruction::Instruction,
     token::Span,
@@ -17,26 +17,70 @@ pub struct Local {
     depth: u8,
 }
 
+struct BlockOptions {
+    is_loop: bool,
+    new_scope: bool,
+}
+
+#[derive(Debug, Default)]
+struct BlockResult {
+    breaks: Vec<usize>,
+}
+
+#[derive(Debug)]
+struct Frame {
+    locals: Vec<Local>,
+    scope_depth: u8,
+}
+
+impl Frame {
+    fn resolve_local(&self, name: &str) -> Option<u8> {
+        self.locals.iter().enumerate().rev().find_map(|(i, local)| {
+            if local.name == name {
+                Some(i as u8)
+            } else {
+                None
+            }
+        })
+    }
+}
+
 #[derive(Debug)]
 pub struct Compiler<'path, 'source> {
     vm: VM<'path, 'source>,
-    locals: Vec<Option<Local>>,
-    local_count: u8,
-    scope_depth: u8,
+    frames: Vec<Frame>,
+}
+
+impl BlockResult {
+    fn new() -> Self {
+        Self { breaks: vec![] }
+    }
+
+    fn extend(&mut self, other: Self) {
+        self.breaks.extend(other.breaks);
+    }
 }
 
 impl<'path, 'source> Compiler<'path, 'source> {
     pub fn new(filename: &'path Path, source: &'source str) -> Self {
         Self {
             vm: VM::new(filename, source),
-            locals: vec![None; u8::MAX as usize + 1],
-            local_count: 0,
-            scope_depth: 0,
+            // Start at the root of the file.
+            frames: vec![Frame {
+                locals: vec![],
+                scope_depth: 0,
+            }],
         }
     }
 
     pub fn compile(mut self, ast: TokenTree<Block>) -> VM<'path, 'source> {
-        self.compile_block(ast);
+        self.compile_block(
+            ast,
+            BlockOptions {
+                is_loop: false,
+                new_scope: true,
+            },
+        );
         self.vm.push_instruction(Instruction::Halt, None);
 
         self.vm
@@ -49,27 +93,38 @@ impl<'path, 'source> Compiler<'path, 'source> {
             .unwrap_or_else(|| self.vm.register_const(lua_const))
     }
 
-    fn compile_block(&mut self, ast: TokenTree<Block>) -> Vec<usize> {
-        self.begin_scope();
+    fn compile_block(&mut self, ast: TokenTree<Block>, options: BlockOptions) -> BlockResult {
+        if options.new_scope {
+            self.begin_scope();
+        }
 
-        let breaks = ast
-            .node
-            .statements
-            .into_iter()
-            .flat_map(|statement| self.compile_statement(statement))
-            .collect();
+        let mut block_result = BlockResult { breaks: vec![] };
 
-        self.end_scope();
+        for statement in ast.node.statements {
+            block_result.extend(self.compile_statement(statement, &options));
+        }
 
-        breaks
+        if let Some(return_statement) = ast.node.return_statement {
+            todo!("compile_block return_statement {:#?}", return_statement);
+        }
+
+        if options.new_scope {
+            self.end_scope();
+        }
+
+        block_result
     }
 
-    fn compile_statement(&mut self, statement: TokenTree<Statement>) -> Vec<usize> {
+    fn compile_statement(
+        &mut self,
+        statement: TokenTree<Statement>,
+        options: &BlockOptions,
+    ) -> BlockResult {
         let span = statement.span;
         match statement.node {
             Statement::FunctionCall(function_call) => {
                 self.compile_function_call(function_call);
-                vec![]
+                BlockResult::new()
             }
             Statement::LocalDeclaraction(names, expressions) => {
                 let expression_count = expressions.len();
@@ -90,7 +145,7 @@ impl<'path, 'source> Compiler<'path, 'source> {
                     self.add_local(name.node.name.node.identifier);
                 }
 
-                vec![]
+                BlockResult::new()
             }
             Statement::Assignment { varlist, explist } => {
                 for expression in explist {
@@ -106,7 +161,7 @@ impl<'path, 'source> Compiler<'path, 'source> {
                     }
                 }
 
-                vec![]
+                BlockResult::new()
             }
             Statement::If {
                 condition,
@@ -114,7 +169,7 @@ impl<'path, 'source> Compiler<'path, 'source> {
                 else_ifs,
                 else_block,
             } => {
-                let mut break_jumps = vec![];
+                let mut block_result = BlockResult::new();
                 // Push expression
                 self.compile_expression(condition);
                 // Jump to the end of the block if the condition is false
@@ -123,7 +178,13 @@ impl<'path, 'source> Compiler<'path, 'source> {
                 // Pop the condition value
                 self.vm.push_instruction(Instruction::Pop, None);
                 // Compile the block
-                break_jumps.extend(self.compile_block(block));
+                block_result.extend(self.compile_block(
+                    block,
+                    BlockOptions {
+                        is_loop: options.is_loop,
+                        new_scope: true,
+                    },
+                ));
                 // Jump to the end of the if statement
                 self.vm.push_instruction(Instruction::Jmp, None);
                 let mut jmp_end_addrs = vec![self.vm.push_addr_placeholder()];
@@ -140,7 +201,13 @@ impl<'path, 'source> Compiler<'path, 'source> {
                     // Pop the condition value
                     self.vm.push_instruction(Instruction::Pop, None);
                     // Compile the block
-                    break_jumps.extend(self.compile_block(else_if.node.block));
+                    block_result.extend(self.compile_block(
+                        else_if.node.block,
+                        BlockOptions {
+                            is_loop: options.is_loop,
+                            new_scope: true,
+                        },
+                    ));
                     // Jump to the end of the if statement
                     self.vm.push_instruction(Instruction::Jmp, None);
                     jmp_end_addrs.push(self.vm.push_addr_placeholder());
@@ -150,7 +217,13 @@ impl<'path, 'source> Compiler<'path, 'source> {
                 let else_jump_addr = if let Some(else_block) = else_block {
                     // Pop the initial condition
                     self.vm.push_instruction(Instruction::Pop, None);
-                    break_jumps.extend(self.compile_block(else_block));
+                    block_result.extend(self.compile_block(
+                        else_block,
+                        BlockOptions {
+                            is_loop: options.is_loop,
+                            new_scope: true,
+                        },
+                    ));
                     self.vm.push_instruction(Instruction::Jmp, None);
                     Some(self.vm.push_addr_placeholder())
                 } else {
@@ -163,11 +236,17 @@ impl<'path, 'source> Compiler<'path, 'source> {
                 if let Some(else_jump_addr) = else_jump_addr {
                     self.vm.patch_addr_placeholder(else_jump_addr);
                 }
-                break_jumps
+                block_result
             }
             Statement::Break => {
+                // TODO: Issue an error if not in a loop
+
                 self.vm.push_instruction(Instruction::Jmp, Some(span));
-                vec![self.vm.push_addr_placeholder()]
+                let break_jump = self.vm.push_addr_placeholder();
+
+                BlockResult {
+                    breaks: vec![break_jump],
+                }
             }
             Statement::Repeat { block, condition } => {
                 // Jump into the block
@@ -177,29 +256,41 @@ impl<'path, 'source> Compiler<'path, 'source> {
                 let start_addr = self.vm.get_current_addr();
                 self.vm.push_instruction(Instruction::Pop, None);
                 self.vm.patch_addr_placeholder(inside_block_jump);
-                let break_jumps = self.compile_block(block);
+                let block_result = self.compile_block(
+                    block,
+                    BlockOptions {
+                        is_loop: true,
+                        new_scope: true,
+                    },
+                );
                 self.compile_expression(condition);
                 self.vm.push_instruction(Instruction::JmpFalse, None);
                 self.vm.push_addr(start_addr);
                 self.vm.push_instruction(Instruction::Pop, None);
-                for break_jump in break_jumps {
+                for break_jump in block_result.breaks {
                     self.vm.patch_addr_placeholder(break_jump);
                 }
-                vec![]
+                BlockResult::new()
             }
             Statement::While { condition, block } => {
                 let start_addr = self.vm.get_current_addr();
                 self.compile_expression(condition);
                 self.vm.push_instruction(Instruction::JmpFalse, None);
                 let jmp_false_addr = self.vm.push_addr_placeholder();
-                let break_jumps = self.compile_block(block);
+                let block_result = self.compile_block(
+                    block,
+                    BlockOptions {
+                        is_loop: true,
+                        new_scope: true,
+                    },
+                );
                 self.vm.push_instruction(Instruction::Jmp, None);
                 self.vm.push_addr(start_addr);
-                for break_jump in break_jumps {
+                for break_jump in block_result.breaks {
                     self.vm.patch_addr_placeholder(break_jump);
                 }
                 self.vm.patch_addr_placeholder(jmp_false_addr);
-                vec![]
+                BlockResult::new()
             }
             Statement::For { condition, block } => {
                 self.begin_scope();
@@ -276,7 +367,13 @@ impl<'path, 'source> Compiler<'path, 'source> {
                     _ => todo!("compile_statement For {:#?}", condition),
                 };
 
-                let break_jumps = self.compile_block(block);
+                let block_result = self.compile_block(
+                    block,
+                    BlockOptions {
+                        is_loop: true,
+                        new_scope: false,
+                    },
+                );
 
                 // Jump back to the step evaluation
                 self.vm.push_instruction(Instruction::Jmp, None);
@@ -287,23 +384,24 @@ impl<'path, 'source> Compiler<'path, 'source> {
                 self.vm.push_instruction(Instruction::Pop, None);
 
                 // Patch any break jumps
-                for break_jump in break_jumps {
+                for break_jump in block_result.breaks {
                     self.vm.patch_addr_placeholder(break_jump);
                 }
 
                 self.end_scope();
-                vec![]
+                BlockResult::new()
             }
             _ => todo!("compile_statement {:#?}", statement),
         }
     }
 
     fn compile_function_call(&mut self, function_call: TokenTree<FunctionCall>) {
+        let arg_count = function_call.node.args.len();
         for argument in function_call.node.args {
             self.compile_expression(argument);
         }
 
-        match &*function_call.node.function {
+        match *function_call.node.function {
             TokenTree {
                 node:
                     PrefixExpression::Variable(TokenTree {
@@ -311,12 +409,85 @@ impl<'path, 'source> Compiler<'path, 'source> {
                         ..
                     }),
                 ..
-            } if name.node.identifier == "print" => {
-                self.vm
-                    .push_instruction(Instruction::Print, Some(function_call.span));
+            } => {
+                if name.node.identifier == "print" {
+                    // TODO: Handle multiple arguments
+                    // TODO: Remove this hack and issue a regular call instruction
+                    self.vm
+                        .push_instruction(Instruction::Print, Some(function_call.span));
+                } else {
+                    self.load_variable(name);
+                    self.vm
+                        .push_instruction(Instruction::Call, Some(function_call.span));
+                    self.vm.push_instruction(arg_count as u8, None);
+                }
             }
+
             _ => todo!("compile_function_call for other than `print`"),
         }
+    }
+
+    // FIXME: `name` is currently always `None`
+    fn compile_function_def(&mut self, function_def: TokenTree<FunctionDef>, name: Option<String>) {
+        // We'll issue the bytecode inline here, but jump over it at runtime
+        self.vm.push_instruction(Instruction::Jmp, None);
+        let jmp_over_func_addr = self.vm.push_addr_placeholder();
+
+        // Compile the function
+        self.begin_frame();
+        self.begin_scope();
+        let func_addr = self.vm.get_current_addr();
+
+        // Calling conventions:
+        // The stack will look like this when entering a function:
+        // [arg1]
+        // [arg2]
+        // ...
+        // [argN]
+        // [num_args]
+        // [return_addr]
+        // [frame_pointer]
+        //
+        // The function will push the return values onto the stack, followed by the number of
+        // return values. The caller will then pop the return values off the stack.
+
+        // Store the return address
+        // self.add_local("#return_addr".to_string());
+
+        // Define the function arguments
+        //
+
+        let has_return = function_def.node.block.node.return_statement.is_some();
+        self.compile_block(
+            function_def.node.block,
+            BlockOptions {
+                is_loop: false,
+                // Already started the function scope above
+                new_scope: false,
+            },
+        );
+
+        // TODO: How to handle return values?
+        self.end_scope();
+        self.end_frame();
+
+        if !has_return {
+            // TODO: Implicit return nil
+            // let nil_const_index = self.vm.register_const(LuaConst::Nil);
+            // self.vm.push_instruction(Instruction::LoadConst, None);
+            // self.vm.push_instruction(nil_const_index, None);
+            self.vm.push_instruction(Instruction::Return, None);
+            // self.vm.push_instruction(1, None);
+        }
+
+        // Jump over the function
+        self.vm.patch_addr_placeholder(jmp_over_func_addr);
+
+        // Save the function definition
+        let const_index = self.vm.register_const(LuaConst::Function(name, func_addr));
+        self.vm
+            .push_instruction(Instruction::LoadConst, Some(function_def.span));
+        self.vm.push_instruction(const_index, None);
     }
 
     fn compile_expression(&mut self, expression: TokenTree<Expression>) {
@@ -351,6 +522,9 @@ impl<'path, 'source> Compiler<'path, 'source> {
             Expression::UnaryOp { op, rhs } => {
                 self.compile_expression(*rhs);
                 self.compile_unary_operator(op, expression.span);
+            }
+            Expression::FunctionDef(function_def) => {
+                self.compile_function_def(function_def, None);
             }
             _ => todo!("compile_expression {:?}", expression),
         }
@@ -464,46 +638,52 @@ impl<'path, 'source> Compiler<'path, 'source> {
         }
     }
 
+    pub fn begin_frame(&mut self) {
+        self.frames.push(Frame {
+            locals: vec![],
+            scope_depth: 0,
+        });
+    }
+
+    pub fn end_frame(&mut self) {
+        self.frames.pop();
+    }
+
     pub fn begin_scope(&mut self) {
-        self.scope_depth += 1;
+        let current_frame = self.frames.last_mut().unwrap();
+        current_frame.scope_depth += 1;
     }
 
     pub fn end_scope(&mut self) {
-        self.scope_depth -= 1;
+        let current_frame = self.frames.last_mut().unwrap();
+        current_frame.scope_depth -= 1;
 
-        while self.local_count > 0
-            && self.locals[self.local_count as usize - 1]
+        while !current_frame.locals.is_empty()
+            && current_frame
+                .locals
+                .last()
                 .as_ref()
-                .map_or(false, |local| local.depth > self.scope_depth)
+                .map_or(false, |local| local.depth > current_frame.scope_depth)
         {
+            current_frame.locals.pop();
             self.vm.push_instruction(Instruction::Pop, None);
-            self.local_count -= 1;
         }
     }
 
     pub fn add_local(&mut self, name: String) -> u8 {
+        let current_frame = self.frames.last_mut().unwrap();
         let local = Local {
-            name,
-            depth: self.scope_depth,
+            name: name.clone(),
+            depth: current_frame.scope_depth,
         };
-        let index = self.local_count;
 
-        self.locals[index as usize] = Some(local);
-        self.local_count += 1;
+        let index = current_frame.locals.len() as u8;
+        current_frame.locals.push(local);
 
         index
     }
 
     pub fn resolve_local(&mut self, name: &str) -> Option<u8> {
-        self.locals[0..self.local_count as usize]
-            .iter()
-            .enumerate()
-            .rev()
-            .find_map(|(i, local)| {
-                local
-                    .as_ref()
-                    .filter(|local| local.name == name)
-                    .map(|_| i as u8)
-            })
+        self.frames.last().unwrap().resolve_local(name)
     }
 }
