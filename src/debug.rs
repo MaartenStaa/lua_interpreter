@@ -165,8 +165,9 @@ pub fn print_instructions(vm: &VM) {
 
             // Function
             Instruction::Call => {
-                println!("CALL");
-                1
+                let num_args = instructions[instruction_pointer + 1];
+                println!("CALL          {num_args}");
+                2
             }
             Instruction::Return => {
                 println!("RETURN");

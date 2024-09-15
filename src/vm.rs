@@ -62,7 +62,7 @@ impl<'path, 'source> VM<'path, 'source> {
 
     pub fn lookup_const(&self, constant: &LuaConst) -> Option<u8> {
         // TODO: Maybe a hashmap would be better
-        self.consts
+        self.consts[..self.const_index as usize]
             .iter()
             .position(|c| c == constant)
             .map(|i| i as u8)
@@ -363,11 +363,12 @@ impl<'path, 'source> VM<'path, 'source> {
                 // Function
                 Instruction::Call => {
                     let function = self.pop();
+                    let num_args = self.instructions[self.ip + 1];
                     match function {
                         LuaValue::Function(name, f) => {
                             self.call_stack.push(CallFrame {
                                 name,
-                                frame_pointer: self.stack_index,
+                                frame_pointer: self.stack_index - num_args as usize,
                                 return_addr: self.ip + 2,
                             });
                             self.ip = f as usize;
@@ -379,9 +380,14 @@ impl<'path, 'source> VM<'path, 'source> {
                     }
                 }
                 Instruction::Return => {
-                    // TODO: Handle return values
+                    // TODO: Handle multiple return values
+                    let value = self.pop();
                     let frame = self.call_stack.pop().unwrap();
                     self.ip = frame.return_addr;
+                    // Discard any remaining values on the stack from the function call
+                    self.stack_index = frame.frame_pointer;
+                    // Put the return value back
+                    self.push(value);
                     // Check if this is the root frame
                     if self.call_stack.is_empty() {
                         break;
@@ -432,9 +438,21 @@ impl<'path, 'source> VM<'path, 'source> {
 
                 // Debug
                 Instruction::Print => {
-                    let value = self.pop();
-                    println!("{}", value);
-                    1
+                    let num_args = self.instructions[self.ip + 1];
+                    let mut args = Vec::with_capacity(num_args as usize);
+                    for _ in 0..num_args {
+                        args.push(self.pop());
+                    }
+                    for (i, arg) in args.iter().rev().enumerate() {
+                        if i > 0 {
+                            print!("\t");
+                        }
+                        print!("{}", arg);
+                    }
+                    println!();
+                    // Return value
+                    self.push(LuaValue::Nil);
+                    2
                 }
 
                 // Halt

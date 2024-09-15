@@ -109,7 +109,20 @@ impl<'path, 'source> Compiler<'path, 'source> {
         }
 
         if let Some(return_statement) = ast.node.return_statement {
-            todo!("compile_block return_statement {:#?}", return_statement);
+            // TODO: Handle multiple return values
+            if return_statement.is_empty() {
+                let nil_const_index = self.get_const_index(LuaConst::Nil);
+                self.vm.push_instruction(Instruction::LoadConst, None);
+                self.vm.push_instruction(nil_const_index, None);
+            } else {
+                #[allow(clippy::never_loop)]
+                for return_statement in return_statement {
+                    self.compile_expression(return_statement);
+                    break;
+                }
+            }
+            self.vm.push_instruction(Instruction::Return, None);
+            // TODO: Specify number of return values.
         }
 
         if options.new_scope {
@@ -128,6 +141,8 @@ impl<'path, 'source> Compiler<'path, 'source> {
         match statement.node {
             Statement::FunctionCall(function_call) => {
                 self.compile_function_call(function_call);
+                // TODO: Handle the return values
+                self.vm.push_instruction(Instruction::Pop, None);
                 BlockResult::new()
             }
             Statement::LocalDeclaraction(names, expressions) => {
@@ -423,12 +438,13 @@ impl<'path, 'source> Compiler<'path, 'source> {
                     self.load_variable(name);
                     self.vm
                         .push_instruction(Instruction::Call, Some(function_call.span));
-                    self.vm.push_instruction(arg_count as u8, None);
                 }
             }
 
             _ => todo!("compile_function_call for other than `print`"),
         }
+
+        self.vm.push_instruction(arg_count as u8, None);
     }
 
     // FIXME: `name` is currently always `None`
@@ -459,7 +475,9 @@ impl<'path, 'source> Compiler<'path, 'source> {
         // self.add_local("#return_addr".to_string());
 
         // Define the function arguments
-        //
+        for parameter in function_def.node.parameters {
+            self.add_local(parameter.node.identifier);
+        }
 
         let has_return = function_def.node.block.node.return_statement.is_some();
         self.compile_block(
@@ -472,15 +490,17 @@ impl<'path, 'source> Compiler<'path, 'source> {
         );
 
         // TODO: How to handle return values?
-        self.end_scope();
+        // NOTE: We don't call `end_scope` here because we want to keep the locals around for the
+        // return values. They're handled by the return statement, when the call frame is dropped.
+        // self.end_scope();
         self.end_frame();
 
         if !has_return {
-            // TODO: Implicit return nil
-            // let nil_const_index = self.vm.register_const(LuaConst::Nil);
-            // self.vm.push_instruction(Instruction::LoadConst, None);
-            // self.vm.push_instruction(nil_const_index, None);
+            let nil_const_index = self.get_const_index(LuaConst::Nil);
+            self.vm.push_instruction(Instruction::LoadConst, None);
+            self.vm.push_instruction(nil_const_index, None);
             self.vm.push_instruction(Instruction::Return, None);
+            // TODO: Specify number of return values.
             // self.vm.push_instruction(1, None);
         }
 
