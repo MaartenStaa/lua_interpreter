@@ -5,7 +5,7 @@ use miette::{miette, NamedSource};
 use crate::{
     instruction::Instruction,
     token::Span,
-    value::{LuaConst, LuaValue},
+    value::{LuaConst, LuaObject, LuaValue},
 };
 
 const MAX_STACK_SIZE: usize = 256;
@@ -176,6 +176,13 @@ impl<'path, 'source> VM<'path, 'source> {
                     self.pop();
                     1
                 }
+                Instruction::Swap => {
+                    let swap_offset = self.instructions[self.ip + 1];
+                    let a = self.stack_index - 1;
+                    let b = self.stack_index - 1 - swap_offset as usize;
+                    self.stack.swap(a, b);
+                    2
+                }
 
                 // Binary operations
                 // Arithmetic
@@ -345,7 +352,6 @@ impl<'path, 'source> VM<'path, 'source> {
                 Instruction::SetLocal => {
                     let local_index = self.instructions[self.ip + 1];
                     let frame_pointer = self.call_stack.last().unwrap().frame_pointer;
-                    // TODO: This is a clone, but we should probably be able to move it
                     let value = self.pop();
                     self.stack[frame_pointer + local_index as usize] = value;
                     2
@@ -353,11 +359,55 @@ impl<'path, 'source> VM<'path, 'source> {
                 Instruction::GetLocal => {
                     let local_index = self.instructions[self.ip + 1];
                     let current_frame = self.call_stack.last().unwrap();
-                    // TODO: This is a clone, but we should probably be able to move it
                     let value =
                         self.stack[current_frame.frame_pointer + local_index as usize].clone();
                     self.push(value);
                     2
+                }
+
+                // Table
+                Instruction::NewTable => {
+                    let table = LuaObject::Table(Default::default());
+                    self.push(table.into());
+                    1
+                }
+                Instruction::SetTable => {
+                    let value = self.pop();
+                    let key = self.pop();
+                    let table = self.peek().clone();
+                    match table {
+                        LuaValue::Object(o) => match &mut *o.write().unwrap() {
+                            LuaObject::Table(t) => {
+                                t.insert(key, value);
+                            }
+                            _ => {
+                                return Err(miette!("attempt to index a non-table"));
+                            }
+                        },
+                        _ => {
+                            return Err(miette!("attempt to index a non-table"));
+                        }
+                    }
+                    1
+                }
+                Instruction::GetTable => {
+                    let key = self.pop();
+                    let table = self.pop();
+                    match table {
+                        LuaValue::Object(o) => match &*o.read().unwrap() {
+                            LuaObject::Table(t) => {
+                                let value = t.get(&key).cloned().unwrap_or(LuaValue::Nil);
+                                self.push(value);
+                            }
+                            _ => {
+                                return Err(miette!("attempt to index a non-table"));
+                            }
+                        },
+                        _ => {
+                            return Err(miette!("attempt to index a non-table"));
+                        }
+                    }
+                    1
                 }
 
                 // Function
@@ -365,15 +415,20 @@ impl<'path, 'source> VM<'path, 'source> {
                     let function = self.pop();
                     let num_args = self.instructions[self.ip + 1];
                     match function {
-                        LuaValue::Function(name, f) => {
-                            self.call_stack.push(CallFrame {
-                                name,
-                                frame_pointer: self.stack_index - num_args as usize,
-                                return_addr: self.ip + 2,
-                            });
-                            self.ip = f as usize;
-                            continue;
-                        }
+                        LuaValue::Object(o) => match &*o.read().unwrap() {
+                            LuaObject::Function(_, f) => {
+                                self.call_stack.push(CallFrame {
+                                    name: None,
+                                    frame_pointer: self.stack_index - num_args as usize,
+                                    return_addr: self.ip + 2,
+                                });
+                                self.ip = *f as usize;
+                                continue;
+                            }
+                            _ => {
+                                return Err(miette!("attempt to call a non-function"));
+                            }
+                        },
                         _ => {
                             return Err(miette!("attempt to call a non-function"));
                         }

@@ -35,6 +35,11 @@ pub fn print_instructions(vm: &VM) {
                 println!("POP");
                 1
             }
+            Instruction::Swap => {
+                let swap_offset = instructions[instruction_pointer + 1];
+                println!("SWAP          {swap_offset}");
+                2
+            }
 
             // Binary operations
             // Arithmetic
@@ -161,6 +166,20 @@ pub fn print_instructions(vm: &VM) {
                 let local_index = instructions[instruction_pointer + 1];
                 println!("GET_LOCAL     {local_index}");
                 2
+            }
+
+            // Table
+            Instruction::NewTable => {
+                println!("NEW_TABLE");
+                1
+            }
+            Instruction::SetTable => {
+                println!("SET_TABLE");
+                1
+            }
+            Instruction::GetTable => {
+                println!("GET_TABLE");
+                1
             }
 
             // Function

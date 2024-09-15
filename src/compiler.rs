@@ -2,8 +2,9 @@ use std::path::Path;
 
 use crate::{
     ast::{
-        BinaryOperator, Block, Expression, ForCondition, FunctionCall, FunctionDef, Literal, Name,
-        Number, PrefixExpression, Statement, TokenTree, UnaryOperator, Variable,
+        BinaryOperator, Block, Expression, Field, ForCondition, FunctionCall, FunctionDef, Literal,
+        Name, Number, PrefixExpression, Statement, TableConstructor, TokenTree, UnaryOperator,
+        Variable,
     },
     instruction::Instruction,
     token::Span,
@@ -176,7 +177,37 @@ impl<'path, 'source> Compiler<'path, 'source> {
                         Variable::Name(name) => {
                             self.assign_variable(name);
                         }
-                        _ => todo!("compile_statement Assignment {:#?}", variable),
+                        Variable::Indexed(target, index) => {
+                            // `SetTable` expects a stack head of:
+                            // [table, index, value]
+                            // We need to calculate the value first above, as it e.g. refer to the
+                            // old value of `table[index]`. So we push the index, and then the
+                            // table:
+                            // [value, index, table]
+                            // And then we swap the value and the table:
+                            // SWAP 2
+                            // [value, table, index]
+                            self.compile_expression(*index);
+                            self.compile_prefix_expression(*target);
+                            self.vm.push_instruction(Instruction::Swap, None);
+                            self.vm.push_instruction(2, None);
+                            self.vm.push_instruction(Instruction::SetTable, Some(span));
+                            // SetTable keeps the table on the stack, so we need to pop it
+                            self.vm.push_instruction(Instruction::Pop, None)
+                        }
+                        Variable::Field(target, name) => {
+                            // Same story as above, but with a string key
+                            let const_index = self.get_const_index(LuaConst::String(
+                                name.node.identifier.into_bytes(),
+                            ));
+                            self.vm.push_instruction(Instruction::LoadConst, Some(span));
+                            self.vm.push_instruction(const_index, None);
+                            self.compile_prefix_expression(*target);
+                            self.vm.push_instruction(Instruction::Swap, None);
+                            self.vm.push_instruction(2, None);
+                            self.vm.push_instruction(Instruction::SetTable, Some(span));
+                            self.vm.push_instruction(Instruction::Pop, None)
+                        }
                     }
                 }
 
@@ -550,6 +581,7 @@ impl<'path, 'source> Compiler<'path, 'source> {
             Expression::FunctionDef(function_def) => {
                 self.compile_function_def(function_def, None);
             }
+            Expression::TableConstructor(table) => self.compile_table_constructor(table),
             _ => todo!("compile_expression {:?}", expression),
         }
     }
@@ -564,8 +596,59 @@ impl<'path, 'source> Compiler<'path, 'source> {
             }
             PrefixExpression::Variable(variable) => match variable.node {
                 Variable::Name(name) => self.load_variable(name),
-                _ => todo!("compile_prefix_expression Variable {:#?}", variable),
+                Variable::Indexed(prefix, index) => {
+                    self.compile_prefix_expression(*prefix);
+                    self.compile_expression(*index);
+                    self.vm
+                        .push_instruction(Instruction::GetTable, Some(prefix_expression.span));
+                }
+                Variable::Field(prefix, name) => {
+                    self.compile_prefix_expression(*prefix);
+                    let const_index =
+                        self.get_const_index(LuaConst::String(name.node.identifier.into_bytes()));
+                    self.vm
+                        .push_instruction(Instruction::LoadConst, Some(prefix_expression.span));
+                    self.vm.push_instruction(const_index, None);
+                    self.vm
+                        .push_instruction(Instruction::GetTable, Some(prefix_expression.span));
+                }
             },
+        }
+    }
+
+    fn compile_table_constructor(&mut self, table: TokenTree<TableConstructor>) {
+        self.vm
+            .push_instruction(Instruction::NewTable, Some(table.span));
+
+        let mut index = 1;
+        for field in table.node.fields {
+            match field.node {
+                Field::Named(name, value) => {
+                    let const_index =
+                        self.get_const_index(LuaConst::String(name.node.identifier.into_bytes()));
+                    self.vm
+                        .push_instruction(Instruction::LoadConst, Some(field.span));
+                    self.vm.push_instruction(const_index, None);
+                    self.compile_expression(value);
+                }
+                Field::Indexed(index_expression, value) => {
+                    self.compile_expression(index_expression);
+                    self.compile_expression(value);
+                }
+                Field::Value(value) => {
+                    let index_const =
+                        self.get_const_index(LuaConst::Number(LuaNumber::Integer(index)));
+                    self.vm
+                        .push_instruction(Instruction::LoadConst, Some(field.span));
+                    self.vm.push_instruction(index_const, None);
+                    self.compile_expression(value);
+
+                    index += 1;
+                }
+            }
+
+            self.vm
+                .push_instruction(Instruction::SetTable, Some(field.span));
         }
     }
 

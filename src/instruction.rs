@@ -4,6 +4,7 @@ pub enum Instruction {
     // Stack operations
     LoadConst,
     Pop,
+    Swap,
 
     // Binary operations
     // Arithmetic
@@ -45,11 +46,14 @@ pub enum Instruction {
     GetGlobal,
     SetLocal,
     GetLocal,
+    // SetUpval,
+    // GetUpval,
 
-    // // Table
-    // NewTable,
-    // SetTable,
-    // GetTable,
+    // Table
+    NewTable,
+    SetTable,
+    GetTable,
+
     // // Extra
     // Move,
     // Self_,

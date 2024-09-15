@@ -3,7 +3,7 @@ use std::ops;
 
 use crate::{
     ast,
-    value::{LuaNumber, LuaValue},
+    value::{LuaNumber, LuaObject, LuaValue},
 };
 
 macro_rules! impl_number_ops {
@@ -432,7 +432,10 @@ impl LuaValue {
     pub fn len(&self) -> miette::Result<LuaValue> {
         match self {
             LuaValue::String(s) => Ok(LuaValue::Number(LuaNumber::Integer(s.len() as i64))),
-            LuaValue::Table(_) => todo!("LuaValue::len for table"),
+            LuaValue::Object(o) => {
+                let len = o.read().unwrap().len()?;
+                Ok(LuaValue::Number(LuaNumber::Integer(len as i64)))
+            }
             _ => Err(miette!("attempt to get length of a non-string value")),
         }
     }
@@ -443,6 +446,22 @@ impl LuaValue {
             _ => Err(miette!(
                 "attempt to perform bitwise not on a non-number value"
             )),
+        }
+    }
+}
+
+impl LuaObject {
+    pub fn is_empty(&self) -> bool {
+        match self {
+            LuaObject::Table(t) => t.is_empty(),
+            _ => false,
+        }
+    }
+
+    pub fn len(&self) -> miette::Result<usize> {
+        match self {
+            LuaObject::Table(t) => Ok(t.len()),
+            _ => Err(miette!("attempt to get length of a non-string value")),
         }
     }
 }
