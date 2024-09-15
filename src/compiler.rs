@@ -482,8 +482,11 @@ impl<'path, 'source> Compiler<'path, 'source> {
                         .push_instruction(Instruction::Call, Some(function_call.span));
                 }
             }
-
-            _ => todo!("compile_function_call for other than `print`"),
+            prefix_expression => {
+                self.compile_prefix_expression(prefix_expression);
+                self.vm
+                    .push_instruction(Instruction::Call, Some(function_call.span));
+            }
         }
 
         self.vm.push_instruction(arg_count as u8, None);
