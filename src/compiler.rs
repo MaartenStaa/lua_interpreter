@@ -445,6 +445,13 @@ impl<'path, 'source> Compiler<'path, 'source> {
                 self.end_scope();
                 BlockResult::new()
             }
+            Statement::Block(block) => self.compile_block(
+                block,
+                BlockOptions {
+                    is_loop: options.is_loop,
+                    new_scope: true,
+                },
+            ),
             _ => todo!("compile_statement {:#?}", statement),
         }
     }
