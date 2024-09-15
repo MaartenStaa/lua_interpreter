@@ -86,11 +86,15 @@ impl<'path, 'source> Compiler<'path, 'source> {
         self.vm
     }
 
-    fn get_global_name_index(&mut self, name: Vec<u8>) -> u8 {
-        let lua_const = LuaConst::String(name);
+    fn get_const_index(&mut self, lua_const: LuaConst) -> u8 {
         self.vm
             .lookup_const(&lua_const)
             .unwrap_or_else(|| self.vm.register_const(lua_const))
+    }
+
+    fn get_global_name_index(&mut self, name: Vec<u8>) -> u8 {
+        let lua_const = LuaConst::String(name);
+        self.get_const_index(lua_const)
     }
 
     fn compile_block(&mut self, ast: TokenTree<Block>, options: BlockOptions) -> BlockResult {
@@ -547,15 +551,15 @@ impl<'path, 'source> Compiler<'path, 'source> {
 
     fn compile_load_literal(&mut self, literal: TokenTree<Literal>) {
         let const_index = match literal.node {
-            Literal::Nil => self.vm.register_const(LuaConst::Nil),
-            Literal::Boolean(b) => self.vm.register_const(LuaConst::Boolean(b)),
-            Literal::Number(Number::Float(f)) => self
-                .vm
-                .register_const(LuaConst::Number(LuaNumber::Float(f))),
-            Literal::Number(Number::Integer(i)) => self
-                .vm
-                .register_const(LuaConst::Number(LuaNumber::Integer(i))),
-            Literal::String(s) => self.vm.register_const(LuaConst::String(s)),
+            Literal::Nil => self.get_const_index(LuaConst::Nil),
+            Literal::Boolean(b) => self.get_const_index(LuaConst::Boolean(b)),
+            Literal::Number(Number::Float(f)) => {
+                self.get_const_index(LuaConst::Number(LuaNumber::Float(f)))
+            }
+            Literal::Number(Number::Integer(i)) => {
+                self.get_const_index(LuaConst::Number(LuaNumber::Integer(i)))
+            }
+            Literal::String(s) => self.get_const_index(LuaConst::String(s)),
         };
 
         self.vm
