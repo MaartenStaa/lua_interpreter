@@ -172,7 +172,11 @@ impl<'path, 'source> Compiler<'path, 'source> {
                     self.compile_expression(expression);
                 }
 
-                for variable in varlist {
+                // NOTE: We need to iterate in reverse to handle chained assignments correctly. The
+                // top of the stack is the last value, so we need to assign the last variable
+                // first.
+                // TODO: Need to handle a mismatch between the number of values and variables
+                for variable in varlist.into_iter().rev() {
                     match variable.node {
                         Variable::Name(name) => {
                             self.assign_variable(name);
