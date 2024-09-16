@@ -9,7 +9,7 @@ use crate::{
     instruction::Instruction,
     token::Span,
     value::{LuaConst, LuaNumber},
-    vm::VM,
+    vm::{ConstIndex, VM},
 };
 
 #[derive(Debug, Clone)]
@@ -87,13 +87,13 @@ impl<'path, 'source> Compiler<'path, 'source> {
         self.vm
     }
 
-    fn get_const_index(&mut self, lua_const: LuaConst) -> u8 {
+    fn get_const_index(&mut self, lua_const: LuaConst) -> ConstIndex {
         self.vm
             .lookup_const(&lua_const)
             .unwrap_or_else(|| self.vm.register_const(lua_const))
     }
 
-    fn get_global_name_index(&mut self, name: Vec<u8>) -> u8 {
+    fn get_global_name_index(&mut self, name: Vec<u8>) -> ConstIndex {
         let lua_const = LuaConst::String(name);
         self.get_const_index(lua_const)
     }
@@ -114,7 +114,7 @@ impl<'path, 'source> Compiler<'path, 'source> {
             if return_statement.is_empty() {
                 let nil_const_index = self.get_const_index(LuaConst::Nil);
                 self.vm.push_instruction(Instruction::LoadConst, None);
-                self.vm.push_instruction(nil_const_index, None);
+                self.vm.push_const_index(nil_const_index);
             } else {
                 #[allow(clippy::never_loop)]
                 for return_statement in return_statement {
@@ -205,7 +205,7 @@ impl<'path, 'source> Compiler<'path, 'source> {
                                 name.node.identifier.into_bytes(),
                             ));
                             self.vm.push_instruction(Instruction::LoadConst, Some(span));
-                            self.vm.push_instruction(const_index, None);
+                            self.vm.push_const_index(const_index);
                             self.compile_prefix_expression(*target);
                             self.vm.push_instruction(Instruction::Swap, None);
                             self.vm.push_instruction(2, None);
@@ -543,7 +543,7 @@ impl<'path, 'source> Compiler<'path, 'source> {
         if !has_return {
             let nil_const_index = self.get_const_index(LuaConst::Nil);
             self.vm.push_instruction(Instruction::LoadConst, None);
-            self.vm.push_instruction(nil_const_index, None);
+            self.vm.push_const_index(nil_const_index);
             self.vm.push_instruction(Instruction::Return, None);
             // TODO: Specify number of return values.
             // self.vm.push_instruction(1, None);
@@ -556,7 +556,7 @@ impl<'path, 'source> Compiler<'path, 'source> {
         let const_index = self.vm.register_const(LuaConst::Function(name, func_addr));
         self.vm
             .push_instruction(Instruction::LoadConst, Some(function_def.span));
-        self.vm.push_instruction(const_index, None);
+        self.vm.push_const_index(const_index);
     }
 
     fn compile_expression(&mut self, expression: TokenTree<Expression>) {
@@ -622,7 +622,7 @@ impl<'path, 'source> Compiler<'path, 'source> {
                         self.get_const_index(LuaConst::String(name.node.identifier.into_bytes()));
                     self.vm
                         .push_instruction(Instruction::LoadConst, Some(prefix_expression.span));
-                    self.vm.push_instruction(const_index, None);
+                    self.vm.push_const_index(const_index);
                     self.vm
                         .push_instruction(Instruction::GetTable, Some(prefix_expression.span));
                 }
@@ -642,7 +642,7 @@ impl<'path, 'source> Compiler<'path, 'source> {
                         self.get_const_index(LuaConst::String(name.node.identifier.into_bytes()));
                     self.vm
                         .push_instruction(Instruction::LoadConst, Some(field.span));
-                    self.vm.push_instruction(const_index, None);
+                    self.vm.push_const_index(const_index);
                     self.compile_expression(value);
                 }
                 Field::Indexed(index_expression, value) => {
@@ -654,7 +654,7 @@ impl<'path, 'source> Compiler<'path, 'source> {
                         self.get_const_index(LuaConst::Number(LuaNumber::Integer(index)));
                     self.vm
                         .push_instruction(Instruction::LoadConst, Some(field.span));
-                    self.vm.push_instruction(index_const, None);
+                    self.vm.push_const_index(index_const);
                     self.compile_expression(value);
 
                     index += 1;
@@ -681,7 +681,7 @@ impl<'path, 'source> Compiler<'path, 'source> {
 
         self.vm
             .push_instruction(Instruction::LoadConst, Some(literal.span));
-        self.vm.push_instruction(const_index, None);
+        self.vm.push_const_index(const_index);
     }
 
     fn compile_binary_operator(&mut self, op: TokenTree<BinaryOperator>, span: Span) {
@@ -742,7 +742,7 @@ impl<'path, 'source> Compiler<'path, 'source> {
             let const_index = self.get_global_name_index(name.node.identifier.into_bytes());
             self.vm
                 .push_instruction(Instruction::SetGlobal, Some(name.span));
-            self.vm.push_instruction(const_index, None);
+            self.vm.push_const_index(const_index);
         }
     }
 
@@ -755,7 +755,7 @@ impl<'path, 'source> Compiler<'path, 'source> {
             let const_index = self.get_global_name_index(name.node.identifier.into_bytes());
             self.vm
                 .push_instruction(Instruction::GetGlobal, Some(name.span));
-            self.vm.push_instruction(const_index, None);
+            self.vm.push_const_index(const_index);
         }
     }
 

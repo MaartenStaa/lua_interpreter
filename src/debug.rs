@@ -1,7 +1,7 @@
 use crate::{
     instruction::Instruction,
     value::LuaConst,
-    vm::{JumpAddr, VM},
+    vm::{ConstIndex, JumpAddr, VM},
 };
 
 pub fn print_instructions(vm: &VM) {
@@ -25,11 +25,13 @@ pub fn print_instructions(vm: &VM) {
 
             // Stack manipulation
             Instruction::LoadConst => {
-                let const_index = instructions[instruction_pointer + 1];
+                let const_index_bytes = &instructions[instruction_pointer + 1
+                    ..instruction_pointer + 1 + std::mem::size_of::<ConstIndex>()];
+                let const_index = ConstIndex::from_be_bytes(const_index_bytes.try_into().unwrap());
                 print!("LOAD_CONST    ");
                 print_const(&consts[const_index as usize]);
                 println!();
-                2
+                1 + std::mem::size_of::<ConstIndex>()
             }
             Instruction::Pop => {
                 println!("POP");

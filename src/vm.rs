@@ -11,7 +11,7 @@ use crate::{
 const MAX_STACK_SIZE: usize = 256;
 
 pub type JumpAddr = u16;
-pub type JumpRelOffset = i16;
+pub type ConstIndex = u16;
 
 #[derive(Debug)]
 pub struct VM<'path, 'source> {
@@ -21,7 +21,7 @@ pub struct VM<'path, 'source> {
     instruction_spans: HashMap<usize, Span>,
     ip: usize,
     consts: Vec<LuaConst>,
-    const_index: u8,
+    const_index: ConstIndex,
     stack: Vec<LuaValue>,
     stack_index: usize,
     globals: HashMap<u8, LuaValue>,
@@ -43,7 +43,7 @@ impl<'path, 'source> VM<'path, 'source> {
             instructions: vec![],
             instruction_spans: HashMap::new(),
             ip: 0,
-            consts: vec![LuaConst::Nil; u8::MAX as usize],
+            consts: vec![],
             const_index: 0,
             stack: vec![LuaValue::Nil; MAX_STACK_SIZE],
             stack_index: 0,
@@ -53,19 +53,19 @@ impl<'path, 'source> VM<'path, 'source> {
         }
     }
 
-    pub fn register_const(&mut self, constant: LuaConst) -> u8 {
+    pub fn register_const(&mut self, constant: LuaConst) -> ConstIndex {
         let index = self.const_index;
-        self.consts[index as usize] = constant;
+        self.consts.push(constant);
         self.const_index += 1;
         index
     }
 
-    pub fn lookup_const(&self, constant: &LuaConst) -> Option<u8> {
+    pub fn lookup_const(&self, constant: &LuaConst) -> Option<ConstIndex> {
         // TODO: Maybe a hashmap would be better
         self.consts[..self.const_index as usize]
             .iter()
             .position(|c| c == constant)
-            .map(|i| i as u8)
+            .map(|i| i as ConstIndex)
     }
 
     fn push(&mut self, value: LuaValue) {
@@ -101,6 +101,10 @@ impl<'path, 'source> VM<'path, 'source> {
 
     pub fn push_addr(&mut self, addr: JumpAddr) {
         self.instructions.extend_from_slice(&addr.to_be_bytes());
+    }
+
+    pub fn push_const_index(&mut self, index: ConstIndex) {
+        self.instructions.extend(index.to_be_bytes());
     }
 
     pub fn push_addr_placeholder(&mut self) -> usize {
@@ -167,10 +171,13 @@ impl<'path, 'source> VM<'path, 'source> {
             let instruction_increment = match Instruction::from(instruction) {
                 // Stack manipulation
                 Instruction::LoadConst => {
-                    let const_index = self.instructions[self.ip + 1];
+                    let const_index_bytes = &self.instructions
+                        [self.ip + 1..self.ip + 1 + std::mem::size_of::<ConstIndex>()];
+                    let const_index =
+                        ConstIndex::from_be_bytes(const_index_bytes.try_into().unwrap());
                     let constant = self.consts[const_index as usize].clone();
                     self.push(constant.into());
-                    2
+                    1 + std::mem::size_of::<ConstIndex>()
                 }
                 Instruction::Pop => {
                     self.pop();
