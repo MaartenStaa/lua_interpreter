@@ -570,9 +570,17 @@ impl<'path, 'source> Compiler<'path, 'source> {
         // self.add_local("#return_addr".to_string());
 
         // Define the function arguments
+        let parameter_count = function_def.node.parameters.len();
         for parameter in function_def.node.parameters {
             self.add_local(parameter.node.identifier);
         }
+
+        if function_def.node.has_varargs {
+            todo!("varargs")
+        }
+
+        self.vm.push_instruction(Instruction::Align, None);
+        self.vm.push_instruction(parameter_count as u8, None);
 
         let has_return = function_def.node.block.node.return_statement.is_some();
         self.compile_block(
