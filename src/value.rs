@@ -72,6 +72,7 @@ impl Eq for LuaValue {}
 pub enum LuaObject {
     Table(LuaTable),
     Function(Option<String>, u16),
+    NativeFunction(fn(Vec<LuaValue>) -> LuaValue),
 
     // TODO: Implement these
     Thread,
@@ -123,6 +124,7 @@ impl LuaObject {
         match self {
             LuaObject::Table(_) => "table",
             LuaObject::Function(_, _) => "function",
+            LuaObject::NativeFunction(_) => "function",
             LuaObject::UserData => "userdata",
             LuaObject::Thread => "thread",
         }
@@ -242,6 +244,9 @@ impl Display for LuaObject {
                 } else {
                     write!(f, "function<{a:04}>")
                 }
+            }
+            LuaObject::NativeFunction(func) => {
+                write!(f, "function: 0x{:x}", func as *const _ as usize)
             }
             _ => todo!("formatting a {self:?}"),
         }

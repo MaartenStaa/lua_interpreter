@@ -75,6 +75,8 @@ impl<'path, 'source> Compiler<'path, 'source> {
     }
 
     pub fn compile(mut self, ast: TokenTree<Block>) -> VM<'path, 'source> {
+        let has_return = ast.node.return_statement.is_some();
+
         self.compile_block(
             ast,
             BlockOptions {
@@ -82,7 +84,16 @@ impl<'path, 'source> Compiler<'path, 'source> {
                 new_scope: true,
             },
         );
-        self.vm.push_instruction(Instruction::Halt, None);
+
+        if !has_return {
+            // Add implicit final return
+            let nil_const_index = self.get_const_index(LuaConst::Nil);
+            self.vm.push_instruction(Instruction::LoadConst, None);
+            self.vm.push_const_index(nil_const_index);
+            self.vm.push_instruction(Instruction::Return, None);
+            // TODO: Specify number of return values.
+            // self.vm.push_instruction(1, None);
+        }
 
         self.vm
     }
@@ -143,7 +154,7 @@ impl<'path, 'source> Compiler<'path, 'source> {
             Statement::FunctionCall(function_call) => {
                 self.compile_function_call(function_call);
                 // TODO: Handle the return values
-                self.vm.push_instruction(Instruction::Pop, None);
+                self.vm.push_instruction(Instruction::Pop, Some(span));
                 BlockResult::new()
             }
             Statement::LocalDeclaraction(names, expressions) => {
@@ -521,16 +532,9 @@ impl<'path, 'source> Compiler<'path, 'source> {
                     }),
                 ..
             } => {
-                if name.node.identifier == "print" {
-                    // TODO: Handle multiple arguments
-                    // TODO: Remove this hack and issue a regular call instruction
-                    self.vm
-                        .push_instruction(Instruction::Print, Some(function_call.span));
-                } else {
-                    self.load_variable(name);
-                    self.vm
-                        .push_instruction(Instruction::Call, Some(function_call.span));
-                }
+                self.load_variable(name);
+                self.vm
+                    .push_instruction(Instruction::Call, Some(function_call.span));
             }
             prefix_expression => {
                 self.compile_prefix_expression(prefix_expression);

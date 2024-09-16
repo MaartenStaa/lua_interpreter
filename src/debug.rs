@@ -10,19 +10,14 @@ pub fn print_instructions(vm: &VM) {
     let mut instruction_pointer = 0;
 
     loop {
+        if instruction_pointer >= instructions.len() {
+            break;
+        }
+
         let instruction = instructions[instruction_pointer];
         print!("{instruction_pointer:04}   ");
 
         let instruction_increment = match Instruction::from(instruction) {
-            Instruction::Halt => {
-                println!("HALT");
-                break;
-            }
-            Instruction::Print => {
-                println!("PRINT");
-                1
-            }
-
             // Stack manipulation
             Instruction::LoadConst => {
                 let const_index_bytes = &instructions[instruction_pointer + 1

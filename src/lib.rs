@@ -8,6 +8,7 @@ mod math;
 pub mod optimizer;
 pub mod parser;
 pub mod scope;
+mod stdlib;
 pub mod token;
 pub mod value;
 pub mod vm;

@@ -74,12 +74,6 @@ pub enum Instruction {
     // Vararg,
     // // Extra
     // ExtraArg,
-
-    // Debug
-    Print,
-
-    // Halt
-    Halt,
 }
 
 impl From<Instruction> for u8 {

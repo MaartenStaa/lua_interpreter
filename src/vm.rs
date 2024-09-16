@@ -4,8 +4,9 @@ use miette::{miette, NamedSource};
 
 use crate::{
     instruction::Instruction,
+    stdlib,
     token::Span,
-    value::{LuaConst, LuaObject, LuaValue},
+    value::{LuaConst, LuaNumber, LuaObject, LuaTable, LuaValue},
 };
 
 const MAX_STACK_SIZE: usize = 256;
@@ -406,8 +407,15 @@ impl<'path, 'source> VM<'path, 'source> {
                     let value = self
                         .globals
                         .get(&global_index)
-                        // FIXME: Not everything can be freely cloned
                         .cloned()
+                        .or_else(|| {
+                            // Maybe it's a global from the stdlib?
+                            let global_name = match &self.consts[global_index as usize] {
+                                LuaConst::String(s) => String::from_utf8_lossy(s),
+                                _ => return None,
+                            };
+                            stdlib::lookup_global(&global_name).map(|v| v.into())
+                        })
                         .unwrap_or(LuaValue::Nil);
                     self.push(value);
                     1 + std::mem::size_of::<ConstIndex>()
@@ -488,6 +496,17 @@ impl<'path, 'source> VM<'path, 'source> {
                                 self.ip = *f as usize;
                                 continue;
                             }
+                            LuaObject::NativeFunction(f) => {
+                                let mut args = Vec::with_capacity(num_args as usize);
+                                for _ in 0..num_args {
+                                    args.push(self.pop());
+                                }
+                                args.reverse();
+                                let result = f(args);
+                                self.push(result);
+                                2
+                            }
+                            // TODO: Handle tables with a `__call` metamethod
                             _ => {
                                 return Err(miette!("attempt to call a non-function"));
                             }
@@ -501,17 +520,18 @@ impl<'path, 'source> VM<'path, 'source> {
                     // TODO: Handle multiple return values
                     let value = self.pop();
                     let frame = self.pop_call_frame();
+
+                    // Check if this is the root frame
+                    if self.call_stack_index == 0 {
+                        break;
+                    }
+
                     self.ip = frame.return_addr;
                     // Discard any remaining values on the stack from the function call
                     self.stack_index = frame.frame_pointer;
                     // Put the return value back
                     self.push(value);
-                    // Check if this is the root frame
-                    if self.call_stack.is_empty() {
-                        break;
-                    } else {
-                        continue;
-                    }
+                    continue;
                 }
 
                 // Control
@@ -553,28 +573,6 @@ impl<'path, 'source> VM<'path, 'source> {
                     }
                     1 + std::mem::size_of::<JumpAddr>()
                 }
-
-                // Debug
-                Instruction::Print => {
-                    let num_args = self.instructions[self.ip + 1];
-                    let mut args = Vec::with_capacity(num_args as usize);
-                    for _ in 0..num_args {
-                        args.push(self.pop());
-                    }
-                    for (i, arg) in args.iter().rev().enumerate() {
-                        if i > 0 {
-                            print!("\t");
-                        }
-                        print!("{}", arg);
-                    }
-                    println!();
-                    // Return value
-                    self.push(LuaValue::Nil);
-                    2
-                }
-
-                // Halt
-                Instruction::Halt => break,
             };
             self.ip += instruction_increment;
         }
