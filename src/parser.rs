@@ -24,7 +24,10 @@ impl<'path, 'source> Parser<'path, 'source> {
     }
 
     pub fn parse(&mut self) -> miette::Result<TokenTree<Block>> {
-        let result = self.parse_block().map_err(|r| self.with_source_code(r))?;
+        let result = self
+            // NOTE: Don't start a new scope right away at the top-level
+            .parse_block_inner()
+            .map_err(|r| self.with_source_code(r))?;
 
         // Ensure we've consumed all tokens
         if let Some(token) = self.lexer.next().transpose()? {
@@ -48,7 +51,16 @@ impl<'path, 'source> Parser<'path, 'source> {
     }
 
     fn parse_block(&mut self) -> miette::Result<TokenTree<Block>> {
+        self.begin_scope();
+        let block = self.parse_block_inner()?;
+        self.end_scope();
+
+        Ok(block)
+    }
+
+    fn parse_block_inner(&mut self) -> miette::Result<TokenTree<Block>> {
         let start = self.lexer.position;
+
         let mut statements = Vec::new();
         while let Some(statement) = self.parse_statement()? {
             statements.push(statement);
@@ -604,8 +616,12 @@ impl<'path, 'source> Parser<'path, 'source> {
         };
 
         self.lexer.expect(|k| k == &TokenKind::Do, "do")?;
-        let block = self.parse_block().wrap_err("in block of for statement")?;
+        let block = self
+            .parse_block_inner()
+            .wrap_err("in block of for statement")?;
         self.lexer.expect(|k| k == &TokenKind::End, "end")?;
+
+        self.end_scope();
 
         Ok(TokenTree::new(
             Statement::For { condition, block },
@@ -1411,7 +1427,9 @@ impl<'path, 'source> Parser<'path, 'source> {
             .collect();
 
         self.lexer.expect(|k| k == &TokenKind::CloseParen, ")")?;
-        let block = self.parse_block().wrap_err("in function definition")?;
+        let block = self
+            .parse_block_inner()
+            .wrap_err("in function definition")?;
         self.lexer.expect(|k| k == &TokenKind::End, "end")?;
 
         self.end_scope();
@@ -1502,12 +1520,13 @@ impl<'path, 'source> Parser<'path, 'source> {
             if scope.has_label(&name.identifier) {
                 return Err(miette!(
                     labels = vec![span.labeled("label already defined")],
-                    "label already defined"
+                    "label already defined in this scope"
                 ));
             }
-
-            scope.register_label(&name.identifier);
         }
+
+        let current_scope = self.scopes.last_mut().unwrap();
+        current_scope.register_label(&name.identifier);
 
         Ok(())
     }
