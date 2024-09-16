@@ -205,7 +205,7 @@ impl<'path, 'source> VM<'path, 'source> {
 
                     // Align the stack, so that there are <align_amount> values
                     // between the marker and the top of the stack
-                    let num_values = self.stack_index - marker_index - 1;
+                    let num_values = self.stack_index - marker_index;
                     if num_values < align_amount as usize {
                         for _ in 0..align_amount as usize - num_values {
                             self.push(LuaValue::Nil);
