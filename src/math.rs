@@ -278,13 +278,25 @@ impl ops::Neg for LuaValue {
 }
 
 impl ops::Not for LuaValue {
-    type Output = Self;
+    type Output = bool;
 
-    fn not(self) -> Self {
+    fn not(self) -> bool {
         match self {
-            LuaValue::Boolean(b) => LuaValue::Boolean(!b),
-            LuaValue::Nil => LuaValue::Boolean(true),
-            _ => LuaValue::Boolean(false),
+            LuaValue::Boolean(b) => !b,
+            LuaValue::Nil => true,
+            _ => false,
+        }
+    }
+}
+
+impl ops::Not for &LuaValue {
+    type Output = bool;
+
+    fn not(self) -> bool {
+        match self {
+            LuaValue::Boolean(b) => !b,
+            LuaValue::Nil => true,
+            _ => false,
         }
     }
 }

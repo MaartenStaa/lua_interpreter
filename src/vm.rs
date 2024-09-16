@@ -375,7 +375,7 @@ impl<'path, 'source> VM<'path, 'source> {
                 }
                 Instruction::Not => {
                     let a = self.pop();
-                    self.push(!a);
+                    self.push((!a).into());
                     1
                 }
                 Instruction::Len => {
@@ -502,7 +502,8 @@ impl<'path, 'source> VM<'path, 'source> {
                                     args.push(self.pop());
                                 }
                                 args.reverse();
-                                let result = f(args);
+                                // TODO: Handle multiple return values
+                                let result = f(args)?;
                                 self.push(result);
                                 2
                             }
