@@ -22,10 +22,11 @@ pub struct VM<'path, 'source> {
     ip: usize,
     consts: Vec<LuaConst>,
     const_index: ConstIndex,
-    stack: Vec<LuaValue>,
+    stack: [LuaValue; MAX_STACK_SIZE],
     stack_index: usize,
     globals: HashMap<ConstIndex, LuaValue>,
-    call_stack: Vec<CallFrame>,
+    call_stack: [CallFrame; MAX_STACK_SIZE],
+    call_stack_index: usize,
 }
 
 #[derive(Debug)]
@@ -45,11 +46,17 @@ impl<'path, 'source> VM<'path, 'source> {
             ip: 0,
             consts: vec![],
             const_index: 0,
-            stack: vec![LuaValue::Nil; MAX_STACK_SIZE],
+            stack: [const { LuaValue::Nil }; MAX_STACK_SIZE],
             stack_index: 0,
             globals: HashMap::new(),
-            // TODO: Allocate all of this up front like the stack.
-            call_stack: vec![],
+            call_stack: [const {
+                CallFrame {
+                    name: None,
+                    frame_pointer: 0,
+                    return_addr: 0,
+                }
+            }; MAX_STACK_SIZE],
+            call_stack_index: 1,
         }
     }
 
@@ -81,6 +88,23 @@ impl<'path, 'source> VM<'path, 'source> {
 
     fn peek(&self) -> &LuaValue {
         &self.stack[self.stack_index - 1]
+    }
+
+    fn push_call_frame(&mut self, frame: CallFrame) {
+        self.call_stack[self.call_stack_index] = frame;
+        self.call_stack_index += 1;
+    }
+
+    fn pop_call_frame(&mut self) -> CallFrame {
+        self.call_stack_index -= 1;
+        std::mem::replace(
+            &mut self.call_stack[self.call_stack_index],
+            CallFrame {
+                name: None,
+                frame_pointer: 0,
+                return_addr: 0,
+            },
+        )
     }
 
     pub fn get_current_addr(&self) -> JumpAddr {
@@ -130,12 +154,6 @@ impl<'path, 'source> VM<'path, 'source> {
     }
 
     pub fn run(&mut self) {
-        self.call_stack.push(CallFrame {
-            name: Some(format!("<file> {}", self.filename.to_string_lossy())),
-            frame_pointer: 0,
-            return_addr: self.get_current_addr() as usize,
-        });
-
         if let Err(err) = self.run_inner() {
             let labels = if let Some(span) = self.instruction_spans.get(&self.ip) {
                 vec![span.labeled("here")]
@@ -148,7 +166,11 @@ impl<'path, 'source> VM<'path, 'source> {
             // kind of weirdly.
             let mut err = miette!(labels = labels, "{err:?}");
             // Attach stack trace
-            for (i, frame) in self.call_stack.iter().rev().enumerate() {
+            for (i, frame) in self.call_stack[..self.call_stack_index]
+                .iter()
+                .rev()
+                .enumerate()
+            {
                 err = err.wrap_err(format!(
                     "#{i} {}",
                     // TODO: Maybe anonymous is a better name?
@@ -195,7 +217,7 @@ impl<'path, 'source> VM<'path, 'source> {
 
                     // Find either the latest marker or the start of the stack
                     // from the current call frame
-                    let current_frame = self.call_stack.last().unwrap();
+                    let current_frame = &self.call_stack[self.call_stack_index - 1];
                     let marker_index = (0..self.stack_index)
                         .rev()
                         .find(|&i| {
@@ -399,7 +421,7 @@ impl<'path, 'source> VM<'path, 'source> {
                 }
                 Instruction::GetLocal => {
                     let local_index = self.instructions[self.ip + 1];
-                    let current_frame = self.call_stack.last().unwrap();
+                    let current_frame = &self.call_stack[self.call_stack_index - 1];
                     let value =
                         self.stack[current_frame.frame_pointer + local_index as usize].clone();
                     self.push(value);
@@ -457,9 +479,9 @@ impl<'path, 'source> VM<'path, 'source> {
                     let num_args = self.instructions[self.ip + 1];
                     match function {
                         LuaValue::Object(o) => match &*o.read().unwrap() {
-                            LuaObject::Function(_, f) => {
-                                self.call_stack.push(CallFrame {
-                                    name: None,
+                            LuaObject::Function(name, f) => {
+                                self.push_call_frame(CallFrame {
+                                    name: name.clone(),
                                     frame_pointer: self.stack_index - num_args as usize,
                                     return_addr: self.ip + 2,
                                 });
@@ -478,7 +500,7 @@ impl<'path, 'source> VM<'path, 'source> {
                 Instruction::Return => {
                     // TODO: Handle multiple return values
                     let value = self.pop();
-                    let frame = self.call_stack.pop().unwrap();
+                    let frame = self.pop_call_frame();
                     self.ip = frame.return_addr;
                     // Discard any remaining values on the stack from the function call
                     self.stack_index = frame.frame_pointer;
