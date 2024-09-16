@@ -151,18 +151,22 @@ pub fn print_instructions(vm: &VM) {
 
             // Variables
             Instruction::SetGlobal => {
-                let name_index = instructions[instruction_pointer + 1];
+                let name_index_bytes = &instructions[instruction_pointer + 1
+                    ..instruction_pointer + 1 + std::mem::size_of::<ConstIndex>()];
+                let name_index = ConstIndex::from_be_bytes(name_index_bytes.try_into().unwrap());
                 print!("SET_GLOBAL    ");
                 print_const(&consts[name_index as usize]);
                 println!("   ({name_index})");
-                2
+                1 + std::mem::size_of::<ConstIndex>()
             }
             Instruction::GetGlobal => {
-                let name_index = instructions[instruction_pointer + 1];
+                let name_index_bytes = &instructions[instruction_pointer + 1
+                    ..instruction_pointer + 1 + std::mem::size_of::<ConstIndex>()];
+                let name_index = ConstIndex::from_be_bytes(name_index_bytes.try_into().unwrap());
                 print!("GET_GLOBAL    ");
                 print_const(&consts[name_index as usize]);
                 println!("   ({name_index})");
-                2
+                1 + std::mem::size_of::<ConstIndex>()
             }
             Instruction::SetLocal => {
                 let local_index = instructions[instruction_pointer + 1];

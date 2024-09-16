@@ -24,7 +24,7 @@ pub struct VM<'path, 'source> {
     const_index: ConstIndex,
     stack: Vec<LuaValue>,
     stack_index: usize,
-    globals: HashMap<u8, LuaValue>,
+    globals: HashMap<ConstIndex, LuaValue>,
     call_stack: Vec<CallFrame>,
 }
 
@@ -368,13 +368,19 @@ impl<'path, 'source> VM<'path, 'source> {
 
                 // Variables
                 Instruction::SetGlobal => {
-                    let global_index = self.instructions[self.ip + 1];
+                    let global_index_bytes = &self.instructions
+                        [self.ip + 1..self.ip + 1 + std::mem::size_of::<ConstIndex>()];
+                    let global_index =
+                        ConstIndex::from_be_bytes(global_index_bytes.try_into().unwrap());
                     let value = self.pop();
                     self.globals.insert(global_index, value);
-                    2
+                    1 + std::mem::size_of::<ConstIndex>()
                 }
                 Instruction::GetGlobal => {
-                    let global_index = self.instructions[self.ip + 1];
+                    let global_index_bytes = &self.instructions
+                        [self.ip + 1..self.ip + 1 + std::mem::size_of::<ConstIndex>()];
+                    let global_index =
+                        ConstIndex::from_be_bytes(global_index_bytes.try_into().unwrap());
                     let value = self
                         .globals
                         .get(&global_index)
@@ -382,7 +388,7 @@ impl<'path, 'source> VM<'path, 'source> {
                         .cloned()
                         .unwrap_or(LuaValue::Nil);
                     self.push(value);
-                    2
+                    1 + std::mem::size_of::<ConstIndex>()
                 }
                 Instruction::SetLocal => {
                     let local_index = self.instructions[self.ip + 1];
