@@ -39,8 +39,53 @@ macro_rules! impl_number_ops {
 impl_number_ops!(Add, +, add, wrapping_add, ast::Number);
 impl_number_ops!(Sub, -, sub, wrapping_sub, ast::Number);
 impl_number_ops!(Mul, *, mul, wrapping_mul, ast::Number);
-impl_number_ops!(Div, /, div, wrapping_div, ast::Number);
 impl_number_ops!(Rem, %, rem, wrapping_rem, ast::Number);
+
+impl ops::Div for ast::Number {
+    type Output = Self;
+
+    fn div(self, rhs: Self) -> Self::Output {
+        if matches!(&rhs, ast::Number::Integer(0) | ast::Number::Float(0.0)) {
+            return ast::Number::Float(if matches!(self, ast::Number::Integer(0)) {
+                f64::NAN
+            } else {
+                f64::INFINITY
+            });
+        }
+
+        match (self, rhs) {
+            (ast::Number::Integer(a), ast::Number::Integer(b)) => {
+                ast::Number::Float(a as f64 / b as f64)
+            }
+            (ast::Number::Float(a), ast::Number::Float(b)) => ast::Number::Float(a / b),
+            (ast::Number::Integer(a), ast::Number::Float(b)) => ast::Number::Float(a as f64 / b),
+            (ast::Number::Float(a), ast::Number::Integer(b)) => ast::Number::Float(a / b as f64),
+        }
+    }
+}
+
+impl ops::Div for &ast::Number {
+    type Output = ast::Number;
+
+    fn div(self, rhs: Self) -> Self::Output {
+        if matches!(&rhs, ast::Number::Integer(0) | ast::Number::Float(0.0)) {
+            return ast::Number::Float(if matches!(self, ast::Number::Integer(0)) {
+                f64::NAN
+            } else {
+                f64::INFINITY
+            });
+        }
+
+        match (self, rhs) {
+            (ast::Number::Integer(a), ast::Number::Integer(b)) => {
+                ast::Number::Float(*a as f64 / *b as f64)
+            }
+            (ast::Number::Float(a), ast::Number::Float(b)) => ast::Number::Float(a / b),
+            (ast::Number::Integer(a), ast::Number::Float(b)) => ast::Number::Float(*a as f64 / b),
+            (ast::Number::Float(a), ast::Number::Integer(b)) => ast::Number::Float(a / *b as f64),
+        }
+    }
+}
 
 impl ops::Neg for ast::Number {
     type Output = Self;
