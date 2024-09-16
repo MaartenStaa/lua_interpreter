@@ -147,17 +147,37 @@ impl<'path, 'source> Compiler<'path, 'source> {
                 BlockResult::new()
             }
             Statement::LocalDeclaraction(names, expressions) => {
-                let expression_count = expressions.len();
+                let needs_alignment = names.len() != expressions.len()
+                    || expressions.iter().any(|e| {
+                        matches!(
+                            e.node,
+                            Expression::PrefixExpression(TokenTree {
+                                // Function calls can produce multiple values
+                                node: PrefixExpression::FunctionCall(_),
+                                ..
+                            })
+                        )
+                    });
+
+                if needs_alignment {
+                    let marker_const_index = self.get_const_index(LuaConst::Marker);
+                    self.vm.push_instruction(Instruction::LoadConst, None);
+                    self.vm.push_const_index(marker_const_index);
+
+                    // Declare a dummy local for it, since we can't pop it at the end of the local
+                    // declaration
+                    self.add_local("#local-marker".to_string());
+                }
+
                 for expression in expressions {
                     self.compile_expression(expression);
                 }
 
-                // Ensure we have enough expressions to match the names
-                for _ in expression_count..names.len() {
-                    self.compile_load_literal(TokenTree {
-                        node: Literal::Nil,
-                        span,
-                    });
+                if needs_alignment {
+                    // Align number of values with number of variables
+                    let var_count = names.len();
+                    self.vm.push_instruction(Instruction::Align, None);
+                    self.vm.push_instruction(var_count as u8, None);
                 }
 
                 for name in names {
@@ -168,9 +188,18 @@ impl<'path, 'source> Compiler<'path, 'source> {
                 BlockResult::new()
             }
             Statement::Assignment { varlist, explist } => {
+                let marker_const_index = self.get_const_index(LuaConst::Marker);
+                self.vm.push_instruction(Instruction::LoadConst, None);
+                self.vm.push_const_index(marker_const_index);
+
                 for expression in explist {
                     self.compile_expression(expression);
                 }
+
+                // Align number of values with number of variables
+                let var_count = varlist.len();
+                self.vm.push_instruction(Instruction::Align, None);
+                self.vm.push_instruction(var_count as u8, None);
 
                 // NOTE: We need to iterate in reverse to handle chained assignments correctly. The
                 // top of the stack is the last value, so we need to assign the last variable
@@ -214,6 +243,9 @@ impl<'path, 'source> Compiler<'path, 'source> {
                         }
                     }
                 }
+
+                // Pop the marker
+                self.vm.push_instruction(Instruction::Pop, None);
 
                 BlockResult::new()
             }

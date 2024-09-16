@@ -5,6 +5,7 @@ pub enum Instruction {
     LoadConst,
     Pop,
     Swap,
+    Align,
 
     // Binary operations
     // Arithmetic

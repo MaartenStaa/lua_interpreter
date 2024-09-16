@@ -8,6 +8,7 @@ use std::{
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum LuaConst {
+    Marker,
     Nil,
     Boolean(bool),
     Number(LuaNumber),
@@ -17,6 +18,7 @@ pub enum LuaConst {
 
 #[derive(Clone)]
 pub enum LuaValue {
+    Marker,
     Nil,
     Boolean(bool),
     Number(LuaNumber),
@@ -27,6 +29,7 @@ pub enum LuaValue {
 impl Debug for LuaValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            LuaValue::Marker => write!(f, "<marker>"),
             LuaValue::Nil => write!(f, "nil"),
             LuaValue::Boolean(b) => write!(f, "{}", b),
             LuaValue::Number(n) => write!(f, "{}", n),
@@ -39,6 +42,7 @@ impl Debug for LuaValue {
 impl PartialEq for LuaValue {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
+            (LuaValue::Marker, LuaValue::Marker) => true,
             (LuaValue::Nil, LuaValue::Nil) => true,
             (LuaValue::Boolean(a), LuaValue::Boolean(b)) => a == b,
             (LuaValue::Number(a), LuaValue::Number(b)) => a == b,
@@ -52,6 +56,7 @@ impl PartialEq for LuaValue {
 impl Hash for LuaValue {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         match self {
+            LuaValue::Marker => 0.hash(state),
             LuaValue::Nil => 0.hash(state),
             LuaValue::Boolean(b) => b.hash(state),
             LuaValue::Number(n) => n.hash(state),
@@ -82,6 +87,7 @@ impl Hash for LuaObject {
 impl From<LuaConst> for LuaValue {
     fn from(constant: LuaConst) -> Self {
         match constant {
+            LuaConst::Marker => LuaValue::Marker,
             LuaConst::Nil => LuaValue::Nil,
             LuaConst::Boolean(b) => LuaValue::Boolean(b),
             LuaConst::Number(n) => LuaValue::Number(n),
@@ -102,6 +108,7 @@ impl From<LuaObject> for LuaValue {
 impl LuaValue {
     pub fn type_name(&self) -> &'static str {
         match self {
+            LuaValue::Marker => "<marker>",
             LuaValue::Nil => "nil",
             LuaValue::Boolean(_) => "boolean",
             LuaValue::Number(_) => "number",
@@ -215,6 +222,7 @@ impl Default for LuaTable {
 impl Display for LuaValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            LuaValue::Marker => write!(f, "<marker>"),
             LuaValue::Nil => write!(f, "nil"),
             LuaValue::Boolean(b) => write!(f, "{}", b),
             LuaValue::Number(n) => write!(f, "{}", n),

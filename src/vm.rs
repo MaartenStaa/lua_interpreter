@@ -190,6 +190,34 @@ impl<'path, 'source> VM<'path, 'source> {
                     self.stack.swap(a, b);
                     2
                 }
+                Instruction::Align => {
+                    let align_amount = self.instructions[self.ip + 1];
+
+                    // Find either the latest marker or the start of the stack
+                    // from the current call frame
+                    let current_frame = self.call_stack.last().unwrap();
+                    let marker_index = (0..self.stack_index)
+                        .rev()
+                        .find(|&i| {
+                            self.stack[i] == LuaValue::Marker || i == current_frame.frame_pointer
+                        })
+                        .expect("no marker found");
+
+                    // Align the stack, so that there are <align_amount> values
+                    // between the marker and the top of the stack
+                    let num_values = self.stack_index - marker_index - 1;
+                    if num_values < align_amount as usize {
+                        for _ in 0..align_amount as usize - num_values {
+                            self.push(LuaValue::Nil);
+                        }
+                    } else {
+                        for _ in 0..num_values - align_amount as usize {
+                            self.pop();
+                        }
+                    }
+
+                    2
+                }
 
                 // Binary operations
                 // Arithmetic

@@ -42,6 +42,11 @@ pub fn print_instructions(vm: &VM) {
                 println!("SWAP          {swap_offset}");
                 2
             }
+            Instruction::Align => {
+                let align_offset = instructions[instruction_pointer + 1];
+                println!("ALIGN         {align_offset}");
+                2
+            }
 
             // Binary operations
             // Arithmetic
@@ -224,6 +229,7 @@ pub fn print_instructions(vm: &VM) {
 
 fn print_const(constant: &LuaConst) {
     match constant {
+        LuaConst::Marker => print!("MARKER"),
         LuaConst::Nil => print!("NIL"),
         LuaConst::Boolean(b) => print!("{b}"),
         LuaConst::Number(n) => print_number(n),
