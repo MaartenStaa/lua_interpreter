@@ -323,7 +323,7 @@ fn optimize_binary_op(
                     node: Literal::Number(rhs),
                     ..
                 }),
-            ) => Expression::Literal(TokenTree {
+            ) if !rhs.is_zero() => Expression::Literal(TokenTree {
                 node: Literal::Number(lhs % rhs),
                 span,
             }),
@@ -419,7 +419,7 @@ fn optimize_binary_op(
                     node: Literal::Number(rhs),
                     ..
                 }),
-            ) => Expression::Literal(TokenTree {
+            ) if !rhs.is_zero() => Expression::Literal(TokenTree {
                 node: Literal::Number((lhs / rhs).floor()),
                 span,
             }),
@@ -572,7 +572,11 @@ fn optimize_binary_op(
                     ..
                 }),
             ) => Expression::Literal(TokenTree {
-                node: Literal::Number(Number::Integer(lhs << rhs)),
+                node: Literal::Number(Number::Integer(if rhs >= 0 {
+                    lhs.wrapping_shl(rhs as u32)
+                } else {
+                    lhs.wrapping_shr(-rhs as u32)
+                })),
                 span,
             }),
             (
@@ -586,7 +590,11 @@ fn optimize_binary_op(
                     ..
                 }),
             ) => Expression::Literal(TokenTree {
-                node: Literal::Number(Number::Integer(lhs >> rhs)),
+                node: Literal::Number(Number::Integer(if rhs >= 0 {
+                    lhs.wrapping_shr(rhs as u32)
+                } else {
+                    lhs.wrapping_shl(-rhs as u32)
+                })),
                 span,
             }),
             (op, lhs, rhs) => Expression::BinaryOp {

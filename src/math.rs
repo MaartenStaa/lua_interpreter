@@ -138,6 +138,13 @@ impl ast::Number {
             ast::Number::Float(f) => f.to_string(),
         }
     }
+
+    pub fn is_zero(&self) -> bool {
+        match self {
+            ast::Number::Integer(i) => *i == 0,
+            ast::Number::Float(f) => *f == 0.0,
+        }
+    }
 }
 
 impl PartialOrd for ast::Number {
