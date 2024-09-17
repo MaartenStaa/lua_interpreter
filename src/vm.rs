@@ -417,7 +417,7 @@ impl<'path, 'source> VM<'path, 'source> {
                                 LuaConst::String(s) => String::from_utf8_lossy(s),
                                 _ => return None,
                             };
-                            stdlib::lookup_global(&global_name).map(|v| v.into())
+                            stdlib::lookup_global(&global_name)
                         })
                         .unwrap_or(LuaValue::Nil);
                     self.push(value);
