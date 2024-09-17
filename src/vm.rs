@@ -39,7 +39,8 @@ struct CallFrame {
 
 impl<'path, 'source> VM<'path, 'source> {
     pub fn new(filename: &'path Path, source: &'source str) -> Self {
-        Self {
+        let top_frame_name = filename.file_name().unwrap().to_string_lossy().to_string();
+        let mut result = Self {
             filename,
             source,
             instructions: vec![],
@@ -58,7 +59,9 @@ impl<'path, 'source> VM<'path, 'source> {
                 }
             }; MAX_STACK_SIZE],
             call_stack_index: 1,
-        }
+        };
+        result.call_stack[0].name = Some(top_frame_name);
+        result
     }
 
     pub fn register_const(&mut self, constant: LuaConst) -> ConstIndex {
@@ -167,15 +170,11 @@ impl<'path, 'source> VM<'path, 'source> {
             // kind of weirdly.
             let mut err = miette!(labels = labels, "{err:?}");
             // Attach stack trace
-            for (i, frame) in self.call_stack[..self.call_stack_index]
-                .iter()
-                .rev()
-                .enumerate()
-            {
+            for (i, frame) in self.call_stack[..self.call_stack_index].iter().enumerate() {
                 err = err.wrap_err(format!(
                     "#{i} {}",
-                    // TODO: Maybe anonymous is a better name?
-                    frame.name.as_deref().unwrap_or("<unknown>")
+                    frame.name.as_deref().unwrap_or("<anonymous>"),
+                    i = self.call_stack_index - i,
                 ));
             }
             err = err.with_source_code(

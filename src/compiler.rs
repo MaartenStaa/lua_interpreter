@@ -546,8 +546,7 @@ impl<'path, 'source> Compiler<'path, 'source> {
         self.vm.push_instruction(arg_count as u8, None);
     }
 
-    // FIXME: `name` is currently always `None`
-    fn compile_function_def(&mut self, function_def: TokenTree<FunctionDef>, name: Option<String>) {
+    fn compile_function_def(&mut self, function_def: TokenTree<FunctionDef>) {
         // We'll issue the bytecode inline here, but jump over it at runtime
         self.vm.push_instruction(Instruction::Jmp, None);
         let jmp_over_func_addr = self.vm.push_addr_placeholder();
@@ -615,7 +614,9 @@ impl<'path, 'source> Compiler<'path, 'source> {
         self.vm.patch_addr_placeholder(jmp_over_func_addr);
 
         // Save the function definition
-        let const_index = self.vm.register_const(LuaConst::Function(name, func_addr));
+        let const_index = self
+            .vm
+            .register_const(LuaConst::Function(function_def.node.name, func_addr));
         self.vm
             .push_instruction(Instruction::LoadConst, Some(function_def.span));
         self.vm.push_const_index(const_index);
@@ -655,7 +656,7 @@ impl<'path, 'source> Compiler<'path, 'source> {
                 self.compile_unary_operator(op, expression.span);
             }
             Expression::FunctionDef(function_def) => {
-                self.compile_function_def(function_def, None);
+                self.compile_function_def(function_def);
             }
             Expression::TableConstructor(table) => self.compile_table_constructor(table),
             _ => todo!("compile_expression {:?}", expression),

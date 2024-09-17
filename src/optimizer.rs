@@ -205,6 +205,7 @@ fn optimize_function_def(func: TokenTree<FunctionDef>) -> TokenTree<FunctionDef>
     let span = func.span;
     TokenTree::new(
         FunctionDef {
+            name: func.node.name,
             parameters: func.node.parameters,
             has_varargs: func.node.has_varargs,
             block: optimize(func.node.block),

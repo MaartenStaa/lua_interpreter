@@ -337,7 +337,13 @@ impl<'path, 'source> Parser<'path, 'source> {
                     };
 
                     let function_def = self
-                        .parse_function_body(implicit_self_parameter)
+                        .parse_function_body(
+                            implicit_self_parameter,
+                            match &name.node {
+                                Variable::Name(name) => Some(name.node.identifier.clone()),
+                                _ => None,
+                            },
+                        )
                         .wrap_err("in function declaration")?;
                     let function_def_span = function_def.span;
 
@@ -408,9 +414,11 @@ impl<'path, 'source> Parser<'path, 'source> {
                 .parse_name()
                 .wrap_err("in local function declaration")?;
             let name = self.declare_variable(name);
-            let function_def = self.parse_function_body(None).wrap_err_with(|| {
-                format!("in local {} function declaration", name.node.identifier)
-            })?;
+            let function_def = self
+                .parse_function_body(None, Some(name.node.identifier.clone()))
+                .wrap_err_with(|| {
+                    format!("in local {} function declaration", name.node.identifier)
+                })?;
 
             let name_span = name.span;
             let function_def_span = function_def.span;
@@ -1348,7 +1356,7 @@ impl<'path, 'source> Parser<'path, 'source> {
                 let start = self.lexer.position;
                 self.lexer.next();
                 TokenTree::new(
-                    Expression::FunctionDef(self.parse_function_body(None)?),
+                    Expression::FunctionDef(self.parse_function_body(None, None)?),
                     Span::new(start, self.lexer.position),
                 )
             }
@@ -1440,6 +1448,7 @@ impl<'path, 'source> Parser<'path, 'source> {
     fn parse_function_body(
         &mut self,
         implicit_self_parameter: Option<Name<()>>,
+        name: Option<String>,
     ) -> miette::Result<TokenTree<FunctionDef>> {
         self.begin_scope();
 
@@ -1520,6 +1529,7 @@ impl<'path, 'source> Parser<'path, 'source> {
 
         Ok(TokenTree::new(
             FunctionDef {
+                name,
                 parameters,
                 has_varargs,
                 block,
