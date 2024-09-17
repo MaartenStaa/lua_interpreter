@@ -202,7 +202,11 @@ impl LuaTable {
     }
 
     pub fn len(&self) -> usize {
-        todo!("implement len for LuaTable")
+        if self.is_sequence {
+            self.last_number_key as usize
+        } else {
+            todo!("implement len for non-sequence tables")
+        }
     }
 
     pub fn insert(&mut self, key: LuaValue, value: LuaValue) {
@@ -218,6 +222,11 @@ impl LuaTable {
 
     pub fn get(&self, key: &LuaValue) -> Option<&LuaValue> {
         self.fields.get(key)
+    }
+
+    pub fn mark_sequence_dangerous(&mut self, last_number_key: i64) {
+        self.is_sequence = true;
+        self.last_number_key = last_number_key;
     }
 }
 

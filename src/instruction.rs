@@ -6,6 +6,7 @@ pub enum Instruction {
     Pop,
     Swap,
     Align,
+    AlignVararg,
 
     // Binary operations
     // Arithmetic
@@ -49,6 +50,7 @@ pub enum Instruction {
     GetLocal,
     // SetUpval,
     // GetUpval,
+    LoadVararg,
 
     // Table
     NewTable,

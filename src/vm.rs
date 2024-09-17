@@ -212,7 +212,8 @@ impl<'path, 'source> VM<'path, 'source> {
                     self.stack.swap(a, b);
                     2
                 }
-                Instruction::Align => {
+                instr @ Instruction::Align | instr @ Instruction::AlignVararg => {
+                    let collect_varargs = matches!(instr, Instruction::AlignVararg);
                     let align_amount = self.instructions[self.ip + 1];
 
                     assert!(align_amount > 0, "align amount must be positive");
@@ -230,10 +231,32 @@ impl<'path, 'source> VM<'path, 'source> {
 
                     // Align the stack, so that there are <align_amount> values
                     // between the marker and the top of the stack
-                    let num_values = self.stack_index - marker_index - 1;
+                    let num_values = if self.call_stack_index > 1 {
+                        self.stack_index - marker_index
+                    } else {
+                        self.stack_index - marker_index - 1
+                    };
                     if num_values < align_amount as usize {
                         for _ in 0..align_amount as usize - num_values {
                             self.push(LuaValue::Nil);
+                        }
+                    } else if collect_varargs {
+                        if num_values > align_amount as usize {
+                            // Collect the varargs into a table
+                            let mut table = LuaTable::new();
+                            // Descending order!
+                            let num_varargs = num_values - align_amount as usize;
+                            let mut index = num_varargs;
+                            for _ in 0..num_varargs {
+                                let value = self.pop();
+                                table.insert(
+                                    LuaValue::Number(LuaNumber::Integer(index as i64)),
+                                    value,
+                                );
+                                index -= 1;
+                            }
+                            table.mark_sequence_dangerous(num_varargs as i64);
+                            self.push(LuaObject::Table(table).into());
                         }
                     } else {
                         for _ in 0..num_values - align_amount as usize {
@@ -437,6 +460,29 @@ impl<'path, 'source> VM<'path, 'source> {
                     self.push(value);
                     2
                 }
+                Instruction::LoadVararg => {
+                    let local_index = self.instructions[self.ip + 1];
+                    let frame_pointer = self.call_stack[self.call_stack_index - 1].frame_pointer;
+                    let table = match &self.stack[frame_pointer + local_index as usize] {
+                        LuaValue::Object(o) => match &*o.read().unwrap() {
+                            LuaObject::Table(t) => t.clone(),
+                            _ => {
+                                return Err(miette!("attempt to index a non-table"));
+                            }
+                        },
+                        _ => {
+                            return Err(miette!("attempt to index a non-table"));
+                        }
+                    };
+                    for i in 1..=table.len() {
+                        let value = table
+                            .get(&LuaValue::Number(LuaNumber::Integer(i as i64)))
+                            .cloned()
+                            .unwrap_or(LuaValue::Nil);
+                        self.push(value);
+                    }
+                    2
+                }
 
                 // Table
                 Instruction::NewTable => {
@@ -486,20 +532,26 @@ impl<'path, 'source> VM<'path, 'source> {
                 // Function
                 Instruction::Call => {
                     let function = self.pop();
-                    let num_args = self.instructions[self.ip + 1];
+                    // Look up the stack to find the marker, anything above that is
+                    // arguments to the function
+                    let marker_position = self.stack[..self.stack_index]
+                        .iter()
+                        .rposition(|v| *v == LuaValue::Marker)
+                        .expect("no function call args marker found");
+                    let num_args = self.stack_index - marker_position - 1;
                     match function {
                         LuaValue::Object(o) => match &*o.read().unwrap() {
                             LuaObject::Function(name, f) => {
                                 self.push_call_frame(CallFrame {
                                     name: name.clone(),
-                                    frame_pointer: self.stack_index - num_args as usize,
-                                    return_addr: self.ip + 2,
+                                    frame_pointer: self.stack_index - num_args,
+                                    return_addr: self.ip + 1,
                                 });
                                 self.ip = *f as usize;
                                 continue;
                             }
                             LuaObject::NativeFunction(f) => {
-                                let mut args = Vec::with_capacity(num_args as usize);
+                                let mut args = Vec::with_capacity(num_args);
                                 for _ in 0..num_args {
                                     args.push(self.pop());
                                 }
@@ -507,7 +559,7 @@ impl<'path, 'source> VM<'path, 'source> {
                                 // TODO: Handle multiple return values
                                 let result = f(args)?;
                                 self.push(result);
-                                2
+                                1
                             }
                             // TODO: Handle tables with a `__call` metamethod
                             _ => {

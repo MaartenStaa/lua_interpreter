@@ -42,6 +42,11 @@ pub fn print_instructions(vm: &VM) {
                 println!("ALIGN         {align_offset}");
                 2
             }
+            Instruction::AlignVararg => {
+                let align_offset = instructions[instruction_pointer + 1];
+                println!("ALIGN_VARARG  {align_offset}");
+                2
+            }
 
             // Binary operations
             // Arithmetic
@@ -173,6 +178,11 @@ pub fn print_instructions(vm: &VM) {
                 println!("GET_LOCAL     {local_index}");
                 2
             }
+            Instruction::LoadVararg => {
+                let local_index = instructions[instruction_pointer + 1];
+                println!("LOAD_VARARG   {local_index}");
+                2
+            }
 
             // Table
             Instruction::NewTable => {
@@ -190,9 +200,8 @@ pub fn print_instructions(vm: &VM) {
 
             // Function
             Instruction::Call => {
-                let num_args = instructions[instruction_pointer + 1];
-                println!("CALL          {num_args}");
-                2
+                println!("CALL");
+                1
             }
             Instruction::Return => {
                 println!("RETURN");

@@ -12,6 +12,8 @@ use crate::{
     vm::{ConstIndex, VM},
 };
 
+const VARARG_LOCAL_NAME: &str = "...";
+
 #[derive(Debug, Clone)]
 pub struct Local {
     name: String,
@@ -153,7 +155,9 @@ impl<'path, 'source> Compiler<'path, 'source> {
         match statement.node {
             Statement::FunctionCall(function_call) => {
                 self.compile_function_call(function_call);
-                // TODO: Handle the return values
+                // TODO: Handle multiple return values
+                self.vm.push_instruction(Instruction::Pop, Some(span));
+                // Pop the args marker
                 self.vm.push_instruction(Instruction::Pop, Some(span));
                 BlockResult::new()
             }
@@ -518,7 +522,10 @@ impl<'path, 'source> Compiler<'path, 'source> {
     }
 
     fn compile_function_call(&mut self, function_call: TokenTree<FunctionCall>) {
-        let arg_count = function_call.node.args.len();
+        let marker_const_index = self.get_const_index(LuaConst::Marker);
+        self.vm.push_instruction(Instruction::LoadConst, None);
+        self.vm.push_const_index(marker_const_index);
+
         for argument in function_call.node.args {
             self.compile_expression(argument);
         }
@@ -542,8 +549,6 @@ impl<'path, 'source> Compiler<'path, 'source> {
                     .push_instruction(Instruction::Call, Some(function_call.span));
             }
         }
-
-        self.vm.push_instruction(arg_count as u8, None);
     }
 
     fn compile_function_def(&mut self, function_def: TokenTree<FunctionDef>) {
@@ -579,10 +584,11 @@ impl<'path, 'source> Compiler<'path, 'source> {
         }
 
         if function_def.node.has_varargs {
-            todo!("varargs")
+            self.add_local(VARARG_LOCAL_NAME.to_string());
+            self.vm.push_instruction(Instruction::AlignVararg, None);
+        } else {
+            self.vm.push_instruction(Instruction::Align, None);
         }
-
-        self.vm.push_instruction(Instruction::Align, None);
         self.vm.push_instruction(parameter_count as u8, None);
 
         let has_return = function_def.node.block.node.return_statement.is_some();
@@ -659,13 +665,22 @@ impl<'path, 'source> Compiler<'path, 'source> {
                 self.compile_function_def(function_def);
             }
             Expression::TableConstructor(table) => self.compile_table_constructor(table),
-            _ => todo!("compile_expression {:?}", expression),
+            Expression::Ellipsis => {
+                let vararg_local_index = self
+                    .resolve_local(VARARG_LOCAL_NAME)
+                    .expect("parser ensures that vararg is in scope");
+                self.vm
+                    .push_instruction(Instruction::LoadVararg, Some(expression.span));
+                self.vm.push_instruction(vararg_local_index, None);
+            }
         }
     }
 
     fn compile_prefix_expression(&mut self, prefix_expression: TokenTree<PrefixExpression>) {
         match prefix_expression.node {
             PrefixExpression::FunctionCall(function_call) => {
+                // FIXME: In some contexts we only consume the first return value
+                // FIXME: We need to pop the args marker
                 self.compile_function_call(function_call);
             }
             PrefixExpression::Parenthesized(expression) => {
