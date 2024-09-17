@@ -216,6 +216,9 @@ impl<'path, 'source> VM<'path, 'source> {
                 Instruction::Align => {
                     let align_amount = self.instructions[self.ip + 1];
 
+                    assert!(align_amount > 0, "align amount must be positive");
+                    assert!(self.stack_index > 0, "cannot align an empty stack");
+
                     // Find either the latest marker or the start of the stack
                     // from the current call frame
                     let current_frame = &self.call_stack[self.call_stack_index - 1];
@@ -228,7 +231,7 @@ impl<'path, 'source> VM<'path, 'source> {
 
                     // Align the stack, so that there are <align_amount> values
                     // between the marker and the top of the stack
-                    let num_values = self.stack_index - marker_index;
+                    let num_values = self.stack_index - marker_index - 1;
                     if num_values < align_amount as usize {
                         for _ in 0..align_amount as usize - num_values {
                             self.push(LuaValue::Nil);
