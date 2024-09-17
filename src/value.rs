@@ -72,7 +72,7 @@ impl Eq for LuaValue {}
 pub enum LuaObject {
     Table(LuaTable),
     Function(Option<String>, u16),
-    NativeFunction(fn(Vec<LuaValue>) -> miette::Result<LuaValue>),
+    NativeFunction(fn(Vec<LuaValue>) -> miette::Result<Vec<LuaValue>>),
 
     // TODO: Implement these
     Thread,

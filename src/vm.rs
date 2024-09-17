@@ -94,6 +94,18 @@ impl<'path, 'source> VM<'path, 'source> {
         &self.stack[self.stack_index - 1]
     }
 
+    fn shift_left(&mut self, amount: usize, offset: usize) {
+        if amount == 0 || offset == 0 {
+            return;
+        }
+
+        // TODO: Find a more efficient way to do this
+        let start = self.stack_index - amount;
+        for index in start..self.stack_index {
+            self.stack.swap(index, index - offset);
+        }
+    }
+
     fn push_call_frame(&mut self, frame: CallFrame) {
         self.call_stack[self.call_stack_index] = frame;
         self.call_stack_index += 1;
@@ -205,6 +217,14 @@ impl<'path, 'source> VM<'path, 'source> {
                     self.pop();
                     1
                 }
+                Instruction::Discard => {
+                    loop {
+                        if self.pop() == LuaValue::Marker {
+                            break;
+                        }
+                    }
+                    1
+                }
                 Instruction::Swap => {
                     let swap_offset = self.instructions[self.ip + 1];
                     let a = self.stack_index - 1;
@@ -216,37 +236,39 @@ impl<'path, 'source> VM<'path, 'source> {
                     let collect_varargs = matches!(instr, Instruction::AlignVararg);
                     let align_amount = self.instructions[self.ip + 1];
 
-                    assert!(align_amount > 0, "align amount must be positive");
                     assert!(self.stack_index > 0, "cannot align an empty stack");
 
                     // Find either the latest marker or the start of the stack
                     // from the current call frame
-                    let current_frame = &self.call_stack[self.call_stack_index - 1];
-                    let marker_index = (0..self.stack_index)
+                    let frame_pointer = self.call_stack[self.call_stack_index - 1].frame_pointer;
+                    let marker_index = (frame_pointer..self.stack_index)
                         .rev()
-                        .find(|&i| {
-                            self.stack[i] == LuaValue::Marker || i == current_frame.frame_pointer
-                        })
-                        .expect("no marker found");
+                        .find(|&i| self.stack[i] == LuaValue::Marker);
+                    // let base_pointer = marker_index.unwrap_or(frame_pointer);
 
                     // Align the stack, so that there are <align_amount> values
                     // between the marker and the top of the stack
-                    let num_values = if self.call_stack_index > 1 {
-                        self.stack_index - marker_index
-                    } else {
-                        self.stack_index - marker_index - 1
-                    };
+                    let num_values = marker_index
+                        .map(|i| self.stack_index - i - 1)
+                        .unwrap_or(self.stack_index - frame_pointer);
+
+                    // Get rid of the marker
+                    if marker_index.is_some() {
+                        self.shift_left(num_values, 1);
+                        self.pop();
+                    }
+
                     if num_values < align_amount as usize {
                         for _ in 0..align_amount as usize - num_values {
                             self.push(LuaValue::Nil);
                         }
                     } else if collect_varargs {
-                        if num_values > align_amount as usize {
+                        let num_varargs = num_values - align_amount as usize;
+                        if num_varargs > 0 {
                             // Collect the varargs into a table
                             let mut table = LuaTable::new();
-                            // Descending order!
-                            let num_varargs = num_values - align_amount as usize;
                             let mut index = num_varargs;
+                            // Descending order!
                             for _ in 0..num_varargs {
                                 let value = self.pop();
                                 table.insert(
@@ -257,6 +279,8 @@ impl<'path, 'source> VM<'path, 'source> {
                             }
                             table.mark_sequence_dangerous(num_varargs as i64);
                             self.push(LuaObject::Table(table).into());
+                        } else {
+                            self.push(LuaValue::Nil);
                         }
                     } else {
                         for _ in 0..num_values - align_amount as usize {
@@ -463,24 +487,29 @@ impl<'path, 'source> VM<'path, 'source> {
                 Instruction::LoadVararg => {
                     let local_index = self.instructions[self.ip + 1];
                     let frame_pointer = self.call_stack[self.call_stack_index - 1].frame_pointer;
-                    let table = match &self.stack[frame_pointer + local_index as usize] {
+                    let vararg = self.stack[frame_pointer + local_index as usize].clone();
+                    match vararg {
                         LuaValue::Object(o) => match &*o.read().unwrap() {
-                            LuaObject::Table(t) => t.clone(),
+                            LuaObject::Table(table) => {
+                                for i in 1..=table.len() {
+                                    let value = table
+                                        .get(&LuaValue::Number(LuaNumber::Integer(i as i64)))
+                                        .cloned()
+                                        .unwrap_or(LuaValue::Nil);
+                                    self.push(value);
+                                }
+                            }
                             _ => {
-                                return Err(miette!("attempt to index a non-table"));
+                                unreachable!("vararg is not a non-table object");
                             }
                         },
+                        LuaValue::Nil => {
+                            self.push(LuaValue::Nil);
+                        }
                         _ => {
-                            return Err(miette!("attempt to index a non-table"));
+                            unreachable!("vararg is not a table or nil");
                         }
                     };
-                    for i in 1..=table.len() {
-                        let value = table
-                            .get(&LuaValue::Number(LuaNumber::Integer(i as i64)))
-                            .cloned()
-                            .unwrap_or(LuaValue::Nil);
-                        self.push(value);
-                    }
                     2
                 }
 
@@ -539,6 +568,11 @@ impl<'path, 'source> VM<'path, 'source> {
                         .rposition(|v| *v == LuaValue::Marker)
                         .expect("no function call args marker found");
                     let num_args = self.stack_index - marker_position - 1;
+
+                    // Get rid of the marker
+                    self.shift_left(num_args, 1);
+                    self.pop();
+
                     match function {
                         LuaValue::Object(o) => match &*o.read().unwrap() {
                             LuaObject::Function(name, f) => {
@@ -556,9 +590,9 @@ impl<'path, 'source> VM<'path, 'source> {
                                     args.push(self.pop());
                                 }
                                 args.reverse();
-                                // TODO: Handle multiple return values
-                                let result = f(args)?;
-                                self.push(result);
+                                for value in f(args)? {
+                                    self.push(value);
+                                }
                                 1
                             }
                             // TODO: Handle tables with a `__call` metamethod
@@ -572,9 +606,22 @@ impl<'path, 'source> VM<'path, 'source> {
                     }
                 }
                 Instruction::Return => {
-                    // TODO: Handle multiple return values
-                    let value = self.pop();
                     let frame = self.pop_call_frame();
+
+                    // Find the marker indicating the start of the return values
+                    let marker_position = self.stack[..self.stack_index]
+                        .iter()
+                        .rposition(|v| *v == LuaValue::Marker)
+                        .expect("no return values marker found");
+
+                    // Collect the return values
+                    let mut return_values: Vec<_> = (marker_position + 1..self.stack_index)
+                        .map(|_| self.pop())
+                        .collect();
+                    return_values.reverse();
+
+                    // Pop the marker
+                    self.pop();
 
                     // Check if this is the root frame
                     if self.call_stack_index == 0 {
@@ -584,8 +631,14 @@ impl<'path, 'source> VM<'path, 'source> {
                     self.ip = frame.return_addr;
                     // Discard any remaining values on the stack from the function call
                     self.stack_index = frame.frame_pointer;
-                    // Put the return value back
-                    self.push(value);
+
+                    // Put the return values back
+                    // TODO: Only push the first return value in certain contexts, like in the
+                    // argument list of a function call
+                    for value in return_values {
+                        self.push(value);
+                    }
+
                     continue;
                 }
 

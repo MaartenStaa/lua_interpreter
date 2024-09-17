@@ -89,15 +89,24 @@ impl<'path, 'source> Compiler<'path, 'source> {
 
         if !has_return {
             // Add implicit final return
-            let nil_const_index = self.get_const_index(LuaConst::Nil);
-            self.vm.push_instruction(Instruction::LoadConst, None);
-            self.vm.push_const_index(nil_const_index);
+            self.push_load_marker();
+            self.push_load_nil();
             self.vm.push_instruction(Instruction::Return, None);
-            // TODO: Specify number of return values.
-            // self.vm.push_instruction(1, None);
         }
 
         self.vm
+    }
+
+    fn push_load_marker(&mut self) {
+        let marker_const_index = self.get_const_index(LuaConst::Marker);
+        self.vm.push_instruction(Instruction::LoadConst, None);
+        self.vm.push_const_index(marker_const_index);
+    }
+
+    fn push_load_nil(&mut self) {
+        let nil_const_index = self.get_const_index(LuaConst::Nil);
+        self.vm.push_instruction(Instruction::LoadConst, None);
+        self.vm.push_const_index(nil_const_index);
     }
 
     fn get_const_index(&mut self, lua_const: LuaConst) -> ConstIndex {
@@ -123,20 +132,15 @@ impl<'path, 'source> Compiler<'path, 'source> {
         }
 
         if let Some(return_statement) = ast.node.return_statement {
-            // TODO: Handle multiple return values
+            self.push_load_marker();
             if return_statement.is_empty() {
-                let nil_const_index = self.get_const_index(LuaConst::Nil);
-                self.vm.push_instruction(Instruction::LoadConst, None);
-                self.vm.push_const_index(nil_const_index);
+                self.push_load_nil();
             } else {
-                #[allow(clippy::never_loop)]
                 for return_statement in return_statement {
                     self.compile_expression(return_statement);
-                    break;
                 }
             }
             self.vm.push_instruction(Instruction::Return, None);
-            // TODO: Specify number of return values.
         }
 
         if options.new_scope {
@@ -154,11 +158,10 @@ impl<'path, 'source> Compiler<'path, 'source> {
         let span = statement.span;
         match statement.node {
             Statement::FunctionCall(function_call) => {
+                // Marker for the return values
+                self.push_load_marker();
                 self.compile_function_call(function_call);
-                // TODO: Handle multiple return values
-                self.vm.push_instruction(Instruction::Pop, Some(span));
-                // Pop the args marker
-                self.vm.push_instruction(Instruction::Pop, Some(span));
+                self.vm.push_instruction(Instruction::Discard, Some(span));
                 BlockResult::new()
             }
             Statement::LocalDeclaraction(names, expressions) => {
@@ -273,11 +276,6 @@ impl<'path, 'source> Compiler<'path, 'source> {
                             self.vm.push_instruction(Instruction::Pop, None)
                         }
                     }
-                }
-
-                if needs_alignment {
-                    // Pop the marker
-                    self.vm.push_instruction(Instruction::Pop, None);
                 }
 
                 BlockResult::new()
@@ -522,10 +520,8 @@ impl<'path, 'source> Compiler<'path, 'source> {
     }
 
     fn compile_function_call(&mut self, function_call: TokenTree<FunctionCall>) {
-        let marker_const_index = self.get_const_index(LuaConst::Marker);
-        self.vm.push_instruction(Instruction::LoadConst, None);
-        self.vm.push_const_index(marker_const_index);
-
+        // Marker for the start of the function call arguments
+        self.push_load_marker();
         for argument in function_call.node.args {
             self.compile_expression(argument);
         }
@@ -608,12 +604,9 @@ impl<'path, 'source> Compiler<'path, 'source> {
         self.end_frame();
 
         if !has_return {
-            let nil_const_index = self.get_const_index(LuaConst::Nil);
-            self.vm.push_instruction(Instruction::LoadConst, None);
-            self.vm.push_const_index(nil_const_index);
+            self.push_load_marker();
+            self.push_load_nil();
             self.vm.push_instruction(Instruction::Return, None);
-            // TODO: Specify number of return values.
-            // self.vm.push_instruction(1, None);
         }
 
         // Jump over the function

@@ -4,6 +4,7 @@ pub enum Instruction {
     // Stack operations
     LoadConst,
     Pop,
+    Discard,
     Swap,
     Align,
     AlignVararg,

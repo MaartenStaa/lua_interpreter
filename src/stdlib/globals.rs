@@ -6,7 +6,7 @@ use miette::miette;
 
 pub const _VERSION: &str = "LuaRust 5.4";
 
-pub(crate) fn assert(input: Vec<LuaValue>) -> miette::Result<LuaValue> {
+pub(crate) fn assert(input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     let Some(value) = input.first() else {
         return Err(miette::miette!(
             "bad argument #1 to 'assert' (value expected)"
@@ -28,10 +28,10 @@ pub(crate) fn assert(input: Vec<LuaValue>) -> miette::Result<LuaValue> {
         }
     }
 
-    Ok(LuaValue::Nil)
+    Ok(vec![LuaValue::Nil])
 }
 
-pub(crate) fn print(input: Vec<LuaValue>) -> miette::Result<LuaValue> {
+pub(crate) fn print(input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     for (i, value) in input.into_iter().enumerate() {
         if i != 0 {
             print!("\t");
@@ -40,23 +40,23 @@ pub(crate) fn print(input: Vec<LuaValue>) -> miette::Result<LuaValue> {
     }
     println!();
 
-    Ok(LuaValue::Nil)
+    Ok(vec![LuaValue::Nil])
 }
 
-pub(crate) fn tostring(input: Vec<LuaValue>) -> miette::Result<LuaValue> {
+pub(crate) fn tostring(input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     let value = input.first().unwrap_or(&LuaValue::Nil);
 
-    Ok(LuaValue::String(value.to_string().into_bytes()))
+    Ok(vec![LuaValue::String(value.to_string().into_bytes())])
 }
 
-pub(crate) fn r#type(input: Vec<LuaValue>) -> miette::Result<LuaValue> {
+pub(crate) fn r#type(input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     let value = input.first().unwrap_or(&LuaValue::Nil);
-    Ok(LuaValue::String(value.type_name().bytes().collect()))
+    Ok(vec![LuaValue::String(value.type_name().bytes().collect())])
 }
 
 static CONTROL_MESSAGES_ENABLED: AtomicBool = AtomicBool::new(false);
 
-pub(crate) fn warn(input: Vec<LuaValue>) -> miette::Result<LuaValue> {
+pub(crate) fn warn(input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     let strings: Vec<_> = input
         .iter()
         .enumerate()
@@ -82,7 +82,7 @@ pub(crate) fn warn(input: Vec<LuaValue>) -> miette::Result<LuaValue> {
             }
         }
 
-        return Ok(LuaValue::Nil);
+        return Ok(vec![LuaValue::Nil]);
     }
 
     if CONTROL_MESSAGES_ENABLED.load(Ordering::Relaxed) {
@@ -93,5 +93,5 @@ pub(crate) fn warn(input: Vec<LuaValue>) -> miette::Result<LuaValue> {
         eprintln!();
     }
 
-    Ok(LuaValue::Nil)
+    Ok(vec![LuaValue::Nil])
 }

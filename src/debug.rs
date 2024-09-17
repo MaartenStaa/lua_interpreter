@@ -32,6 +32,10 @@ pub fn print_instructions(vm: &VM) {
                 println!("POP");
                 1
             }
+            Instruction::Discard => {
+                println!("DISCARD");
+                1
+            }
             Instruction::Swap => {
                 let swap_offset = instructions[instruction_pointer + 1];
                 println!("SWAP          {swap_offset}");
