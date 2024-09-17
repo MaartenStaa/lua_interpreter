@@ -1,5 +1,8 @@
 use miette::{miette, Context};
-use std::ops;
+use std::{
+    fmt::{self, Display},
+    ops,
+};
 
 use crate::{
     ast,
@@ -132,17 +135,19 @@ impl ast::Number {
         }
     }
 
-    pub fn to_string(self) -> String {
-        match self {
-            ast::Number::Integer(i) => i.to_string(),
-            ast::Number::Float(f) => f.to_string(),
-        }
-    }
-
     pub fn is_zero(&self) -> bool {
         match self {
             ast::Number::Integer(i) => *i == 0,
             ast::Number::Float(f) => *f == 0.0,
+        }
+    }
+}
+
+impl Display for ast::Number {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ast::Number::Integer(i) => write!(f, "{}", i),
+            ast::Number::Float(n) => write!(f, "{}", n),
         }
     }
 }

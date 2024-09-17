@@ -91,6 +91,18 @@ impl From<bool> for LuaValue {
     }
 }
 
+impl From<&str> for LuaValue {
+    fn from(s: &str) -> Self {
+        LuaValue::String(s.as_bytes().to_vec())
+    }
+}
+
+impl From<LuaTable> for LuaValue {
+    fn from(table: LuaTable) -> Self {
+        LuaValue::Object(Arc::new(RwLock::new(LuaObject::Table(table))))
+    }
+}
+
 impl From<LuaConst> for LuaValue {
     fn from(constant: LuaConst) -> Self {
         match constant {
