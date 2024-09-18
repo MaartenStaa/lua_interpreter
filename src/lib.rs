@@ -4,6 +4,7 @@ pub mod debug;
 mod helpers;
 mod instruction;
 pub mod lexer;
+mod macros;
 mod math;
 pub mod optimizer;
 pub mod parser;

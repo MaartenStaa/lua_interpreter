@@ -2,6 +2,7 @@ use crate::value::{LuaObject, LuaValue};
 
 mod globals;
 mod math;
+mod string;
 
 pub fn lookup_global(name: &str) -> Option<LuaValue> {
     match name {
@@ -15,7 +16,12 @@ pub fn lookup_global(name: &str) -> Option<LuaValue> {
 
         // Namespaced modules
         "math" => Some(math::MATH.clone()),
+        "string" => Some(string()),
 
         _ => None,
     }
+}
+
+pub fn string() -> LuaValue {
+    string::STRING.clone()
 }

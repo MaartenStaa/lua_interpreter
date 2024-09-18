@@ -109,6 +109,15 @@ For example, if the stack is `[1, 2, Marker, 3, 4, 5]` and the instruction is
 `{4, 5}` is a pointer to a table on the heap. The table containing the variadic
 arguments are stored as a "local" (see `GetLocal` and `LoadVararg` below).
 
+#### `DupFromMarker`
+
+Reads an offset from the byte directly following the instruction, and duplicates
+the value at the offset from the latest `Marker` on the stack. The duplicated
+value is pushed onto the stack.
+
+For example, if the stack is `[1, 2, Marker, 3, 4, 5]` and the instruction is
+`DupFromMarker 1`, the stack will become `[1, 2, Marker, 3, 4, 5, 3]`.
+
 ### Binary operations
 
 #### Arithmetic

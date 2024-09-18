@@ -522,29 +522,56 @@ impl<'path, 'source> Compiler<'path, 'source> {
     fn compile_function_call(&mut self, function_call: TokenTree<FunctionCall>) {
         // Marker for the start of the function call arguments
         self.push_load_marker();
-        for argument in function_call.node.args {
-            self.compile_expression(argument);
+
+        // If this is a method call, we need to push the object as the first argument
+        if function_call.node.as_method {
+            self.compile_prefix_expression(*function_call.node.function);
+
+            // It's unfortunate to duplicate the argument loop here with the else below, but this
+            // avoids the borrow checker complaining, and having to `clone()` the function call
+            // node above.
+            for argument in function_call.node.args {
+                self.compile_expression(argument);
+            }
+
+            let method_name = function_call.node.name.expect("method call without name");
+
+            // We'll look up the target object as the first item after the marker
+            // on the stack, and then retrieve the method as a field on that object.
+            self.vm.push_instruction(Instruction::DupFromMarker, None);
+            self.vm.push_instruction(1, None);
+
+            let method_name_const_index =
+                self.get_const_index(LuaConst::String(method_name.node.identifier.into_bytes()));
+            self.vm
+                .push_instruction(Instruction::LoadConst, Some(function_call.span));
+            self.vm.push_const_index(method_name_const_index);
+
+            self.vm.push_instruction(Instruction::GetTable, None);
+        } else {
+            for argument in function_call.node.args {
+                self.compile_expression(argument);
+            }
+
+            match *function_call.node.function {
+                TokenTree {
+                    node:
+                        PrefixExpression::Variable(TokenTree {
+                            node: Variable::Name(name),
+                            ..
+                        }),
+                    ..
+                } => {
+                    self.load_variable(name);
+                }
+                prefix_expression => {
+                    self.compile_prefix_expression(prefix_expression);
+                }
+            }
         }
 
-        match *function_call.node.function {
-            TokenTree {
-                node:
-                    PrefixExpression::Variable(TokenTree {
-                        node: Variable::Name(name),
-                        ..
-                    }),
-                ..
-            } => {
-                self.load_variable(name);
-                self.vm
-                    .push_instruction(Instruction::Call, Some(function_call.span));
-            }
-            prefix_expression => {
-                self.compile_prefix_expression(prefix_expression);
-                self.vm
-                    .push_instruction(Instruction::Call, Some(function_call.span));
-            }
-        }
+        self.vm
+            .push_instruction(Instruction::Call, Some(function_call.span));
     }
 
     fn compile_function_def(&mut self, function_def: TokenTree<FunctionDef>) {
@@ -673,7 +700,6 @@ impl<'path, 'source> Compiler<'path, 'source> {
         match prefix_expression.node {
             PrefixExpression::FunctionCall(function_call) => {
                 // FIXME: In some contexts we only consume the first return value
-                // FIXME: We need to pop the args marker
                 self.compile_function_call(function_call);
             }
             PrefixExpression::Parenthesized(expression) => {

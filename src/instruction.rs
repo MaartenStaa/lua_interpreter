@@ -8,6 +8,7 @@ pub enum Instruction {
     Swap,
     Align,
     AlignVararg,
+    DupFromMarker,
 
     // Binary operations
     // Arithmetic

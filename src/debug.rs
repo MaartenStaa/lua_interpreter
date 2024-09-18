@@ -51,6 +51,11 @@ pub fn print_instructions(vm: &VM) {
                 println!("ALIGN_VARARG  {align_offset}");
                 2
             }
+            Instruction::DupFromMarker => {
+                let offset = instructions[instruction_pointer + 1];
+                println!("DUP_FROM_MARK {offset}");
+                2
+            }
 
             // Binary operations
             // Arithmetic

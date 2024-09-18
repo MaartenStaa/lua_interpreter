@@ -4,6 +4,7 @@ use miette::{miette, NamedSource};
 
 use crate::{
     instruction::Instruction,
+    macros::assert_table,
     stdlib,
     token::Span,
     value::{LuaConst, LuaNumber, LuaObject, LuaTable, LuaValue},
@@ -290,6 +291,18 @@ impl<'path, 'source> VM<'path, 'source> {
 
                     2
                 }
+                Instruction::DupFromMarker => {
+                    let offset = self.instructions[self.ip + 1];
+                    assert!(offset > 0, "dup_from_marker offset must be greater than 0");
+
+                    let marker_index = self.stack[..self.stack_index]
+                        .iter()
+                        .rposition(|v| *v == LuaValue::Marker)
+                        .expect("no marker found");
+                    let value = self.stack[marker_index + offset as usize].clone();
+                    self.push(value);
+                    2
+                }
 
                 // Binary operations
                 // Arithmetic
@@ -541,6 +554,7 @@ impl<'path, 'source> VM<'path, 'source> {
                 Instruction::GetTable => {
                     let key = self.pop();
                     let table = self.pop();
+                    // TODO: Handle metatables
                     match table {
                         LuaValue::Object(o) => match &*o.read().unwrap() {
                             LuaObject::Table(t) => {
@@ -551,6 +565,17 @@ impl<'path, 'source> VM<'path, 'source> {
                                 return Err(miette!("attempt to index a non-table"));
                             }
                         },
+                        LuaValue::String(_) => {
+                            // Maybe it's an stdlib string method
+                            let string = stdlib::string();
+                            assert_table!(string, string, {
+                                if let Some(value) = string.get(&key) {
+                                    self.push(value.clone());
+                                } else {
+                                    return Err(miette!("attempt to index a non-table"));
+                                }
+                            })
+                        }
                         _ => {
                             return Err(miette!("attempt to index a non-table"));
                         }
