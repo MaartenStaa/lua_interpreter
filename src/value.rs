@@ -217,16 +217,50 @@ impl LuaTable {
         if self.is_sequence {
             self.last_number_key as usize
         } else {
-            todo!("implement len for non-sequence tables")
+            // The length operator applied on a table returns a border in that table. A border in a
+            // table t is any non-negative integer that satisfies the following condition:
+            //
+            // (border == 0 or t[border] ~= nil) and
+            // (t[border + 1] == nil or border == math.maxinteger)
+
+            // TODO: There must be a more efficient way to do this
+            let mut border = 0;
+            loop {
+                let current = self
+                    .fields
+                    .get(&LuaValue::Number(LuaNumber::Integer(border)))
+                    .unwrap_or(&LuaValue::Nil);
+                let next = self
+                    .fields
+                    .get(&LuaValue::Number(LuaNumber::Integer(border + 1)))
+                    .unwrap_or(&LuaValue::Nil);
+                if (border == 0 || current != &LuaValue::Nil)
+                    && (next == &LuaValue::Nil || border == i64::MAX)
+                {
+                    break;
+                }
+
+                border += 1;
+            }
+
+            border as usize
         }
     }
 
     pub fn insert(&mut self, key: LuaValue, value: LuaValue) {
         match &key {
-            LuaValue::Number(LuaNumber::Integer(i)) if *i == self.last_number_key + 1 => {
-                self.last_number_key = *i;
+            LuaValue::Number(LuaNumber::Integer(i)) => {
+                if *i == self.last_number_key + 1 {
+                    self.last_number_key = *i;
+                } else if *i > self.last_number_key || *i < 1 {
+                    self.is_sequence = false;
+                }
             }
             _ => self.is_sequence = false,
+        }
+
+        if value == LuaValue::Nil {
+            self.is_sequence = false;
         }
 
         self.fields.insert(key, value);
