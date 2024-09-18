@@ -1,3 +1,5 @@
+use std::mem::size_of;
+
 use crate::{
     instruction::Instruction,
     value::LuaConst,
@@ -23,13 +25,13 @@ pub fn print_instructions(vm: &VM) {
         let instruction_increment = match Instruction::from(instruction) {
             // Stack manipulation
             Instruction::LoadConst => {
-                let const_index_bytes = &instructions[instruction_pointer + 1
-                    ..instruction_pointer + 1 + std::mem::size_of::<ConstIndex>()];
+                let const_index_bytes = &instructions
+                    [instruction_pointer + 1..instruction_pointer + 1 + size_of::<ConstIndex>()];
                 let const_index = ConstIndex::from_be_bytes(const_index_bytes.try_into().unwrap());
                 print!("LOAD_CONST    ");
                 print_const(&consts[const_index as usize]);
                 println!();
-                1 + std::mem::size_of::<ConstIndex>()
+                1 + size_of::<ConstIndex>()
             }
             Instruction::Pop => {
                 println!("POP");
@@ -163,22 +165,22 @@ pub fn print_instructions(vm: &VM) {
 
             // Variables
             Instruction::SetGlobal => {
-                let name_index_bytes = &instructions[instruction_pointer + 1
-                    ..instruction_pointer + 1 + std::mem::size_of::<ConstIndex>()];
+                let name_index_bytes = &instructions
+                    [instruction_pointer + 1..instruction_pointer + 1 + size_of::<ConstIndex>()];
                 let name_index = ConstIndex::from_be_bytes(name_index_bytes.try_into().unwrap());
                 print!("SET_GLOBAL    ");
                 print_const(&consts[name_index as usize]);
                 println!("   ({name_index})");
-                1 + std::mem::size_of::<ConstIndex>()
+                1 + size_of::<ConstIndex>()
             }
             Instruction::GetGlobal => {
-                let name_index_bytes = &instructions[instruction_pointer + 1
-                    ..instruction_pointer + 1 + std::mem::size_of::<ConstIndex>()];
+                let name_index_bytes = &instructions
+                    [instruction_pointer + 1..instruction_pointer + 1 + size_of::<ConstIndex>()];
                 let name_index = ConstIndex::from_be_bytes(name_index_bytes.try_into().unwrap());
                 print!("GET_GLOBAL    ");
                 print_const(&consts[name_index as usize]);
                 println!("   ({name_index})");
-                1 + std::mem::size_of::<ConstIndex>()
+                1 + size_of::<ConstIndex>()
             }
             Instruction::SetLocal => {
                 let local_index = instructions[instruction_pointer + 1];
@@ -222,25 +224,25 @@ pub fn print_instructions(vm: &VM) {
 
             // Control
             Instruction::Jmp => {
-                let offset_bytes = &instructions[instruction_pointer + 1
-                    ..instruction_pointer + 1 + std::mem::size_of::<JumpAddr>()];
+                let offset_bytes = &instructions
+                    [instruction_pointer + 1..instruction_pointer + 1 + size_of::<JumpAddr>()];
                 let offset = JumpAddr::from_be_bytes(offset_bytes.try_into().unwrap());
                 println!("JMP           {offset:04}");
-                1 + std::mem::size_of::<JumpAddr>()
+                1 + size_of::<JumpAddr>()
             }
             Instruction::JmpTrue => {
-                let offset_bytes = &instructions[instruction_pointer + 1
-                    ..instruction_pointer + 1 + std::mem::size_of::<JumpAddr>()];
+                let offset_bytes = &instructions
+                    [instruction_pointer + 1..instruction_pointer + 1 + size_of::<JumpAddr>()];
                 let offset = JumpAddr::from_be_bytes(offset_bytes.try_into().unwrap());
                 println!("JMP_TRUE      {offset:04}");
-                1 + std::mem::size_of::<JumpAddr>()
+                1 + size_of::<JumpAddr>()
             }
             Instruction::JmpFalse => {
-                let offset_bytes = &instructions[instruction_pointer + 1
-                    ..instruction_pointer + 1 + std::mem::size_of::<JumpAddr>()];
+                let offset_bytes = &instructions
+                    [instruction_pointer + 1..instruction_pointer + 1 + size_of::<JumpAddr>()];
                 let offset = JumpAddr::from_be_bytes(offset_bytes.try_into().unwrap());
                 println!("JMP_FALSE     {offset:04}");
-                1 + std::mem::size_of::<JumpAddr>()
+                1 + size_of::<JumpAddr>()
             }
         };
         instruction_pointer += instruction_increment;

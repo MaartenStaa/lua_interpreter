@@ -931,7 +931,10 @@ impl<'a, 'source> Compiler<'a, 'source> {
     }
 
     pub fn resolve_local(&mut self, name: &str) -> Option<u8> {
-        self.frames.last().unwrap().resolve_local(name)
+        self.frames
+            .last()
+            .expect("there should always be at least one frame")
+            .resolve_local(name)
     }
 
     // pub fn resolve_upvalue(&mut self, name: &str) -> Option<u8> {

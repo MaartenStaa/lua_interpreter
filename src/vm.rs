@@ -1,6 +1,7 @@
 use std::{
     borrow::Cow,
     collections::HashMap,
+    mem::size_of,
     path::{Path, PathBuf},
 };
 
@@ -220,7 +221,7 @@ impl<'source> VM<'source> {
             eprintln!("{:?}", err);
             std::process::exit(1);
         } else {
-            assert!(self.stack_index == 0, "stack is not empty");
+            assert_eq!(self.stack_index, 0, "stack is not empty");
         }
     }
 
@@ -239,17 +240,31 @@ impl<'source> VM<'source> {
         loop {
             let chunk_index = self.call_stack[self.call_stack_index - 1].chunk;
             let instruction = self.chunks[chunk_index].instructions[self.chunks[chunk_index].ip];
+
+            macro_rules! const_index {
+                () => {{
+                    let bytes = &self.chunks[chunk_index].instructions[self.chunks[chunk_index].ip
+                        + 1
+                        ..self.chunks[chunk_index].ip + 1 + size_of::<ConstIndex>()];
+                    ConstIndex::from_be_bytes(bytes.try_into().unwrap())
+                }};
+            }
+            macro_rules! jump_addr {
+                () => {{
+                    let bytes = &self.chunks[chunk_index].instructions[self.chunks[chunk_index].ip
+                        + 1
+                        ..self.chunks[chunk_index].ip + 1 + size_of::<JumpAddr>()];
+                    JumpAddr::from_be_bytes(bytes.try_into().unwrap())
+                }};
+            }
+
             let instruction_increment = match Instruction::from(instruction) {
                 // Stack manipulation
                 Instruction::LoadConst => {
-                    let const_index_bytes =
-                        &self.chunks[chunk_index].instructions[self.chunks[chunk_index].ip + 1
-                            ..self.chunks[chunk_index].ip + 1 + std::mem::size_of::<ConstIndex>()];
-                    let const_index =
-                        ConstIndex::from_be_bytes(const_index_bytes.try_into().unwrap());
+                    let const_index = const_index!();
                     let constant = self.consts[const_index as usize].clone();
                     self.push(constant.into());
-                    1 + std::mem::size_of::<ConstIndex>()
+                    1 + size_of::<ConstIndex>()
                 }
                 Instruction::Pop => {
                     self.pop();
@@ -284,7 +299,6 @@ impl<'source> VM<'source> {
                     let marker_index = (frame_pointer..self.stack_index)
                         .rev()
                         .find(|&i| self.stack[i] == LuaValue::Marker);
-                    // let base_pointer = marker_index.unwrap_or(frame_pointer);
 
                     // Align the stack, so that there are <align_amount> values
                     // between the marker and the top of the stack
@@ -493,21 +507,13 @@ impl<'source> VM<'source> {
 
                 // Variables
                 Instruction::SetGlobal => {
-                    let global_index_bytes =
-                        &self.chunks[chunk_index].instructions[self.chunks[chunk_index].ip + 1
-                            ..self.chunks[chunk_index].ip + 1 + std::mem::size_of::<ConstIndex>()];
-                    let global_index =
-                        ConstIndex::from_be_bytes(global_index_bytes.try_into().unwrap());
+                    let global_index = const_index!();
                     let value = self.pop();
                     self.globals.insert(global_index, value);
-                    1 + std::mem::size_of::<ConstIndex>()
+                    1 + size_of::<ConstIndex>()
                 }
                 Instruction::GetGlobal => {
-                    let global_index_bytes =
-                        &self.chunks[chunk_index].instructions[self.chunks[chunk_index].ip + 1
-                            ..self.chunks[chunk_index].ip + 1 + std::mem::size_of::<ConstIndex>()];
-                    let global_index =
-                        ConstIndex::from_be_bytes(global_index_bytes.try_into().unwrap());
+                    let global_index = const_index!();
                     let value = self
                         .globals
                         .get(&global_index)
@@ -522,7 +528,7 @@ impl<'source> VM<'source> {
                         })
                         .unwrap_or(LuaValue::Nil);
                     self.push(value);
-                    1 + std::mem::size_of::<ConstIndex>()
+                    1 + size_of::<ConstIndex>()
                 }
                 Instruction::SetLocal => {
                     let local_index =
@@ -717,11 +723,7 @@ impl<'source> VM<'source> {
 
                 // Control
                 Instruction::Jmp => {
-                    // Absolute jump
-                    let addr_bytes =
-                        &self.chunks[chunk_index].instructions[self.chunks[chunk_index].ip + 1
-                            ..self.chunks[chunk_index].ip + 1 + std::mem::size_of::<JumpAddr>()];
-                    let addr = JumpAddr::from_be_bytes(addr_bytes.try_into().unwrap());
+                    let addr = jump_addr!();
                     if addr == JumpAddr::MAX {
                         // TODO: We probably want a nicer error here. Was this a break
                         // outside of a loop? Was it a goto statement with no matching
@@ -734,32 +736,20 @@ impl<'source> VM<'source> {
                 Instruction::JmpTrue => {
                     let value = self.peek();
                     if value.as_boolean() {
-                        // Absolute jump
-                        let addr_bytes = &self.chunks[chunk_index].instructions[self.chunks
-                            [chunk_index]
-                            .ip
-                            + 1
-                            ..self.chunks[chunk_index].ip + 1 + std::mem::size_of::<JumpAddr>()];
-                        let addr = JumpAddr::from_be_bytes(addr_bytes.try_into().unwrap());
+                        let addr = jump_addr!();
                         self.chunks[chunk_index].ip = addr as usize;
                         continue;
                     }
-                    1 + std::mem::size_of::<JumpAddr>()
+                    1 + size_of::<JumpAddr>()
                 }
                 Instruction::JmpFalse => {
                     let value = self.peek();
                     if !value.as_boolean() {
-                        // Absolute jump
-                        let addr_bytes = &self.chunks[chunk_index].instructions[self.chunks
-                            [chunk_index]
-                            .ip
-                            + 1
-                            ..self.chunks[chunk_index].ip + 1 + std::mem::size_of::<JumpAddr>()];
-                        let addr = JumpAddr::from_be_bytes(addr_bytes.try_into().unwrap());
+                        let addr = jump_addr!();
                         self.chunks[chunk_index].ip = addr as usize;
                         continue;
                     }
-                    1 + std::mem::size_of::<JumpAddr>()
+                    1 + size_of::<JumpAddr>()
                 }
             };
             self.chunks[chunk_index].ip += instruction_increment;
@@ -802,8 +792,7 @@ impl<'source> Chunk<'source> {
     pub fn patch_addr_placeholder(&mut self, index: usize) {
         let addr = self.instructions.len() as JumpAddr;
         let addr_bytes = addr.to_be_bytes();
-        self.instructions[index..index + std::mem::size_of::<JumpAddr>()]
-            .copy_from_slice(&addr_bytes);
+        self.instructions[index..index + size_of::<JumpAddr>()].copy_from_slice(&addr_bytes);
     }
 
     pub fn get_instructions(&self) -> &[u8] {
