@@ -1,7 +1,10 @@
 use core::f64;
 use std::sync::LazyLock;
 
-use crate::value::{LuaNumber, LuaObject, LuaTable, LuaValue};
+use crate::{
+    value::{LuaNumber, LuaObject, LuaTable, LuaValue},
+    vm::VM,
+};
 use miette::miette;
 
 pub static MATH: LazyLock<LuaValue> = LazyLock::new(|| {
@@ -102,7 +105,7 @@ macro_rules! get_number {
     };
 }
 
-fn abs(values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+fn abs(_: &mut VM, values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     let value = require_number!(values);
 
     Ok(vec![match value {
@@ -111,7 +114,7 @@ fn abs(values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     }])
 }
 
-fn acos(values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+fn acos(_: &mut VM, values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     let value = require_number!(values);
 
     Ok(vec![match value {
@@ -120,7 +123,7 @@ fn acos(values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     }])
 }
 
-fn asin(values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+fn asin(_: &mut VM, values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     let value = require_number!(values);
 
     Ok(vec![match value {
@@ -129,12 +132,12 @@ fn asin(values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     }])
 }
 
-fn atan(values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+fn atan(_: &mut VM, values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     let _y = require_number!(values);
     todo!("implement atan")
 }
 
-fn ceil(values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+fn ceil(_: &mut VM, values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     let value = require_number!(values);
 
     Ok(vec![match value {
@@ -143,7 +146,7 @@ fn ceil(values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     }])
 }
 
-fn cos(values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+fn cos(_: &mut VM, values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     let value = require_number!(values);
 
     Ok(vec![match value {
@@ -152,7 +155,7 @@ fn cos(values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     }])
 }
 
-fn deg(values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+fn deg(_: &mut VM, values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     let value = require_number!(values);
 
     Ok(vec![match value {
@@ -161,7 +164,7 @@ fn deg(values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     }])
 }
 
-fn exp(values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+fn exp(_: &mut VM, values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     let value = require_number!(values);
 
     Ok(vec![match value {
@@ -170,7 +173,7 @@ fn exp(values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     }])
 }
 
-fn floor(values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+fn floor(_: &mut VM, values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     let value = require_number!(values);
 
     Ok(vec![match value {
@@ -179,11 +182,11 @@ fn floor(values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     }])
 }
 
-fn fmod(_: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+fn fmod(_: &mut VM, _: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     todo!("implement fmod")
 }
 
-fn log(values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+fn log(_: &mut VM, values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     let x = require_number!(values);
     let base = get_number!(values, 1).unwrap_or(&LuaNumber::Float(f64::consts::E));
 
@@ -203,7 +206,7 @@ fn log(values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     }])
 }
 
-fn max(values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+fn max(_: &mut VM, values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     require_number!(values);
 
     let mut max = None;
@@ -250,7 +253,7 @@ fn max(values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     ))])
 }
 
-fn min(values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+fn min(_: &mut VM, values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     require_number!(values);
 
     let mut min = None;
@@ -297,11 +300,11 @@ fn min(values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     ))])
 }
 
-fn modf(_: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+fn modf(_: &mut VM, _: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     todo!("implement modf; has two return values")
 }
 
-fn rad(values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+fn rad(_: &mut VM, values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     let value = require_number!(values);
 
     Ok(vec![match value {
@@ -310,20 +313,20 @@ fn rad(values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     }])
 }
 
-fn random(values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+fn random(_: &mut VM, values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     let _start = get_number!(values, 0).unwrap_or(&LuaNumber::Float(0.0));
     let _end = get_number!(values, 1).unwrap_or(&LuaNumber::Float(1.0));
 
     todo!("implement random")
 }
 
-fn randomseed(values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+fn randomseed(_: &mut VM, values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     let _seed = require_number!(values);
 
     todo!("implement randomseed")
 }
 
-fn sin(values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+fn sin(_: &mut VM, values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     let value = require_number!(values);
 
     Ok(vec![match value {
@@ -332,7 +335,7 @@ fn sin(values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     }])
 }
 
-fn sqrt(values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+fn sqrt(_: &mut VM, values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     let value = require_number!(values);
 
     Ok(vec![match value {
@@ -341,7 +344,7 @@ fn sqrt(values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     }])
 }
 
-fn tan(values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+fn tan(_: &mut VM, values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     let value = require_number!(values);
 
     Ok(vec![match value {
@@ -350,7 +353,7 @@ fn tan(values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     }])
 }
 
-fn tointeger(values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+fn tointeger(_: &mut VM, values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     match values.first() {
         Some(LuaValue::Number(LuaNumber::Integer(i))) => {
             Ok(vec![LuaValue::Number(LuaNumber::Integer(*i))])
@@ -369,7 +372,7 @@ fn tointeger(values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     }
 }
 
-fn r#type(values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+fn r#type(_: &mut VM, values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     match values.first() {
         Some(LuaValue::Number(LuaNumber::Integer(_))) => Ok(vec!["integer".into()]),
         Some(LuaValue::Number(LuaNumber::Float(_))) => Ok(vec!["float".into()]),
@@ -378,7 +381,7 @@ fn r#type(values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
 }
 
 // Returns a boolean, true if and only if integer m is below integer n when they are compared as unsigned integers.
-fn ult(values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+fn ult(_: &mut VM, values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     let a = require_number!(values, 0);
     let b = require_number!(values, 1);
 

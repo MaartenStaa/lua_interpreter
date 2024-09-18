@@ -6,6 +6,8 @@ use std::{
     sync::{Arc, RwLock},
 };
 
+use crate::vm::VM;
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum LuaConst {
     Marker,
@@ -13,7 +15,11 @@ pub enum LuaConst {
     Boolean(bool),
     Number(LuaNumber),
     String(Vec<u8>),
-    Function(Option<String>, u16),
+    Function {
+        name: Option<String>,
+        chunk: usize,
+        ip: u16,
+    },
 }
 
 #[derive(Clone)]
@@ -71,8 +77,12 @@ impl Eq for LuaValue {}
 #[derive(Debug, Clone, PartialEq)]
 pub enum LuaObject {
     Table(LuaTable),
-    Function(Option<String>, u16),
-    NativeFunction(fn(Vec<LuaValue>) -> miette::Result<Vec<LuaValue>>),
+    Function {
+        name: Option<String>,
+        chunk: usize,
+        ip: u16,
+    },
+    NativeFunction(fn(&mut VM, Vec<LuaValue>) -> miette::Result<Vec<LuaValue>>),
 
     // TODO: Implement these
     Thread,
@@ -111,8 +121,12 @@ impl From<LuaConst> for LuaValue {
             LuaConst::Boolean(b) => LuaValue::Boolean(b),
             LuaConst::Number(n) => LuaValue::Number(n),
             LuaConst::String(s) => LuaValue::String(s),
-            LuaConst::Function(name, f) => {
-                LuaValue::Object(Arc::new(RwLock::new(LuaObject::Function(name, f))))
+            LuaConst::Function { name, chunk, ip } => {
+                LuaValue::Object(Arc::new(RwLock::new(LuaObject::Function {
+                    name,
+                    chunk,
+                    ip,
+                })))
             }
         }
     }
@@ -141,7 +155,7 @@ impl LuaObject {
     pub fn type_name(&self) -> &'static str {
         match self {
             LuaObject::Table(_) => "table",
-            LuaObject::Function(_, _) => "function",
+            LuaObject::Function { .. } => "function",
             LuaObject::NativeFunction(_) => "function",
             LuaObject::UserData => "userdata",
             LuaObject::Thread => "thread",
@@ -299,11 +313,12 @@ impl Display for LuaObject {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             LuaObject::Table(_) => write!(f, "table: 0x{:x}", self as *const _ as usize),
-            LuaObject::Function(name, a) => {
+            LuaObject::Function { name, .. } => {
+                write!(f, "function: 0x{:x}", self as *const _ as usize)?;
                 if let Some(name) = name {
-                    write!(f, "function<{name}:{a:04}>")
+                    write!(f, " ({name})")
                 } else {
-                    write!(f, "function<{a:04}>")
+                    Ok(())
                 }
             }
             LuaObject::NativeFunction(func) => {

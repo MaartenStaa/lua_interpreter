@@ -1,4 +1,8 @@
-use std::{collections::HashMap, path::Path};
+use std::{
+    borrow::Cow,
+    collections::HashMap,
+    path::{Path, PathBuf},
+};
 
 use miette::{miette, NamedSource};
 
@@ -15,13 +19,42 @@ const MAX_STACK_SIZE: usize = 256;
 pub type JumpAddr = u16;
 pub type ConstIndex = u16;
 
-#[derive(Debug)]
-pub struct VM<'path, 'source> {
-    filename: &'path Path,
-    source: &'source str,
+#[derive(Debug, Clone)]
+pub struct Chunk<'source> {
+    index: usize,
+    filename: PathBuf,
+    source: Cow<'source, str>,
     instructions: Vec<u8>,
     instruction_spans: HashMap<usize, Span>,
     ip: usize,
+}
+
+impl<'source> Chunk<'source> {
+    pub fn new(filename: PathBuf, source: Cow<'source, str>) -> Self {
+        Self {
+            // NOTE: This is set by the VM when the chunk is added
+            index: 0,
+            filename,
+            source,
+            instructions: vec![],
+            instruction_spans: HashMap::new(),
+            ip: 0,
+        }
+    }
+
+    pub fn get_filename(&self) -> &Path {
+        &self.filename
+    }
+
+    pub fn get_source(&self) -> &str {
+        &self.source
+    }
+}
+
+#[derive(Debug)]
+pub struct VM<'source> {
+    chunks: Vec<Chunk<'source>>,
+    chunk_map: HashMap<PathBuf, usize>,
     consts: Vec<LuaConst>,
     const_index: ConstIndex,
     stack: [LuaValue; MAX_STACK_SIZE],
@@ -34,35 +67,62 @@ pub struct VM<'path, 'source> {
 #[derive(Debug)]
 struct CallFrame {
     name: Option<String>,
+    chunk: usize,
+    border_frame: bool,
     frame_pointer: usize,
     return_addr: usize,
 }
 
-impl<'path, 'source> VM<'path, 'source> {
-    pub fn new(filename: &'path Path, source: &'source str) -> Self {
-        let top_frame_name = filename.file_name().unwrap().to_string_lossy().to_string();
-        let mut result = Self {
-            filename,
-            source,
-            instructions: vec![],
-            instruction_spans: HashMap::new(),
-            ip: 0,
+impl CallFrame {
+    const fn default() -> Self {
+        Self {
+            name: None,
+            chunk: 0,
+            border_frame: false,
+            frame_pointer: 0,
+            return_addr: 0,
+        }
+    }
+}
+
+impl<'source> VM<'source> {
+    pub fn new() -> Self {
+        // let top_frame_name = filename.file_name().unwrap().to_string_lossy().to_string();
+        // result.call_stack[0].name = Some(top_frame_name);
+        Self {
+            // filename,
+            // source,
+            // instructions: vec![],
+            // instruction_spans: HashMap::new(),
+            // ip: 0,
+            chunks: vec![],
+            chunk_map: HashMap::new(),
             consts: vec![],
             const_index: 0,
             stack: [const { LuaValue::Nil }; MAX_STACK_SIZE],
             stack_index: 0,
             globals: HashMap::new(),
-            call_stack: [const {
-                CallFrame {
-                    name: None,
-                    frame_pointer: 0,
-                    return_addr: 0,
-                }
-            }; MAX_STACK_SIZE],
-            call_stack_index: 1,
-        };
-        result.call_stack[0].name = Some(top_frame_name);
-        result
+            call_stack: [const { CallFrame::default() }; MAX_STACK_SIZE],
+            call_stack_index: 0,
+        }
+    }
+
+    pub fn get_next_chunk_index(&self) -> usize {
+        self.chunks.len()
+    }
+
+    pub fn add_chunk(&mut self, mut chunk: Chunk<'source>) -> usize {
+        let index = self.chunks.len();
+        chunk.index = index;
+
+        self.chunk_map.insert(chunk.filename.clone(), index);
+        self.chunks.push(chunk);
+
+        index
+    }
+
+    pub fn get_chunk(&self, index: usize) -> Option<&Chunk> {
+        self.chunks.get(index)
     }
 
     pub fn register_const(&mut self, constant: LuaConst) -> ConstIndex {
@@ -107,6 +167,10 @@ impl<'path, 'source> VM<'path, 'source> {
         }
     }
 
+    pub fn get_consts(&self) -> &[LuaConst] {
+        &self.consts
+    }
+
     fn push_call_frame(&mut self, frame: CallFrame) {
         self.call_stack[self.call_stack_index] = frame;
         self.call_stack_index += 1;
@@ -116,67 +180,20 @@ impl<'path, 'source> VM<'path, 'source> {
         self.call_stack_index -= 1;
         std::mem::replace(
             &mut self.call_stack[self.call_stack_index],
-            CallFrame {
-                name: None,
-                frame_pointer: 0,
-                return_addr: 0,
-            },
+            CallFrame::default(),
         )
     }
 
-    pub fn get_current_addr(&self) -> JumpAddr {
-        self.instructions.len() as JumpAddr
-    }
-
-    // TODO: Can this be non-optional?
-    pub fn push_instruction<T>(&mut self, instruction: T, span: Option<Span>)
-    where
-        T: Into<u8> + std::fmt::Debug,
-    {
-        let instruction_index = self.instructions.len();
-        self.instructions.push(instruction.into());
-        if let Some(span) = span {
-            self.instruction_spans.insert(instruction_index, span);
-        }
-    }
-
-    pub fn push_addr(&mut self, addr: JumpAddr) {
-        self.instructions.extend_from_slice(&addr.to_be_bytes());
-    }
-
-    pub fn push_const_index(&mut self, index: ConstIndex) {
-        self.instructions.extend(index.to_be_bytes());
-    }
-
-    pub fn push_addr_placeholder(&mut self) -> usize {
-        let index = self.instructions.len();
-        self.instructions
-            .extend_from_slice(&JumpAddr::MAX.to_be_bytes());
-        index
-    }
-
-    pub fn patch_addr_placeholder(&mut self, index: usize) {
-        let addr = self.instructions.len() as JumpAddr;
-        let addr_bytes = addr.to_be_bytes();
-        self.instructions[index..index + std::mem::size_of::<JumpAddr>()]
-            .copy_from_slice(&addr_bytes);
-    }
-
-    pub fn get_consts(&self) -> &[LuaConst] {
-        &self.consts
-    }
-
-    pub fn get_instructions(&self) -> &[u8] {
-        &self.instructions
-    }
-
     pub fn run(&mut self) {
-        if let Err(err) = self.run_inner() {
-            let labels = if let Some(span) = self.instruction_spans.get(&self.ip) {
-                vec![span.labeled("here")]
-            } else {
-                vec![]
-            };
+        assert!(!self.chunks.is_empty(), "no chunks to run");
+
+        if let Err(err) = self.run_chunk(0) {
+            let labels =
+                if let Some(span) = self.chunks[0].instruction_spans.get(&self.chunks[0].ip) {
+                    vec![span.labeled("here")]
+                } else {
+                    vec![]
+                };
 
             // FIXME: This is a workaround for the fact that miette doesn't support
             // adding labels ad-hoc, but it ends up printing the error message
@@ -190,24 +207,44 @@ impl<'path, 'source> VM<'path, 'source> {
                     i = self.call_stack_index - i,
                 ));
             }
+            // let (filename, source) =
+            //     &self.chunk_info[&self.call_stack[self.call_stack_index - 1].chunk];
+            let Chunk {
+                filename, source, ..
+            } = &self.chunks[0];
             err = err.with_source_code(
-                NamedSource::new(self.filename.to_string_lossy(), self.source.to_string())
+                NamedSource::new(filename.to_string_lossy(), source.to_string())
                     .with_language("lua"),
             );
 
             eprintln!("{:?}", err);
             std::process::exit(1);
+        } else {
+            assert!(self.stack_index == 0, "stack is not empty");
         }
     }
 
-    fn run_inner(&mut self) -> miette::Result<()> {
+    pub(crate) fn run_chunk(&mut self, initial_chunk_index: usize) -> miette::Result<LuaValue> {
+        self.push_call_frame(CallFrame {
+            name: self.chunks[initial_chunk_index]
+                .filename
+                .file_name()
+                .map(|s| s.to_string_lossy().to_string()),
+            chunk: initial_chunk_index,
+            border_frame: true,
+            frame_pointer: 0,
+            return_addr: 0,
+        });
+
         loop {
-            let instruction = self.instructions[self.ip];
+            let chunk_index = self.call_stack[self.call_stack_index - 1].chunk;
+            let instruction = self.chunks[chunk_index].instructions[self.chunks[chunk_index].ip];
             let instruction_increment = match Instruction::from(instruction) {
                 // Stack manipulation
                 Instruction::LoadConst => {
-                    let const_index_bytes = &self.instructions
-                        [self.ip + 1..self.ip + 1 + std::mem::size_of::<ConstIndex>()];
+                    let const_index_bytes =
+                        &self.chunks[chunk_index].instructions[self.chunks[chunk_index].ip + 1
+                            ..self.chunks[chunk_index].ip + 1 + std::mem::size_of::<ConstIndex>()];
                     let const_index =
                         ConstIndex::from_be_bytes(const_index_bytes.try_into().unwrap());
                     let constant = self.consts[const_index as usize].clone();
@@ -227,7 +264,8 @@ impl<'path, 'source> VM<'path, 'source> {
                     1
                 }
                 Instruction::Swap => {
-                    let swap_offset = self.instructions[self.ip + 1];
+                    let swap_offset =
+                        self.chunks[chunk_index].instructions[self.chunks[chunk_index].ip + 1];
                     let a = self.stack_index - 1;
                     let b = self.stack_index - 1 - swap_offset as usize;
                     self.stack.swap(a, b);
@@ -235,7 +273,8 @@ impl<'path, 'source> VM<'path, 'source> {
                 }
                 instr @ Instruction::Align | instr @ Instruction::AlignVararg => {
                     let collect_varargs = matches!(instr, Instruction::AlignVararg);
-                    let align_amount = self.instructions[self.ip + 1];
+                    let align_amount =
+                        self.chunks[chunk_index].instructions[self.chunks[chunk_index].ip + 1];
 
                     assert!(self.stack_index > 0, "cannot align an empty stack");
 
@@ -292,7 +331,8 @@ impl<'path, 'source> VM<'path, 'source> {
                     2
                 }
                 Instruction::DupFromMarker => {
-                    let offset = self.instructions[self.ip + 1];
+                    let offset =
+                        self.chunks[chunk_index].instructions[self.chunks[chunk_index].ip + 1];
                     assert!(offset > 0, "dup_from_marker offset must be greater than 0");
 
                     let marker_index = self.stack[..self.stack_index]
@@ -453,8 +493,9 @@ impl<'path, 'source> VM<'path, 'source> {
 
                 // Variables
                 Instruction::SetGlobal => {
-                    let global_index_bytes = &self.instructions
-                        [self.ip + 1..self.ip + 1 + std::mem::size_of::<ConstIndex>()];
+                    let global_index_bytes =
+                        &self.chunks[chunk_index].instructions[self.chunks[chunk_index].ip + 1
+                            ..self.chunks[chunk_index].ip + 1 + std::mem::size_of::<ConstIndex>()];
                     let global_index =
                         ConstIndex::from_be_bytes(global_index_bytes.try_into().unwrap());
                     let value = self.pop();
@@ -462,8 +503,9 @@ impl<'path, 'source> VM<'path, 'source> {
                     1 + std::mem::size_of::<ConstIndex>()
                 }
                 Instruction::GetGlobal => {
-                    let global_index_bytes = &self.instructions
-                        [self.ip + 1..self.ip + 1 + std::mem::size_of::<ConstIndex>()];
+                    let global_index_bytes =
+                        &self.chunks[chunk_index].instructions[self.chunks[chunk_index].ip + 1
+                            ..self.chunks[chunk_index].ip + 1 + std::mem::size_of::<ConstIndex>()];
                     let global_index =
                         ConstIndex::from_be_bytes(global_index_bytes.try_into().unwrap());
                     let value = self
@@ -483,14 +525,16 @@ impl<'path, 'source> VM<'path, 'source> {
                     1 + std::mem::size_of::<ConstIndex>()
                 }
                 Instruction::SetLocal => {
-                    let local_index = self.instructions[self.ip + 1];
+                    let local_index =
+                        self.chunks[chunk_index].instructions[self.chunks[chunk_index].ip + 1];
                     let frame_pointer = self.call_stack.last().unwrap().frame_pointer;
                     let value = self.pop();
                     self.stack[frame_pointer + local_index as usize] = value;
                     2
                 }
                 Instruction::GetLocal => {
-                    let local_index = self.instructions[self.ip + 1];
+                    let local_index =
+                        self.chunks[chunk_index].instructions[self.chunks[chunk_index].ip + 1];
                     let current_frame = &self.call_stack[self.call_stack_index - 1];
                     let value =
                         self.stack[current_frame.frame_pointer + local_index as usize].clone();
@@ -498,7 +542,8 @@ impl<'path, 'source> VM<'path, 'source> {
                     2
                 }
                 Instruction::LoadVararg => {
-                    let local_index = self.instructions[self.ip + 1];
+                    let local_index =
+                        self.chunks[chunk_index].instructions[self.chunks[chunk_index].ip + 1];
                     let frame_pointer = self.call_stack[self.call_stack_index - 1].frame_pointer;
                     let vararg = self.stack[frame_pointer + local_index as usize].clone();
                     match vararg {
@@ -600,13 +645,15 @@ impl<'path, 'source> VM<'path, 'source> {
 
                     match function {
                         LuaValue::Object(o) => match &*o.read().unwrap() {
-                            LuaObject::Function(name, f) => {
+                            LuaObject::Function { name, chunk, ip } => {
                                 self.push_call_frame(CallFrame {
                                     name: name.clone(),
+                                    chunk: *chunk,
+                                    border_frame: false,
                                     frame_pointer: self.stack_index - num_args,
-                                    return_addr: self.ip + 1,
+                                    return_addr: self.chunks[chunk_index].ip + 1,
                                 });
-                                self.ip = *f as usize;
+                                self.chunks[*chunk].ip = *ip as usize;
                                 continue;
                             }
                             LuaObject::NativeFunction(f) => {
@@ -615,12 +662,12 @@ impl<'path, 'source> VM<'path, 'source> {
                                     args.push(self.pop());
                                 }
                                 args.reverse();
-                                for value in f(args)? {
+                                for value in f(self, args)? {
                                     self.push(value);
                                 }
                                 1
                             }
-                            // TODO: Handle tables with a `__call` metamethod
+                            // TODO: Handle values with a `__call` metamethod
                             _ => {
                                 return Err(miette!("attempt to call a non-function"));
                             }
@@ -643,21 +690,22 @@ impl<'path, 'source> VM<'path, 'source> {
                     let mut return_values: Vec<_> = (marker_position + 1..self.stack_index)
                         .map(|_| self.pop())
                         .collect();
-                    return_values.reverse();
 
                     // Pop the marker
                     self.pop();
 
-                    // Check if this is the root frame
-                    if self.call_stack_index == 0 {
-                        break;
+                    // Check if this is the root frame, or if we're leaving this chunk
+                    if frame.border_frame {
+                        return Ok(return_values.pop().unwrap_or(LuaValue::Nil));
                     }
 
-                    self.ip = frame.return_addr;
+                    let parent_call_frame = &self.call_stack[self.call_stack_index - 1];
+                    self.chunks[parent_call_frame.chunk].ip = frame.return_addr;
                     // Discard any remaining values on the stack from the function call
                     self.stack_index = frame.frame_pointer;
 
                     // Put the return values back
+                    return_values.reverse();
                     // TODO: Only push the first return value in certain contexts, like in the
                     // argument list of a function call
                     for value in return_values {
@@ -670,8 +718,9 @@ impl<'path, 'source> VM<'path, 'source> {
                 // Control
                 Instruction::Jmp => {
                     // Absolute jump
-                    let addr_bytes = &self.instructions
-                        [self.ip + 1..self.ip + 1 + std::mem::size_of::<JumpAddr>()];
+                    let addr_bytes =
+                        &self.chunks[chunk_index].instructions[self.chunks[chunk_index].ip + 1
+                            ..self.chunks[chunk_index].ip + 1 + std::mem::size_of::<JumpAddr>()];
                     let addr = JumpAddr::from_be_bytes(addr_bytes.try_into().unwrap());
                     if addr == JumpAddr::MAX {
                         // TODO: We probably want a nicer error here. Was this a break
@@ -679,17 +728,20 @@ impl<'path, 'source> VM<'path, 'source> {
                         // label?
                         return Err(miette!("attempt to jump to an invalid address"));
                     }
-                    self.ip = addr as usize;
+                    self.chunks[chunk_index].ip = addr as usize;
                     continue;
                 }
                 Instruction::JmpTrue => {
                     let value = self.peek();
                     if value.as_boolean() {
                         // Absolute jump
-                        let addr_bytes = &self.instructions
-                            [self.ip + 1..self.ip + 1 + std::mem::size_of::<JumpAddr>()];
+                        let addr_bytes = &self.chunks[chunk_index].instructions[self.chunks
+                            [chunk_index]
+                            .ip
+                            + 1
+                            ..self.chunks[chunk_index].ip + 1 + std::mem::size_of::<JumpAddr>()];
                         let addr = JumpAddr::from_be_bytes(addr_bytes.try_into().unwrap());
-                        self.ip = addr as usize;
+                        self.chunks[chunk_index].ip = addr as usize;
                         continue;
                     }
                     1 + std::mem::size_of::<JumpAddr>()
@@ -698,20 +750,63 @@ impl<'path, 'source> VM<'path, 'source> {
                     let value = self.peek();
                     if !value.as_boolean() {
                         // Absolute jump
-                        let addr_bytes = &self.instructions
-                            [self.ip + 1..self.ip + 1 + std::mem::size_of::<JumpAddr>()];
+                        let addr_bytes = &self.chunks[chunk_index].instructions[self.chunks
+                            [chunk_index]
+                            .ip
+                            + 1
+                            ..self.chunks[chunk_index].ip + 1 + std::mem::size_of::<JumpAddr>()];
                         let addr = JumpAddr::from_be_bytes(addr_bytes.try_into().unwrap());
-                        self.ip = addr as usize;
+                        self.chunks[chunk_index].ip = addr as usize;
                         continue;
                     }
                     1 + std::mem::size_of::<JumpAddr>()
                 }
             };
-            self.ip += instruction_increment;
+            self.chunks[chunk_index].ip += instruction_increment;
         }
+    }
+}
 
-        assert!(self.stack_index == 0, "stack is not empty");
+impl<'source> Chunk<'source> {
+    pub fn get_current_addr(&self) -> JumpAddr {
+        self.instructions.len() as JumpAddr
+    }
 
-        Ok(())
+    // TODO: Can this be non-optional?
+    pub fn push_instruction<T>(&mut self, instruction: T, span: Option<Span>)
+    where
+        T: Into<u8> + std::fmt::Debug,
+    {
+        let instruction_index = self.instructions.len();
+        self.instructions.push(instruction.into());
+        if let Some(span) = span {
+            self.instruction_spans.insert(instruction_index, span);
+        }
+    }
+
+    pub fn push_addr(&mut self, addr: JumpAddr) {
+        self.instructions.extend_from_slice(&addr.to_be_bytes());
+    }
+
+    pub fn push_const_index(&mut self, index: ConstIndex) {
+        self.instructions.extend(index.to_be_bytes());
+    }
+
+    pub fn push_addr_placeholder(&mut self) -> usize {
+        let index = self.instructions.len();
+        self.instructions
+            .extend_from_slice(&JumpAddr::MAX.to_be_bytes());
+        index
+    }
+
+    pub fn patch_addr_placeholder(&mut self, index: usize) {
+        let addr = self.instructions.len() as JumpAddr;
+        let addr_bytes = addr.to_be_bytes();
+        self.instructions[index..index + std::mem::size_of::<JumpAddr>()]
+            .copy_from_slice(&addr_bytes);
+    }
+
+    pub fn get_instructions(&self) -> &[u8] {
+        &self.instructions
     }
 }

@@ -1,6 +1,9 @@
 use std::sync::LazyLock;
 
-use crate::value::{LuaNumber, LuaObject, LuaTable, LuaValue};
+use crate::{
+    value::{LuaNumber, LuaObject, LuaTable, LuaValue},
+    vm::VM,
+};
 
 pub static STRING: LazyLock<LuaValue> = LazyLock::new(|| {
     let mut string = LuaTable::new();
@@ -37,7 +40,7 @@ macro_rules! require_string {
     };
 }
 
-fn len(input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+fn len(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     let input = require_string!(input, "len");
 
     Ok(vec![LuaValue::Number(LuaNumber::Integer(
@@ -45,7 +48,7 @@ fn len(input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     ))])
 }
 
-fn reverse(input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+fn reverse(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     let input = require_string!(input, "reverse");
 
     let mut reversed = input.clone();

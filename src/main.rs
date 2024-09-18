@@ -1,9 +1,9 @@
-use std::path::PathBuf;
+use std::{borrow::Cow, path::PathBuf};
 
 use clap::Parser;
 use lua_interpreter::{
     compiler::Compiler, debug, lexer::Lexer, optimizer::optimize as optimize_ast, parser,
-    token::TokenKind,
+    token::TokenKind, vm::VM,
 };
 use miette::LabeledSpan;
 
@@ -68,7 +68,11 @@ fn main() {
         optimize_ast(ast)
     };
 
-    let mut vm = Compiler::new(&filename, &source).compile(ast);
+    let mut vm = VM::new();
+    if let Err(e) = Compiler::new(&mut vm, filename, Cow::Borrowed(&source)).compile(Some(ast)) {
+        eprintln!("compilation failed: {e:?}");
+        std::process::exit(1);
+    }
     if print_bytecode {
         debug::print_instructions(&vm);
     }

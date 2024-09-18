@@ -1,12 +1,17 @@
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::{
+    ffi::OsString,
+    fs,
+    path::Path,
+    sync::atomic::{AtomicBool, Ordering},
+};
 
-use crate::value::LuaValue;
+use crate::{compiler::Compiler, value::LuaValue, vm::VM};
 
 use miette::miette;
 
 pub const _VERSION: &str = "LuaRust 5.4";
 
-pub(crate) fn assert(input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+pub(crate) fn assert(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     let Some(value) = input.first() else {
         return Err(miette::miette!(
             "bad argument #1 to 'assert' (value expected)"
@@ -31,7 +36,7 @@ pub(crate) fn assert(input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     Ok(vec![LuaValue::Nil])
 }
 
-pub(crate) fn print(input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+pub(crate) fn print(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     for (i, value) in input.into_iter().enumerate() {
         if i != 0 {
             print!("\t");
@@ -43,20 +48,58 @@ pub(crate) fn print(input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     Ok(vec![LuaValue::Nil])
 }
 
-pub(crate) fn tostring(input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+pub(crate) fn require(vm: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+    // TODO: Check if the module is already loaded
+
+    let name = match input.first() {
+        Some(LuaValue::String(s)) => s,
+        Some(value) => {
+            return Err(miette!(
+                "bad argument #1 to 'require' (string expected, got {})",
+                value.type_name()
+            ));
+        }
+        None => {
+            return Err(miette!(
+                "bad argument #1 to 'require' (string expected, got no value)"
+            ));
+        }
+    };
+
+    // TODO: Use `package.path` to search for modules
+    let name = String::from_utf8_lossy(name);
+    let mut name_os = OsString::from(name.as_ref());
+    name_os.push(".lua");
+
+    let path = Path::new(&name_os);
+    // TODO: Check how to handle `path` being a directory
+    if !path.exists() {
+        return Err(miette!("module '{name}' not found",));
+    }
+
+    let source = fs::read_to_string(path).map_err(|_| miette!("unable to read module {name}",))?;
+
+    let compiler = Compiler::new(vm, path.to_owned(), source.into());
+    let chunk_index = compiler.compile(None)?;
+    let result = vm.run_chunk(chunk_index)?;
+
+    Ok(vec![result, LuaValue::Nil])
+}
+
+pub(crate) fn tostring(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     let value = input.first().unwrap_or(&LuaValue::Nil);
 
     Ok(vec![LuaValue::String(value.to_string().into_bytes())])
 }
 
-pub(crate) fn r#type(input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+pub(crate) fn r#type(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     let value = input.first().unwrap_or(&LuaValue::Nil);
     Ok(vec![LuaValue::String(value.type_name().bytes().collect())])
 }
 
 static CONTROL_MESSAGES_ENABLED: AtomicBool = AtomicBool::new(false);
 
-pub(crate) fn warn(input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+pub(crate) fn warn(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     let strings: Vec<_> = input
         .iter()
         .enumerate()

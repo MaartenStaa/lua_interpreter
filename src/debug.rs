@@ -5,7 +5,10 @@ use crate::{
 };
 
 pub fn print_instructions(vm: &VM) {
-    let instructions = vm.get_instructions();
+    let instructions = vm
+        .get_chunk(0)
+        .expect("at least one chunk")
+        .get_instructions();
     let consts = vm.get_consts();
     let mut instruction_pointer = 0;
 
@@ -251,7 +254,7 @@ fn print_const(constant: &LuaConst) {
         LuaConst::Boolean(b) => print!("{b}"),
         LuaConst::Number(n) => print_number(n),
         LuaConst::String(s) => print!("STRING    \"{}\"", String::from_utf8_lossy(s)),
-        LuaConst::Function(name, f) => print!("FUNCTION  {name:?} {f:04}"),
+        LuaConst::Function { name, ip, .. } => print!("FUNCTION  {name:?} {ip:04}"),
     }
 }
 
