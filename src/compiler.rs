@@ -238,7 +238,6 @@ impl<'path, 'source> Compiler<'path, 'source> {
                 // NOTE: We need to iterate in reverse to handle chained assignments correctly. The
                 // top of the stack is the last value, so we need to assign the last variable
                 // first.
-                // TODO: Need to handle a mismatch between the number of values and variables
                 for variable in varlist.into_iter().rev() {
                     match variable.node {
                         Variable::Name(name) => {
@@ -624,7 +623,6 @@ impl<'path, 'source> Compiler<'path, 'source> {
             },
         );
 
-        // TODO: How to handle return values?
         // NOTE: We don't call `end_scope` here because we want to keep the locals around for the
         // return values. They're handled by the return statement, when the call frame is dropped.
         // self.end_scope();
