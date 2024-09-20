@@ -4,16 +4,18 @@ mod globals;
 mod math;
 mod string;
 
+use globals::*;
+
 pub fn lookup_global(name: &str) -> Option<LuaValue> {
     match name {
         // Globals
         "_VERSION" => Some(LuaValue::String(globals::_VERSION.bytes().collect())),
-        "assert" => Some(LuaObject::NativeFunction(globals::assert).into()),
-        "print" => Some(LuaObject::NativeFunction(globals::print).into()),
-        "require" => Some(LuaObject::NativeFunction(globals::require).into()),
-        "tostring" => Some(LuaObject::NativeFunction(globals::tostring).into()),
-        "type" => Some(LuaObject::NativeFunction(globals::r#type).into()),
-        "warn" => Some(LuaObject::NativeFunction(globals::warn).into()),
+        "assert" => Some(LuaObject::NativeFunction("assert", assert).into()),
+        "print" => Some(LuaObject::NativeFunction("print", print).into()),
+        "require" => Some(LuaObject::NativeFunction("require", require).into()),
+        "tostring" => Some(LuaObject::NativeFunction("tostring", tostring).into()),
+        "type" => Some(LuaObject::NativeFunction("type", r#type).into()),
+        "warn" => Some(LuaObject::NativeFunction("warn", warn).into()),
 
         // Namespaced modules
         "math" => Some(math::MATH.clone()),

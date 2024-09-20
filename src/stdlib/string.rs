@@ -8,8 +8,11 @@ use crate::{
 pub static STRING: LazyLock<LuaValue> = LazyLock::new(|| {
     let mut string = LuaTable::new();
 
-    string.insert("len".into(), LuaObject::NativeFunction(len).into());
-    string.insert("reverse".into(), LuaObject::NativeFunction(reverse).into());
+    string.insert("len".into(), LuaObject::NativeFunction("len", len).into());
+    string.insert(
+        "reverse".into(),
+        LuaObject::NativeFunction("reverse", reverse).into(),
+    );
 
     string.into()
 });

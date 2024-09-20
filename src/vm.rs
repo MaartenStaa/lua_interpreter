@@ -782,7 +782,16 @@ impl<'source> VM<'source> {
 
                                 continue;
                             }
-                            LuaObject::NativeFunction(f) => {
+                            LuaObject::NativeFunction(name, f) => {
+                                // Push a call frame just for nicer stack traces
+                                self.push_call_frame(
+                                    Some(format!("native function '{}'", name)),
+                                    0,
+                                    false,
+                                    self.stack_index - num_args,
+                                    self.chunks[chunk_index].ip + 1,
+                                    None,
+                                );
                                 let mut args = Vec::with_capacity(num_args);
                                 for _ in 0..num_args {
                                     args.push(self.pop());
@@ -791,6 +800,7 @@ impl<'source> VM<'source> {
                                 for value in f(self, args)? {
                                     self.push(value);
                                 }
+                                self.pop_call_frame();
                                 1
                             }
                             // TODO: Handle values with a `__call` metamethod

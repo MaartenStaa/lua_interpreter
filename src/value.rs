@@ -101,7 +101,10 @@ pub struct LuaClosure {
 pub enum LuaObject {
     Table(LuaTable),
     Closure(LuaClosure),
-    NativeFunction(fn(&mut VM, Vec<LuaValue>) -> miette::Result<Vec<LuaValue>>),
+    NativeFunction(
+        &'static str,
+        fn(&mut VM, Vec<LuaValue>) -> miette::Result<Vec<LuaValue>>,
+    ),
 
     // TODO: Implement these
     Thread,
@@ -113,7 +116,7 @@ impl PartialEq for LuaObject {
         match (self, other) {
             (LuaObject::Table(a), LuaObject::Table(b)) => a == b,
             (LuaObject::Closure(LuaClosure { .. }), LuaObject::Closure(LuaClosure { .. })) => false,
-            (LuaObject::NativeFunction(a), LuaObject::NativeFunction(b)) => a == b,
+            (LuaObject::NativeFunction(_, a), LuaObject::NativeFunction(_, b)) => a == b,
 
             // TODO: Implement these
             (LuaObject::Thread, LuaObject::Thread) => true,
@@ -196,7 +199,7 @@ impl LuaObject {
         match self {
             LuaObject::Table(_) => "table",
             LuaObject::Closure(LuaClosure { .. }) => "function",
-            LuaObject::NativeFunction(_) => "function",
+            LuaObject::NativeFunction(_, _) => "function",
             LuaObject::UserData => "userdata",
             LuaObject::Thread => "thread",
         }
@@ -362,8 +365,8 @@ impl Display for LuaObject {
                     Ok(())
                 }
             }
-            LuaObject::NativeFunction(func) => {
-                write!(f, "function: 0x{:x}", func as *const _ as usize)
+            LuaObject::NativeFunction(name, func) => {
+                write!(f, "function: 0x{:x} ({name})", func as *const _ as usize)
             }
             _ => todo!("formatting a {self:?}"),
         }
