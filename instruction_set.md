@@ -56,6 +56,19 @@ would have the following local variables:
 [1, 2, {3, 4}]
 ```
 
+### Closures and upvalues
+
+Closures are functions that can capture variables from their enclosing scope. At
+compilation time, the compiler determines which variables are captured by the
+closure, and embeds information about this in the `LoadClosure` instruction. At
+runtime, this instruction converts the local value on the stack into an upvalue,
+a reference to the captured variable. The closure object iself also keeps a list
+of upvalues, which are used to access the captured variables.
+
+To access an upvalue, the closure uses the `GetUpval` and `SetUpval`
+instructions, both of which take an index as an argument and operate on the
+upvalue list of the closure, which is saved in the call frame.
+
 ## Instructions
 
 ### Stack operations
@@ -66,6 +79,25 @@ Reads a constant index from the bytes directly following the instruction and
 looks up the value of the constant from the virtual machine's constant table.
 
 The `LuaConst` value is then pushed onto the stack.
+
+#### `LoadClosure`
+
+Reads a function index from the bytes directly following the instruction and
+looks up the function from the virtual machine's function table. The function
+contains information about the number of upvalues it captures.
+
+For each captured upvalue, the instruction reads two bytes. The first indicates
+whether this upvalue refers to a `local` in the parent scope (as opposed to an
+already captured upvalue), and the second is the index of the local variable or
+upvalue.
+
+In the case of a local, the virtual machine will convert the local variable on
+the stack into an upvalue, and replace the local variable with the upvalue. In
+the case of an upvalue, the virtual machine will simply fetch the upvalue from
+the current call frame. In both cases, the upvalue is then stored in the closure
+object.
+
+The closure object is pushed onto the stack.
 
 #### `Pop`
 
@@ -179,11 +211,28 @@ Reads a stack index from the bytes directly following the instruction. It pops
 the top value from the stack and sets the local variable at the index to the
 value. The index here is relative to the current stack frame.
 
+If the value on the stack refers to an upvalue, the upvalue is set instead.
+
 ### `GetLocal`
 
 Reads a stack index from the bytes directly following the instruction. It looks
 up the local variable at the index and pushes the value onto the stack. The
 index here is relative to the current stack frame.
+
+If the local variable refers to an upvalue, the inner value of the upvalue is
+extracted and pushed onto the stack.
+
+### `SetUpval`
+
+Reads an upvalue index from the bytes directly following the instruction. It
+pops the top value from the stack and sets the upvalue at the index in the
+current call frame to the popped value.
+
+### `GetUpval`
+
+Reads an upvalue index from the bytes directly following the instruction. It
+looks up the upvalue at the index in the current call frame and pushes the value
+onto the stack.
 
 ### `LoadVararg`
 

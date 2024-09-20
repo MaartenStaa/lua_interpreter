@@ -3,13 +3,14 @@ use std::{
     collections::HashMap,
     mem::size_of,
     path::{Path, PathBuf},
+    sync::{Arc, RwLock},
 };
 
 use miette::{miette, NamedSource};
 
 use crate::{
     instruction::Instruction,
-    macros::assert_table,
+    macros::{assert_closure, assert_table},
     stdlib,
     token::Span,
     value::{LuaConst, LuaNumber, LuaObject, LuaTable, LuaValue},
@@ -72,6 +73,7 @@ struct CallFrame {
     border_frame: bool,
     frame_pointer: usize,
     return_addr: usize,
+    upvalues: [Option<Arc<RwLock<LuaValue>>>; u8::MAX as usize],
 }
 
 impl CallFrame {
@@ -82,20 +84,21 @@ impl CallFrame {
             border_frame: false,
             frame_pointer: 0,
             return_addr: 0,
+            upvalues: [const { None }; u8::MAX as usize],
         }
     }
 }
 
+#[derive(Debug, Copy, Clone)]
+struct PoppedCallFrame {
+    border_frame: bool,
+    frame_pointer: usize,
+    return_addr: usize,
+}
+
 impl<'source> VM<'source> {
     pub fn new() -> Self {
-        // let top_frame_name = filename.file_name().unwrap().to_string_lossy().to_string();
-        // result.call_stack[0].name = Some(top_frame_name);
         Self {
-            // filename,
-            // source,
-            // instructions: vec![],
-            // instruction_spans: HashMap::new(),
-            // ip: 0,
             chunks: vec![],
             chunk_map: HashMap::new(),
             consts: vec![],
@@ -172,17 +175,53 @@ impl<'source> VM<'source> {
         &self.consts
     }
 
-    fn push_call_frame(&mut self, frame: CallFrame) {
-        self.call_stack[self.call_stack_index] = frame;
+    fn push_call_frame(
+        &mut self,
+        name: Option<String>,
+        chunk: usize,
+        border_frame: bool,
+        frame_pointer: usize,
+        return_addr: usize,
+        upvalues: Option<Vec<Option<Arc<RwLock<LuaValue>>>>>,
+    ) {
+        // Reuse the existing object to keep the `upvalues` vec
+        self.call_stack[self.call_stack_index].name = name;
+        self.call_stack[self.call_stack_index].chunk = chunk;
+        self.call_stack[self.call_stack_index].border_frame = border_frame;
+        self.call_stack[self.call_stack_index].frame_pointer = frame_pointer;
+        self.call_stack[self.call_stack_index].return_addr = return_addr;
+        if let Some(upvalues) = upvalues {
+            // TODO: See if we can be more efficient here
+            for (i, upvalue) in upvalues.into_iter().enumerate() {
+                self.call_stack[self.call_stack_index].upvalues[i] = upvalue;
+            }
+        }
+
         self.call_stack_index += 1;
     }
 
-    fn pop_call_frame(&mut self) -> CallFrame {
+    fn pop_call_frame(&mut self) -> PoppedCallFrame {
         self.call_stack_index -= 1;
-        std::mem::replace(
-            &mut self.call_stack[self.call_stack_index],
-            CallFrame::default(),
-        )
+
+        let frame = &mut self.call_stack[self.call_stack_index];
+        let popped_frame = PoppedCallFrame {
+            border_frame: frame.border_frame,
+            frame_pointer: frame.frame_pointer,
+            return_addr: frame.return_addr,
+        };
+
+        frame.upvalues.fill(None);
+
+        popped_frame
+    }
+
+    fn capture_upvalue(&mut self, index: usize) -> Arc<RwLock<LuaValue>> {
+        let frame = &self.call_stack[self.call_stack_index - 1];
+        let value = self.stack[frame.frame_pointer + index].clone();
+        let upvalue = Arc::new(RwLock::new(value));
+        self.stack[frame.frame_pointer + index] = LuaValue::UpValue(Arc::clone(&upvalue));
+
+        upvalue
     }
 
     pub fn run(&mut self) {
@@ -226,16 +265,17 @@ impl<'source> VM<'source> {
     }
 
     pub(crate) fn run_chunk(&mut self, initial_chunk_index: usize) -> miette::Result<LuaValue> {
-        self.push_call_frame(CallFrame {
-            name: self.chunks[initial_chunk_index]
+        self.push_call_frame(
+            self.chunks[initial_chunk_index]
                 .filename
                 .file_name()
                 .map(|s| s.to_string_lossy().to_string()),
-            chunk: initial_chunk_index,
-            border_frame: true,
-            frame_pointer: 0,
-            return_addr: 0,
-        });
+            initial_chunk_index,
+            true,
+            0,
+            0,
+            None,
+        );
 
         loop {
             let chunk_index = self.call_stack[self.call_stack_index - 1].chunk;
@@ -265,6 +305,37 @@ impl<'source> VM<'source> {
                     let constant = self.consts[const_index as usize].clone();
                     self.push(constant.into());
                     1 + size_of::<ConstIndex>()
+                }
+                Instruction::LoadClosure => {
+                    let const_index = const_index!();
+                    let function_definition = self.consts[const_index as usize].clone();
+                    let mut closure = function_definition.into();
+                    let upval_bytes = assert_closure!(write, &mut closure, closure, {
+                        let upvalues = closure.upvalues.capacity();
+                        for i in 0..upvalues {
+                            let upval_ip =
+                                self.chunks[chunk_index].ip + size_of::<ConstIndex>() + 1 + i * 2;
+                            let is_local = self.chunks[chunk_index].instructions[upval_ip] == 1;
+                            let index = self.chunks[chunk_index].instructions[upval_ip + 1];
+                            if is_local {
+                                closure.upvalues[index as usize] =
+                                    Some(self.capture_upvalue(index as usize));
+                            } else {
+                                closure.upvalues[index as usize] = Some(
+                                    self.call_stack[self.call_stack_index - 1].upvalues
+                                        [index as usize]
+                                        .as_ref()
+                                        .expect("upvalue not found")
+                                        .clone(),
+                                );
+                            }
+                        }
+
+                        upvalues * size_of::<ConstIndex>()
+                    });
+
+                    self.push(closure);
+                    1 + size_of::<ConstIndex>() + upval_bytes
                 }
                 Instruction::Pop => {
                     self.pop();
@@ -321,8 +392,8 @@ impl<'source> VM<'source> {
                         if num_varargs > 0 {
                             // Collect the varargs into a table
                             let mut table = LuaTable::new();
-                            let mut index = num_varargs;
                             // Descending order!
+                            let mut index = num_varargs;
                             for _ in 0..num_varargs {
                                 let value = self.pop();
                                 table.insert(
@@ -533,18 +604,58 @@ impl<'source> VM<'source> {
                 Instruction::SetLocal => {
                     let local_index =
                         self.chunks[chunk_index].instructions[self.chunks[chunk_index].ip + 1];
-                    let frame_pointer = self.call_stack.last().unwrap().frame_pointer;
+                    let frame_pointer = self.call_stack[self.call_stack_index - 1].frame_pointer;
                     let value = self.pop();
-                    self.stack[frame_pointer + local_index as usize] = value;
+
+                    let old_value = &self.stack[frame_pointer + local_index as usize];
+                    if let LuaValue::UpValue(upval) = old_value {
+                        let mut upval = upval.write().unwrap();
+                        *upval = value;
+                    } else {
+                        self.stack[frame_pointer + local_index as usize] = value;
+                    }
                     2
                 }
                 Instruction::GetLocal => {
                     let local_index =
                         self.chunks[chunk_index].instructions[self.chunks[chunk_index].ip + 1];
                     let current_frame = &self.call_stack[self.call_stack_index - 1];
-                    let value =
-                        self.stack[current_frame.frame_pointer + local_index as usize].clone();
+
+                    let value = &self.stack[current_frame.frame_pointer + local_index as usize];
+                    if let LuaValue::UpValue(upval) = value {
+                        let value = upval.read().unwrap().clone();
+                        self.push(value);
+                    } else {
+                        self.push(value.clone());
+                    }
+                    2
+                }
+                Instruction::SetUpval => {
+                    let upval_index =
+                        self.chunks[chunk_index].instructions[self.chunks[chunk_index].ip + 1];
+                    let value = self.pop();
+                    let mut upval = self.call_stack[self.call_stack_index - 1].upvalues
+                        [upval_index as usize]
+                        .as_mut()
+                        .unwrap()
+                        .write()
+                        .unwrap();
+                    *upval = value;
+
+                    2
+                }
+                Instruction::GetUpval => {
+                    let upval_index =
+                        self.chunks[chunk_index].instructions[self.chunks[chunk_index].ip + 1];
+                    let value = self.call_stack[self.call_stack_index - 1].upvalues
+                        [upval_index as usize]
+                        .as_ref()
+                        .expect("upvalue not found")
+                        .read()
+                        .unwrap()
+                        .clone();
                     self.push(value);
+
                     2
                 }
                 Instruction::LoadVararg => {
@@ -649,17 +760,26 @@ impl<'source> VM<'source> {
                     self.shift_left(num_args, 1);
                     self.pop();
 
+                    let function = match function {
+                        LuaValue::UpValue(upval) => upval.read().unwrap().clone(),
+                        function => function,
+                    };
+
                     match function {
                         LuaValue::Object(o) => match &*o.read().unwrap() {
-                            LuaObject::Function { name, chunk, ip } => {
-                                self.push_call_frame(CallFrame {
-                                    name: name.clone(),
-                                    chunk: *chunk,
-                                    border_frame: false,
-                                    frame_pointer: self.stack_index - num_args,
-                                    return_addr: self.chunks[chunk_index].ip + 1,
-                                });
-                                self.chunks[*chunk].ip = *ip as usize;
+                            LuaObject::Closure(closure) => {
+                                // TODO: Can we get rid of this clone?
+                                let closure = closure.clone();
+                                self.push_call_frame(
+                                    closure.name.clone(),
+                                    closure.chunk,
+                                    false,
+                                    self.stack_index - num_args,
+                                    self.chunks[chunk_index].ip + 1,
+                                    Some(closure.upvalues),
+                                );
+                                self.chunks[closure.chunk].ip = closure.ip as usize;
+
                                 continue;
                             }
                             LuaObject::NativeFunction(f) => {

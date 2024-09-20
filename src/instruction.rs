@@ -3,6 +3,7 @@
 pub enum Instruction {
     // Stack operations
     LoadConst,
+    LoadClosure,
     Pop,
     Discard,
     Swap,
@@ -50,8 +51,8 @@ pub enum Instruction {
     GetGlobal,
     SetLocal,
     GetLocal,
-    // SetUpval,
-    // GetUpval,
+    SetUpval,
+    GetUpval,
     LoadVararg,
 
     // Table

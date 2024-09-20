@@ -2,7 +2,8 @@ use std::mem::size_of;
 
 use crate::{
     instruction::Instruction,
-    value::LuaConst,
+    macros::assert_function_const,
+    value::{LuaConst, LuaFunctionDefinition},
     vm::{ConstIndex, JumpAddr, VM},
 };
 
@@ -20,7 +21,7 @@ pub fn print_instructions(vm: &VM) {
         }
 
         let instruction = instructions[instruction_pointer];
-        print!("{instruction_pointer:04}   ");
+        print!("{instruction_pointer:04}    {instruction:02x}  ");
 
         let instruction_increment = match Instruction::from(instruction) {
             // Stack manipulation
@@ -32,6 +33,33 @@ pub fn print_instructions(vm: &VM) {
                 print_const(&consts[const_index as usize]);
                 println!();
                 1 + size_of::<ConstIndex>()
+            }
+            Instruction::LoadClosure => {
+                let const_index_bytes = &instructions
+                    [instruction_pointer + 1..instruction_pointer + 1 + size_of::<ConstIndex>()];
+                let const_index = ConstIndex::from_be_bytes(const_index_bytes.try_into().unwrap());
+                print!("LOAD_CLOSURE  ");
+                print_const(&consts[const_index as usize]);
+                println!();
+
+                let function = assert_function_const!(&consts[const_index as usize]);
+                let extra_bytes = function.upvalues * 2;
+                for i in 0..function.upvalues {
+                    let ip = instruction_pointer + 1 + size_of::<ConstIndex>() + i * 2;
+                    let is_local_byte = instructions[ip];
+                    let local_index = instructions[ip + 1];
+                    println!(
+                        "{ip:04}        |             {:7} {}",
+                        if is_local_byte == 0 {
+                            "upvalue"
+                        } else {
+                            "local"
+                        },
+                        local_index
+                    );
+                }
+
+                1 + size_of::<ConstIndex>() + extra_bytes
             }
             Instruction::Pop => {
                 println!("POP");
@@ -192,6 +220,16 @@ pub fn print_instructions(vm: &VM) {
                 println!("GET_LOCAL     {local_index}");
                 2
             }
+            Instruction::SetUpval => {
+                let upval_index = instructions[instruction_pointer + 1];
+                println!("SET_UPVAL     {upval_index}");
+                2
+            }
+            Instruction::GetUpval => {
+                let upval_index = instructions[instruction_pointer + 1];
+                println!("GET_UPVAL     {upval_index}");
+                2
+            }
             Instruction::LoadVararg => {
                 let local_index = instructions[instruction_pointer + 1];
                 println!("LOAD_VARARG   {local_index}");
@@ -256,7 +294,12 @@ fn print_const(constant: &LuaConst) {
         LuaConst::Boolean(b) => print!("{b}"),
         LuaConst::Number(n) => print_number(n),
         LuaConst::String(s) => print!("STRING    \"{}\"", String::from_utf8_lossy(s)),
-        LuaConst::Function { name, ip, .. } => print!("FUNCTION  {name:?} {ip:04}"),
+        LuaConst::Function(LuaFunctionDefinition { name, ip, .. }) => {
+            print!(
+                "FUNCTION<{name}:{ip:04}>",
+                name = name.as_deref().unwrap_or("[anonymous]"),
+            )
+        }
     }
 }
 

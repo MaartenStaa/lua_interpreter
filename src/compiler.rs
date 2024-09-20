@@ -9,18 +9,25 @@ use crate::{
     instruction::Instruction,
     parser::Parser,
     token::Span,
-    value::{LuaConst, LuaNumber},
+    value::{LuaConst, LuaFunctionDefinition, LuaNumber},
     vm::{Chunk, ConstIndex, VM},
 };
 
 const VARARG_LOCAL_NAME: &str = "...";
 
 #[derive(Debug, Clone)]
-pub struct Local {
+struct Local {
     name: String,
     depth: u8,
 }
 
+#[derive(Debug, Clone)]
+struct Upvalue {
+    is_local: bool,
+    index: u8,
+}
+
+#[derive(Debug)]
 struct BlockOptions {
     is_loop: bool,
     new_scope: bool,
@@ -34,10 +41,19 @@ struct BlockResult {
 #[derive(Debug)]
 struct Frame {
     locals: Vec<Local>,
+    upvalues: Vec<Upvalue>,
     scope_depth: u8,
 }
 
 impl Frame {
+    fn new() -> Self {
+        Self {
+            locals: vec![],
+            upvalues: vec![],
+            scope_depth: 0,
+        }
+    }
+
     fn resolve_local(&self, name: &str) -> Option<u8> {
         self.locals.iter().enumerate().rev().find_map(|(i, local)| {
             if local.name == name {
@@ -67,6 +83,11 @@ impl BlockResult {
     }
 }
 
+enum VariableMode {
+    Read,
+    Write,
+}
+
 impl<'a, 'source> Compiler<'a, 'source> {
     pub fn new(vm: &'a mut VM<'source>, filename: PathBuf, source: Cow<'source, str>) -> Self {
         Self {
@@ -74,10 +95,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
             chunk_index: vm.get_next_chunk_index(),
             vm,
             // Start at the root of the file.
-            frames: vec![Frame {
-                locals: vec![],
-                scope_depth: 0,
-            }],
+            frames: vec![Frame::new()],
         }
     }
 
@@ -193,10 +211,6 @@ impl<'a, 'source> Compiler<'a, 'source> {
                     let marker_const_index = self.get_const_index(LuaConst::Marker);
                     self.chunk.push_instruction(Instruction::LoadConst, None);
                     self.chunk.push_const_index(marker_const_index);
-
-                    // Declare a dummy local for it, since we can't pop it at the end of the local
-                    // declaration
-                    self.add_local("#local-marker".to_string());
                 }
 
                 for expression in expressions {
@@ -253,7 +267,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                 for variable in varlist.into_iter().rev() {
                     match variable.node {
                         Variable::Name(name) => {
-                            self.assign_variable(name);
+                            self.variable(name, VariableMode::Write);
                         }
                         Variable::Indexed(target, index) => {
                             // `SetTable` expects a stack head of:
@@ -582,7 +596,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                         }),
                     ..
                 } => {
-                    self.load_variable(name);
+                    self.variable(name, VariableMode::Read);
                 }
                 prefix_expression => {
                     self.compile_prefix_expression(prefix_expression);
@@ -647,7 +661,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
         // NOTE: We don't call `end_scope` here because we want to keep the locals around for the
         // return values. They're handled by the return statement, when the call frame is dropped.
         // self.end_scope();
-        self.end_frame();
+        let frame = self.end_frame();
 
         if !has_return {
             self.push_load_marker();
@@ -659,14 +673,21 @@ impl<'a, 'source> Compiler<'a, 'source> {
         self.chunk.patch_addr_placeholder(jmp_over_func_addr);
 
         // Save the function definition
-        let const_index = self.vm.register_const(LuaConst::Function {
-            name: function_def.node.name,
-            chunk: self.chunk_index,
-            ip: func_addr,
-        });
+        let const_index = self
+            .vm
+            .register_const(LuaConst::Function(LuaFunctionDefinition {
+                name: function_def.node.name,
+                chunk: self.chunk_index,
+                ip: func_addr,
+                upvalues: frame.upvalues.len(),
+            }));
         self.chunk
-            .push_instruction(Instruction::LoadConst, Some(function_def.span));
+            .push_instruction(Instruction::LoadClosure, Some(function_def.span));
         self.chunk.push_const_index(const_index);
+        for upvalue in frame.upvalues {
+            self.chunk.push_instruction(upvalue.is_local, None);
+            self.chunk.push_instruction(upvalue.index, None);
+        }
     }
 
     fn compile_expression(&mut self, expression: TokenTree<Expression>) {
@@ -727,7 +748,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                 self.compile_expression(*expression);
             }
             PrefixExpression::Variable(variable) => match variable.node {
-                Variable::Name(name) => self.load_variable(name),
+                Variable::Name(name) => self.variable(name, VariableMode::Read),
                 Variable::Indexed(prefix, index) => {
                     self.compile_prefix_expression(*prefix);
                     self.compile_expression(*index);
@@ -855,53 +876,52 @@ impl<'a, 'source> Compiler<'a, 'source> {
         }
     }
 
-    fn assign_variable<T>(&mut self, name: TokenTree<Name<T>>) {
+    fn variable<T>(&mut self, name: TokenTree<Name<T>>, mode: VariableMode) {
         if let Some(local) = self.resolve_local(&name.node.identifier) {
-            self.chunk
-                .push_instruction(Instruction::SetLocal, Some(name.span));
+            self.chunk.push_instruction(
+                match mode {
+                    VariableMode::Read => Instruction::GetLocal,
+                    VariableMode::Write => Instruction::SetLocal,
+                },
+                Some(name.span),
+            );
             self.chunk.push_instruction(local, None);
+        } else if let Some(upvalue) = self.resolve_upvalue(&name.node.identifier) {
+            self.chunk.push_instruction(
+                match mode {
+                    VariableMode::Read => Instruction::GetUpval,
+                    VariableMode::Write => Instruction::SetUpval,
+                },
+                Some(name.span),
+            );
+            self.chunk.push_instruction(upvalue, None);
         } else {
+            self.chunk.push_instruction(
+                match mode {
+                    VariableMode::Read => Instruction::GetGlobal,
+                    VariableMode::Write => Instruction::SetGlobal,
+                },
+                Some(name.span),
+            );
             let const_index = self.get_global_name_index(name.node.identifier.into_bytes());
-            self.chunk
-                .push_instruction(Instruction::SetGlobal, Some(name.span));
             self.chunk.push_const_index(const_index);
         }
     }
 
-    fn load_variable<T>(&mut self, name: TokenTree<Name<T>>) {
-        if let Some(local) = self.resolve_local(&name.node.identifier) {
-            self.chunk
-                .push_instruction(Instruction::GetLocal, Some(name.span));
-            self.chunk.push_instruction(local, None);
-        // } else if let Some(upvalue) = self.vm.resolve_upvalue(&name.node.identifier) {
-        //     self.vm
-        //         .push_instruction(Instruction::GetUpval, Some(name.span));
-        //     self.chunk.push_instruction(upvalue, None);
-        } else {
-            let const_index = self.get_global_name_index(name.node.identifier.into_bytes());
-            self.chunk
-                .push_instruction(Instruction::GetGlobal, Some(name.span));
-            self.chunk.push_const_index(const_index);
-        }
+    fn begin_frame(&mut self) {
+        self.frames.push(Frame::new());
     }
 
-    pub fn begin_frame(&mut self) {
-        self.frames.push(Frame {
-            locals: vec![],
-            scope_depth: 0,
-        });
+    fn end_frame(&mut self) -> Frame {
+        self.frames.pop().expect("frame exists")
     }
 
-    pub fn end_frame(&mut self) {
-        self.frames.pop();
-    }
-
-    pub fn begin_scope(&mut self) {
+    fn begin_scope(&mut self) {
         let current_frame = self.frames.last_mut().unwrap();
         current_frame.scope_depth += 1;
     }
 
-    pub fn end_scope(&mut self) {
+    fn end_scope(&mut self) {
         let current_frame = self.frames.last_mut().unwrap();
         current_frame.scope_depth -= 1;
 
@@ -917,7 +937,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
         }
     }
 
-    pub fn add_local(&mut self, name: String) -> u8 {
+    fn add_local(&mut self, name: String) -> u8 {
         let current_frame = self.frames.last_mut().unwrap();
         let local = Local {
             name: name.clone(),
@@ -930,27 +950,41 @@ impl<'a, 'source> Compiler<'a, 'source> {
         index
     }
 
-    pub fn resolve_local(&mut self, name: &str) -> Option<u8> {
+    fn resolve_local(&mut self, name: &str) -> Option<u8> {
         self.frames
             .last()
             .expect("there should always be at least one frame")
             .resolve_local(name)
     }
 
-    // pub fn resolve_upvalue(&mut self, name: &str) -> Option<u8> {
-    //     // If this upvalue is defined in a parent frame, we need to capture it.
-    //     self.frames
-    //         .iter()
-    //         .enumerate()
-    //         .rev()
-    //         // Skip the current frame
-    //         .skip(1)
-    //         .find_map(|(i, frame)| {
-    //             frame.resolve_local(name).map(|local| {
-    //                 // Capture the upvalue in the current frame
-    //                 // TODO
-    //                 // self.vm.capture_upvalue(i, local)
-    //             })
-    //         })
-    // }
+    fn resolve_upvalue(&mut self, name: &str) -> Option<u8> {
+        self.resolve_upvalue_inner(name, self.frames.len() - 1)
+    }
+
+    fn resolve_upvalue_inner(&mut self, name: &str, frame_index: usize) -> Option<u8> {
+        if frame_index <= 1 {
+            return None;
+        }
+
+        match self.frames[frame_index - 1].resolve_local(name) {
+            Some(local) => Some(self.add_upvalue(frame_index, local, true)),
+            None => self
+                .resolve_upvalue_inner(name, frame_index - 1)
+                .map(|upvalue_index| self.add_upvalue(frame_index, upvalue_index, false)),
+        }
+    }
+
+    fn add_upvalue(&mut self, frame_index: usize, index: u8, is_local: bool) -> u8 {
+        let frame = self.frames.get_mut(frame_index).expect("frame exists");
+        if let Some(i) = frame
+            .upvalues
+            .iter()
+            .position(|upvalue| upvalue.is_local == is_local && upvalue.index == index)
+        {
+            return i as u8;
+        }
+
+        frame.upvalues.push(Upvalue { is_local, index });
+        frame.upvalues.len() as u8 - 1
+    }
 }

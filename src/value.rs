@@ -9,17 +9,21 @@ use std::{
 use crate::vm::VM;
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct LuaFunctionDefinition {
+    pub name: Option<String>,
+    pub chunk: usize,
+    pub ip: u16,
+    pub upvalues: usize,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum LuaConst {
     Marker,
     Nil,
     Boolean(bool),
     Number(LuaNumber),
     String(Vec<u8>),
-    Function {
-        name: Option<String>,
-        chunk: usize,
-        ip: u16,
-    },
+    Function(LuaFunctionDefinition),
 }
 
 #[derive(Clone)]
@@ -30,6 +34,7 @@ pub enum LuaValue {
     Number(LuaNumber),
     String(Vec<u8>),
     Object(Arc<RwLock<LuaObject>>),
+    UpValue(Arc<RwLock<LuaValue>>),
 }
 
 impl Debug for LuaValue {
@@ -41,6 +46,14 @@ impl Debug for LuaValue {
             LuaValue::Number(n) => write!(f, "{}", n),
             LuaValue::String(s) => write!(f, "{:?}", String::from_utf8_lossy(s)),
             LuaValue::Object(o) => write!(f, "{:?}", o),
+            LuaValue::UpValue(u) => {
+                write!(
+                    f,
+                    "upvalue<0x{:x}>: {:?}",
+                    u as *const _ as usize,
+                    u.read().unwrap()
+                )
+            }
         }
     }
 }
@@ -54,6 +67,7 @@ impl PartialEq for LuaValue {
             (LuaValue::Number(a), LuaValue::Number(b)) => a == b,
             (LuaValue::String(a), LuaValue::String(b)) => a == b,
             (LuaValue::Object(a), LuaValue::Object(b)) => Arc::ptr_eq(a, b),
+            (LuaValue::UpValue(a), LuaValue::UpValue(b)) => Arc::ptr_eq(a, b),
             _ => false,
         }
     }
@@ -67,26 +81,47 @@ impl Hash for LuaValue {
             LuaValue::Boolean(b) => b.hash(state),
             LuaValue::Number(n) => n.hash(state),
             LuaValue::String(s) => s.hash(state),
-            LuaValue::Object(o) => o.read().unwrap().hash(state),
+            LuaValue::Object(o) => Arc::as_ptr(o).hash(state),
+            LuaValue::UpValue(u) => Arc::as_ptr(u).hash(state),
         }
     }
 }
 
 impl Eq for LuaValue {}
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
+pub struct LuaClosure {
+    pub name: Option<String>,
+    pub chunk: usize,
+    pub ip: u16,
+    pub upvalues: Vec<Option<Arc<RwLock<LuaValue>>>>,
+}
+
+#[derive(Debug, Clone)]
 pub enum LuaObject {
     Table(LuaTable),
-    Function {
-        name: Option<String>,
-        chunk: usize,
-        ip: u16,
-    },
+    Closure(LuaClosure),
     NativeFunction(fn(&mut VM, Vec<LuaValue>) -> miette::Result<Vec<LuaValue>>),
 
     // TODO: Implement these
     Thread,
     UserData,
+}
+
+impl PartialEq for LuaObject {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (LuaObject::Table(a), LuaObject::Table(b)) => a == b,
+            (LuaObject::Closure(LuaClosure { .. }), LuaObject::Closure(LuaClosure { .. })) => false,
+            (LuaObject::NativeFunction(a), LuaObject::NativeFunction(b)) => a == b,
+
+            // TODO: Implement these
+            (LuaObject::Thread, LuaObject::Thread) => true,
+            (LuaObject::UserData, LuaObject::UserData) => true,
+
+            _ => false,
+        }
+    }
 }
 
 impl Hash for LuaObject {
@@ -121,13 +156,17 @@ impl From<LuaConst> for LuaValue {
             LuaConst::Boolean(b) => LuaValue::Boolean(b),
             LuaConst::Number(n) => LuaValue::Number(n),
             LuaConst::String(s) => LuaValue::String(s),
-            LuaConst::Function { name, chunk, ip } => {
-                LuaValue::Object(Arc::new(RwLock::new(LuaObject::Function {
-                    name,
-                    chunk,
-                    ip,
-                })))
-            }
+            LuaConst::Function(LuaFunctionDefinition {
+                name,
+                chunk,
+                ip,
+                upvalues,
+            }) => LuaValue::Object(Arc::new(RwLock::new(LuaObject::Closure(LuaClosure {
+                name,
+                chunk,
+                ip,
+                upvalues: vec![None; upvalues],
+            })))),
         }
     }
 }
@@ -147,6 +186,7 @@ impl LuaValue {
             LuaValue::Number(_) => "number",
             LuaValue::String(_) => "string",
             LuaValue::Object(o) => o.read().unwrap().type_name(),
+            LuaValue::UpValue(u) => u.read().unwrap().type_name(),
         }
     }
 }
@@ -155,7 +195,7 @@ impl LuaObject {
     pub fn type_name(&self) -> &'static str {
         match self {
             LuaObject::Table(_) => "table",
-            LuaObject::Function { .. } => "function",
+            LuaObject::Closure(LuaClosure { .. }) => "function",
             LuaObject::NativeFunction(_) => "function",
             LuaObject::UserData => "userdata",
             LuaObject::Thread => "thread",
@@ -305,6 +345,7 @@ impl Display for LuaValue {
             LuaValue::Number(n) => write!(f, "{}", n),
             LuaValue::String(s) => write!(f, "{}", String::from_utf8_lossy(s)),
             LuaValue::Object(o) => write!(f, "{}", o.read().unwrap()),
+            LuaValue::UpValue(u) => write!(f, "{}", u.read().unwrap()),
         }
     }
 }
@@ -313,7 +354,7 @@ impl Display for LuaObject {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             LuaObject::Table(_) => write!(f, "table: 0x{:x}", self as *const _ as usize),
-            LuaObject::Function { name, .. } => {
+            LuaObject::Closure(LuaClosure { name, .. }) => {
                 write!(f, "function: 0x{:x}", self as *const _ as usize)?;
                 if let Some(name) = name {
                     write!(f, " ({name})")
