@@ -250,6 +250,18 @@ impl LuaNumber {
     }
 }
 
+impl From<i64> for LuaValue {
+    fn from(i: i64) -> Self {
+        LuaValue::Number(LuaNumber::Integer(i))
+    }
+}
+
+impl From<f64> for LuaValue {
+    fn from(f: f64) -> Self {
+        LuaValue::Number(LuaNumber::Float(f))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct LuaTable {
     fields: HashMap<LuaValue, LuaValue>,

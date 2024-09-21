@@ -7,7 +7,7 @@ use std::{
 
 use crate::{
     compiler::Compiler,
-    value::{LuaNumber, LuaValue},
+    value::{LuaNumber, LuaObject, LuaValue},
     vm::VM,
 };
 
@@ -32,6 +32,62 @@ pub(crate) fn assert(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<Lua
     }
 
     Ok(vec![LuaValue::Nil])
+}
+
+fn iter(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+    let a = match input.first() {
+        Some(value) => value,
+        None => {
+            return Err(miette::miette!(
+                "bad argument #1 to 'iter' (value expected)"
+            ));
+        }
+    };
+    let i = match input.get(1) {
+        Some(LuaValue::Number(n)) => n,
+        Some(value) => {
+            return Err(miette::miette!(
+                "bad argument #2 to 'iter' (number expected, got {})",
+                value.type_name()
+            ));
+        }
+        None => {
+            return Err(miette::miette!(
+                "bad argument #2 to 'iter' (number expected, got no value)"
+            ));
+        }
+    };
+
+    let i = i.integer_repr()?;
+    let i = (i + 1).into();
+
+    let v = match a {
+        LuaValue::Object(o) => match &*o.read().unwrap() {
+            LuaObject::Table(t) => t.get(&i).cloned(),
+            _ => None,
+        },
+        _ => None,
+    };
+
+    match v {
+        Some(v) if v != LuaValue::Nil => Ok(vec![i, v]),
+        _ => Ok(vec![LuaValue::Nil]),
+    }
+}
+
+pub(crate) fn ipairs(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+    let Some(value) = input.first() else {
+        return Err(miette::miette!(
+            "bad argument #1 to 'ipairs' (value expected)"
+        ));
+    };
+
+    // Return three values: the iterator function, the target value, and the initial index
+    Ok(vec![
+        LuaObject::NativeFunction("iter", iter).into(),
+        value.clone(),
+        LuaValue::Number(LuaNumber::Integer(0)),
+    ])
 }
 
 pub(crate) fn print(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
