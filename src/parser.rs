@@ -949,10 +949,20 @@ impl<'path, 'source> Parser<'path, 'source> {
             self.lexer.peek()?.map(|t| &t.kind),
             Some(TokenKind::String(_))
         ) {
-            args.push(
-                self.expect_expression(inside_vararg_function)
-                    .wrap_err("in function call args")?,
-            );
+            let (string, span) = match self
+                .lexer
+                .expect(|k| matches!(k, &TokenKind::String(_)), "string")?
+            {
+                Token {
+                    kind: TokenKind::String(s),
+                    span,
+                } => (s, span),
+                _ => unreachable!(),
+            };
+            args.push(TokenTree::new(
+                Expression::Literal(TokenTree::new(Literal::String(string), span)),
+                span,
+            ));
             return Ok(args);
         }
 
