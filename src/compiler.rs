@@ -440,7 +440,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
             Statement::For { condition, block } => {
                 self.begin_scope();
 
-                let (continue_addr, jmp_false_addr) = match condition.node {
+                let (continue_addr, jmp_exit_loop_addr) = match condition.node {
                     ForCondition::NumericFor {
                         name,
                         initial,
@@ -514,7 +514,77 @@ impl<'a, 'source> Compiler<'a, 'source> {
 
                         (step_addr, jmp_false_addr)
                     }
-                    _ => todo!("compile_statement For {:#?}", condition),
+                    ForCondition::GenericFor { names, expressions } => {
+                        // Evaluate the expressions and make sure there are three
+                        self.push_load_marker();
+                        for expression in expressions {
+                            self.compile_expression(expression);
+                        }
+                        self.chunk.push_instruction(Instruction::Align, None);
+                        // TODO: The manual makes reference to a possible fourth value, the closing
+                        // value, but we haven't implemented that yet.
+                        self.chunk.push_instruction(3, None);
+
+                        // Save the result as locals: the iterator function, the state, the initial
+                        // value for the control variable (which is the first name).
+                        let iterator_local = self.add_local("#iterator".to_string());
+                        let state_local = self.add_local("#state".to_string());
+                        // NOTE: The syntax ensures there is at least one name
+                        let control_local = self.add_local(names[0].node.identifier.clone());
+
+                        // Initialize the other variables to nil
+                        for name in &names[1..] {
+                            self.push_load_nil();
+                            self.add_local(name.node.identifier.clone());
+                        }
+
+                        // Call the iterator function
+                        let step_addr = self.chunk.get_current_addr();
+                        // Results marker
+                        self.push_load_marker();
+                        // Arguments marker
+                        self.push_load_marker();
+                        self.chunk
+                            .push_instruction(Instruction::GetLocal, Some(span));
+                        self.chunk.push_instruction(state_local, None);
+                        self.chunk
+                            .push_instruction(Instruction::GetLocal, Some(span));
+                        self.chunk.push_instruction(control_local, None);
+                        self.chunk.push_instruction(Instruction::GetLocal, None);
+                        self.chunk.push_instruction(iterator_local, None);
+                        self.chunk.push_instruction(Instruction::Call, None);
+                        // Align to number of names
+                        self.chunk.push_instruction(Instruction::Align, None);
+                        self.chunk.push_instruction(names.len() as u8, None);
+                        // Then store each result in the corresponding local
+                        // NOTE: We need to iterate in reverse to handle chained assignments
+                        // correctly.
+                        for name in names.iter().rev() {
+                            self.chunk
+                                .push_instruction(Instruction::SetLocal, Some(span));
+                            let local_index = self
+                                .resolve_local(&name.node.identifier)
+                                .expect("parser ensures that variable is in scope");
+                            self.chunk.push_instruction(local_index, None);
+                        }
+
+                        // Now we need to evaluate whether any value was returned. If not, we
+                        // should break out of the loop.
+                        self.chunk
+                            .push_instruction(Instruction::GetLocal, Some(span));
+                        self.chunk.push_instruction(control_local, None);
+                        let nil_const_index = self.get_const_index(LuaConst::Nil);
+                        self.chunk.push_instruction(Instruction::LoadConst, None);
+                        self.chunk.push_const_index(nil_const_index);
+                        self.chunk.push_instruction(Instruction::Eq, None);
+                        self.chunk.push_instruction(Instruction::JmpTrue, None);
+                        let jmp_true_addr = self.chunk.push_addr_placeholder();
+
+                        // Pop the condition value
+                        self.chunk.push_instruction(Instruction::Pop, None);
+
+                        (step_addr, jmp_true_addr)
+                    }
                 };
 
                 let block_result = self.compile_block(
@@ -530,7 +600,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                 self.chunk.push_addr(continue_addr);
 
                 // Patch the false condition jump
-                self.chunk.patch_addr_placeholder(jmp_false_addr);
+                self.chunk.patch_addr_placeholder(jmp_exit_loop_addr);
                 self.chunk.push_instruction(Instruction::Pop, None);
 
                 // Patch any break jumps
