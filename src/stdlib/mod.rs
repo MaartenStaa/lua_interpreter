@@ -13,6 +13,7 @@ pub fn lookup_global(name: &str) -> Option<LuaValue> {
         "assert" => Some(LuaObject::NativeFunction("assert", assert).into()),
         "print" => Some(LuaObject::NativeFunction("print", print).into()),
         "require" => Some(LuaObject::NativeFunction("require", require).into()),
+        "select" => Some(LuaObject::NativeFunction("select", select).into()),
         "tostring" => Some(LuaObject::NativeFunction("tostring", tostring).into()),
         "type" => Some(LuaObject::NativeFunction("type", r#type).into()),
         "warn" => Some(LuaObject::NativeFunction("warn", warn).into()),

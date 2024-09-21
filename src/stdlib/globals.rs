@@ -5,7 +5,11 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
 };
 
-use crate::{compiler::Compiler, value::LuaValue, vm::VM};
+use crate::{
+    compiler::Compiler,
+    value::{LuaNumber, LuaValue},
+    vm::VM,
+};
 
 use miette::miette;
 
@@ -78,6 +82,41 @@ pub(crate) fn require(vm: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<L
     let result = vm.run_chunk(chunk_index)?;
 
     Ok(vec![result, LuaValue::Nil])
+}
+
+pub(crate) fn select(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+    let index = match input.first() {
+        Some(LuaValue::Number(n)) => n,
+        Some(LuaValue::String(s)) => {
+            if s == b"#" {
+                return Ok(vec![LuaValue::Number(LuaNumber::Integer(
+                    input.len() as i64 - 1,
+                ))]);
+            } else {
+                return Err(miette!(
+                    "bad argument #1 to 'select' (number expected, got string)"
+                ));
+            }
+        }
+        Some(value) => {
+            return Err(miette!(
+                "bad argument #1 to 'select' (number expected, got {})",
+                value.type_name()
+            ));
+        }
+        None => {
+            return Err(miette!(
+                "bad argument #1 to 'select' (number expected, got no value)"
+            ));
+        }
+    };
+
+    let index = index.integer_repr()?;
+    if index < 1 {
+        return Err(miette!("bad argument #1 to 'select' (index out of range)"));
+    }
+
+    Ok(input.into_iter().skip(index as usize).collect())
 }
 
 pub(crate) fn tostring(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
