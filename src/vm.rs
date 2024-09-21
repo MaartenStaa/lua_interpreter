@@ -240,15 +240,17 @@ impl<'source> VM<'source> {
             // kind of weirdly.
             let mut err = miette!(labels = labels, "{err:?}");
             // Attach stack trace
-            for (i, frame) in self.call_stack[..self.call_stack_index].iter().enumerate() {
+            for (i, frame) in self.call_stack[..self.call_stack_index]
+                .iter()
+                .enumerate()
+                .rev()
+            {
                 err = err.wrap_err(format!(
                     "#{i} {}",
                     frame.name.as_deref().unwrap_or("<anonymous>"),
-                    i = self.call_stack_index - i,
                 ));
             }
-            // let (filename, source) =
-            //     &self.chunk_info[&self.call_stack[self.call_stack_index - 1].chunk];
+
             let Chunk {
                 filename, source, ..
             } = &self.chunks[0];
