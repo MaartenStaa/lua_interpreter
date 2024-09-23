@@ -770,67 +770,105 @@ impl<'source> VM<'source> {
 
                 // Function
                 Instruction::Call => {
-                    let function = self.pop();
+                    // Pop the function off the stack, and dereference the upvalue if it's one
+                    let function = match self.pop() {
+                        LuaValue::UpValue(upval) => upval.read().unwrap().clone(),
+                        function => function,
+                    };
+
+                    // If it's a metamethod, the function is the __call metamethod
+                    // In that case, the object itself is (implicitly) the first argument
+                    let mut is_metamethod = None;
+
+                    // Find the underlying closure or native function, handling metamethods
+                    // FIXME: I don't like all of this cloning.
+                    let function = match &function {
+                        LuaValue::Object(o) => match &*o.read().unwrap() {
+                            closure @ LuaObject::Closure(_) => Some(closure.clone()),
+                            n @ LuaObject::NativeFunction(_, _) => Some(n.clone()),
+                            LuaObject::Table(table) => {
+                                let metatable = table.get(&"__metatable".into());
+                                let __call = match metatable {
+                                    Some(LuaValue::Object(o)) => match &*o.read().unwrap() {
+                                        LuaObject::Table(t) => {
+                                            is_metamethod = Some(function.clone());
+
+                                            t.get(&"__call".into()).cloned()
+                                        }
+                                        _ => None,
+                                    },
+                                    _ => None,
+                                };
+
+                                match __call {
+                                    Some(LuaValue::Object(o)) => match &*o.read().unwrap() {
+                                        closure @ LuaObject::Closure(_) => Some(closure.clone()),
+                                        n @ LuaObject::NativeFunction(_, _) => Some(n.clone()),
+                                        _ => {
+                                            return Err(miette!("attempt to call a non-function (metamethod '__call' is not a function)"));
+                                        }
+                                    },
+                                    _ => None,
+                                }
+                            }
+                            _ => None,
+                        },
+                        _ => None,
+                    };
+
                     // Look up the stack to find the marker, anything above that is
                     // arguments to the function
                     let marker_position = self.stack[..self.stack_index]
                         .iter()
                         .rposition(|v| v == &LuaValue::Marker)
                         .expect("no function call args marker found");
-                    let num_args = self.stack_index - marker_position - 1;
+                    let mut num_args = self.stack_index - marker_position - 1;
 
-                    // Get rid of the marker
-                    self.shift_left(num_args, 1);
-                    self.pop();
-
-                    let function = match function {
-                        LuaValue::UpValue(upval) => upval.read().unwrap().clone(),
-                        function => function,
-                    };
+                    if let Some(self_parameter) = is_metamethod {
+                        // We can reuse the marker index as self parameter value
+                        self.stack[marker_position] = self_parameter;
+                        num_args += 1;
+                    } else {
+                        // Get rid of the marker
+                        self.shift_left(num_args, 1);
+                        self.pop();
+                    }
 
                     match function {
-                        LuaValue::Object(o) => match &*o.read().unwrap() {
-                            LuaObject::Closure(closure) => {
-                                // TODO: Can we get rid of this clone?
-                                let closure = closure.clone();
-                                self.push_call_frame(
-                                    closure.name.clone(),
-                                    closure.chunk,
-                                    false,
-                                    self.stack_index - num_args,
-                                    self.chunks[chunk_index].ip + 1,
-                                    Some(closure.upvalues),
-                                );
-                                self.chunks[closure.chunk].ip = closure.ip as usize;
+                        Some(LuaObject::Closure(closure)) => {
+                            self.push_call_frame(
+                                closure.name.clone(),
+                                closure.chunk,
+                                false,
+                                self.stack_index - num_args,
+                                self.chunks[chunk_index].ip + 1,
+                                Some(closure.upvalues),
+                            );
+                            self.chunks[closure.chunk].ip = closure.ip as usize;
 
-                                continue;
+                            continue;
+                        }
+                        Some(LuaObject::NativeFunction(name, f)) => {
+                            // Push a call frame just for nicer stack traces
+                            self.push_call_frame(
+                                Some(format!("native function '{}'", name)),
+                                0,
+                                false,
+                                self.stack_index - num_args,
+                                self.chunks[chunk_index].ip + 1,
+                                None,
+                            );
+                            let mut args = Vec::with_capacity(num_args);
+                            for _ in 0..num_args {
+                                args.push(self.pop());
                             }
-                            LuaObject::NativeFunction(name, f) => {
-                                // Push a call frame just for nicer stack traces
-                                self.push_call_frame(
-                                    Some(format!("native function '{}'", name)),
-                                    0,
-                                    false,
-                                    self.stack_index - num_args,
-                                    self.chunks[chunk_index].ip + 1,
-                                    None,
-                                );
-                                let mut args = Vec::with_capacity(num_args);
-                                for _ in 0..num_args {
-                                    args.push(self.pop());
-                                }
-                                args.reverse();
-                                for value in f(self, args)? {
-                                    self.push(value);
-                                }
-                                self.pop_call_frame();
-                                1
+                            args.reverse();
+                            for value in f(self, args)? {
+                                self.push(value);
                             }
-                            // TODO: Handle values with a `__call` metamethod
-                            _ => {
-                                return Err(miette!("attempt to call a non-function"));
-                            }
-                        },
+                            self.pop_call_frame();
+                            1
+                        }
                         _ => {
                             return Err(miette!("attempt to call a non-function"));
                         }
