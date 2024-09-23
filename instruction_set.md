@@ -209,18 +209,24 @@ variable does not exist, it pushes `nil`.
 
 Reads a stack index from the bytes directly following the instruction. It pops
 the top value from the stack and sets the local variable at the index to the
-value. The index here is relative to the current stack frame.
+value. The index here is relative to the current call frame pointer.
 
-If the value on the stack refers to an upvalue, the upvalue is set instead.
+If the value on the stack refers to an upvalue, the upvalue is updated instead.
 
 ### `GetLocal`
 
 Reads a stack index from the bytes directly following the instruction. It looks
 up the local variable at the index and pushes the value onto the stack. The
-index here is relative to the current stack frame.
+index here is relative to the current call frame pointer.
 
 If the local variable refers to an upvalue, the inner value of the upvalue is
 extracted and pushed onto the stack.
+
+### `SetLocalAttr`
+
+Reads a stack index from the bytes directly following the instruction, as well
+as an attribute byte after that. Sets that attribute in the local indicated by
+the stack index bytes, relative to the current frame pointer.
 
 ### `SetUpval`
 

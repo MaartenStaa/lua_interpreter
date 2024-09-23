@@ -3,7 +3,7 @@ use std::mem::size_of;
 use crate::{
     instruction::Instruction,
     macros::assert_function_const,
-    value::{LuaConst, LuaFunctionDefinition},
+    value::{LuaConst, LuaFunctionDefinition, LuaVariableAttribute},
     vm::{ConstIndex, JumpAddr, VM},
 };
 
@@ -219,6 +219,13 @@ pub fn print_instructions(vm: &VM) {
                 let local_index = instructions[instruction_pointer + 1];
                 println!("GET_LOCAL     {local_index}");
                 2
+            }
+            Instruction::SetLocalAttr => {
+                let local_index = instructions[instruction_pointer + 1];
+                let attr_value = instructions[instruction_pointer + 2];
+                let attr = LuaVariableAttribute::try_from(attr_value).expect("valid attribute");
+                println!("SET_LOCAL_ATTR {local_index} {attr:?}");
+                3
             }
             Instruction::SetUpval => {
                 let upval_index = instructions[instruction_pointer + 1];

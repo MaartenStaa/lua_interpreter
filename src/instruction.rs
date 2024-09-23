@@ -25,9 +25,6 @@ pub enum Instruction {
     Bxor,
     Shl,
     Shr,
-    // Unm,
-    // BNot,
-    // Not,
 
     // Comparison
     Eq,
@@ -51,6 +48,7 @@ pub enum Instruction {
     GetGlobal,
     SetLocal,
     GetLocal,
+    SetLocalAttr,
     SetUpval,
     GetUpval,
     LoadVararg,
@@ -60,11 +58,7 @@ pub enum Instruction {
     SetTable,
     GetTable,
 
-    // // Extra
-    // Move,
-    // Self_,
-    // // Function
-    // Closure,
+    // Function
     Call,
     Return,
 
@@ -72,13 +66,6 @@ pub enum Instruction {
     Jmp,
     JmpTrue,
     JmpFalse,
-    // JmpRel,
-    // Test,
-
-    // // Vararg
-    // Vararg,
-    // // Extra
-    // ExtraArg,
 }
 
 impl From<Instruction> for u8 {

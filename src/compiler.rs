@@ -3,13 +3,13 @@ use std::{borrow::Cow, path::PathBuf};
 use crate::{
     ast::{
         BinaryOperator, Block, Expression, Field, ForCondition, FunctionCall, FunctionDef, Literal,
-        Name, Number, PrefixExpression, Statement, TableConstructor, TokenTree, UnaryOperator,
-        Variable,
+        LocalAttribute, Name, Number, PrefixExpression, Statement, TableConstructor, TokenTree,
+        UnaryOperator, Variable,
     },
     instruction::Instruction,
     parser::Parser,
     token::Span,
-    value::{LuaConst, LuaFunctionDefinition, LuaNumber},
+    value::{LuaConst, LuaFunctionDefinition, LuaNumber, LuaVariableAttribute},
     vm::{Chunk, ConstIndex, VM},
 };
 
@@ -225,8 +225,30 @@ impl<'a, 'source> Compiler<'a, 'source> {
                 }
 
                 for name in names {
-                    // TODO: Handle the attributes.
-                    self.add_local(name.node.name.node.identifier);
+                    let local_index = self.add_local(name.node.name.node.identifier);
+                    match name.node.attribute {
+                        Some(TokenTree {
+                            node: LocalAttribute::Const,
+                            ..
+                        }) => {
+                            self.chunk
+                                .push_instruction(Instruction::SetLocalAttr, Some(span));
+                            self.chunk.push_instruction(local_index, None);
+                            self.chunk
+                                .push_instruction(LuaVariableAttribute::Constant as u8, None);
+                        }
+                        Some(TokenTree {
+                            node: LocalAttribute::Close,
+                            ..
+                        }) => {
+                            self.chunk
+                                .push_instruction(Instruction::SetLocalAttr, Some(span));
+                            self.chunk.push_instruction(local_index, None);
+                            self.chunk
+                                .push_instruction(LuaVariableAttribute::ToBeClosed as u8, None);
+                        }
+                        None => {}
+                    }
                 }
 
                 BlockResult::new()

@@ -1,0 +1,69 @@
+use std::sync::{Arc, RwLock};
+
+use super::{
+    closure::LuaClosure,
+    constant::{LuaConst, LuaFunctionDefinition},
+    number::LuaNumber,
+    object::LuaObject,
+    table::LuaTable,
+    LuaValue,
+};
+
+impl From<bool> for LuaValue {
+    fn from(b: bool) -> Self {
+        LuaValue::Boolean(b)
+    }
+}
+
+impl From<&str> for LuaValue {
+    fn from(s: &str) -> Self {
+        LuaValue::String(s.as_bytes().to_vec())
+    }
+}
+
+impl From<i64> for LuaValue {
+    fn from(i: i64) -> Self {
+        LuaValue::Number(LuaNumber::Integer(i))
+    }
+}
+
+impl From<f64> for LuaValue {
+    fn from(f: f64) -> Self {
+        LuaValue::Number(LuaNumber::Float(f))
+    }
+}
+
+impl From<LuaTable> for LuaValue {
+    fn from(table: LuaTable) -> Self {
+        LuaValue::Object(Arc::new(RwLock::new(LuaObject::Table(table))))
+    }
+}
+
+impl From<LuaConst> for LuaValue {
+    fn from(constant: LuaConst) -> Self {
+        match constant {
+            LuaConst::Marker => LuaValue::Marker,
+            LuaConst::Nil => LuaValue::Nil,
+            LuaConst::Boolean(b) => LuaValue::Boolean(b),
+            LuaConst::Number(n) => LuaValue::Number(n),
+            LuaConst::String(s) => LuaValue::String(s),
+            LuaConst::Function(LuaFunctionDefinition {
+                name,
+                chunk,
+                ip,
+                upvalues,
+            }) => LuaValue::Object(Arc::new(RwLock::new(LuaObject::Closure(LuaClosure {
+                name,
+                chunk,
+                ip,
+                upvalues: vec![None; upvalues],
+            })))),
+        }
+    }
+}
+
+impl From<LuaObject> for LuaValue {
+    fn from(object: LuaObject) -> Self {
+        LuaValue::Object(Arc::new(RwLock::new(object)))
+    }
+}

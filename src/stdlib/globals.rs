@@ -34,6 +34,29 @@ pub(crate) fn assert(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<Lua
     Ok(vec![LuaValue::Nil])
 }
 
+pub(crate) fn getmetatable(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+    let value = match input.first() {
+        Some(value) => value,
+        None => {
+            return Err(miette::miette!(
+                "bad argument #1 to 'getmetatable' (value expected)"
+            ));
+        }
+    };
+
+    let metatable = match value {
+        LuaValue::Object(o) => match &*o.read().unwrap() {
+            LuaObject::Table(t) => t.get(&LuaValue::String(b"__metatable".to_vec())).cloned(),
+            _ => None,
+        },
+        // TODO: For other types, need to check global metatable (only settable via
+        // debug.setmetatable).
+        _ => None,
+    };
+
+    Ok(vec![metatable.unwrap_or(LuaValue::Nil)])
+}
+
 fn iter(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     let a = match input.first() {
         Some(value) => value,

@@ -13,7 +13,7 @@ use crate::{
     macros::{assert_closure, assert_table},
     stdlib,
     token::Span,
-    value::{LuaConst, LuaNumber, LuaObject, LuaTable, LuaValue},
+    value::{LuaConst, LuaNumber, LuaObject, LuaTable, LuaValue, LuaVariableAttribute},
 };
 
 const MAX_STACK_SIZE: usize = 256;
@@ -60,6 +60,7 @@ pub struct VM<'source> {
     consts: Vec<LuaConst>,
     const_index: ConstIndex,
     stack: [LuaValue; MAX_STACK_SIZE],
+    stack_attrs: [u8; MAX_STACK_SIZE],
     stack_index: usize,
     globals: HashMap<ConstIndex, LuaValue>,
     call_stack: [CallFrame; MAX_STACK_SIZE],
@@ -104,6 +105,7 @@ impl<'source> VM<'source> {
             consts: vec![],
             const_index: 0,
             stack: [const { LuaValue::Nil }; MAX_STACK_SIZE],
+            stack_attrs: [0; MAX_STACK_SIZE],
             stack_index: 0,
             globals: HashMap::new(),
             call_stack: [const { CallFrame::default() }; MAX_STACK_SIZE],
@@ -152,6 +154,7 @@ impl<'source> VM<'source> {
 
     fn pop(&mut self) -> LuaValue {
         self.stack_index -= 1;
+        self.stack_attrs[self.stack_index] = 0;
         std::mem::replace(&mut self.stack[self.stack_index], LuaValue::Nil)
     }
 
@@ -424,7 +427,7 @@ impl<'source> VM<'source> {
 
                     let marker_index = self.stack[..self.stack_index]
                         .iter()
-                        .rposition(|v| *v == LuaValue::Marker)
+                        .rposition(|v| v == &LuaValue::Marker)
                         .expect("no marker found");
                     let value = self.stack[marker_index + offset as usize].clone();
                     self.push(value);
@@ -599,7 +602,7 @@ impl<'source> VM<'source> {
                             };
                             stdlib::lookup_global(&global_name)
                         })
-                        .unwrap_or(LuaValue::Nil);
+                        .unwrap_or_else(|| LuaValue::Nil);
                     self.push(value);
                     1 + size_of::<ConstIndex>()
                 }
@@ -608,6 +611,13 @@ impl<'source> VM<'source> {
                         self.chunks[chunk_index].instructions[self.chunks[chunk_index].ip + 1];
                     let frame_pointer = self.call_stack[self.call_stack_index - 1].frame_pointer;
                     let value = self.pop();
+
+                    if self.stack_attrs[frame_pointer + local_index as usize]
+                        & (LuaVariableAttribute::Constant as u8)
+                        == 1
+                    {
+                        return Err(miette!("attempt to modify a constant"));
+                    }
 
                     let old_value = &self.stack[frame_pointer + local_index as usize];
                     if let LuaValue::UpValue(upval) = old_value {
@@ -631,6 +641,17 @@ impl<'source> VM<'source> {
                         self.push(value.clone());
                     }
                     2
+                }
+                Instruction::SetLocalAttr => {
+                    let local_index =
+                        self.chunks[chunk_index].instructions[self.chunks[chunk_index].ip + 1];
+                    let attr_value =
+                        self.chunks[chunk_index].instructions[self.chunks[chunk_index].ip + 2];
+
+                    self.stack_attrs[self.call_stack[self.call_stack_index - 1].frame_pointer
+                        + local_index as usize] |= attr_value;
+
+                    3
                 }
                 Instruction::SetUpval => {
                     let upval_index =
@@ -754,7 +775,7 @@ impl<'source> VM<'source> {
                     // arguments to the function
                     let marker_position = self.stack[..self.stack_index]
                         .iter()
-                        .rposition(|v| *v == LuaValue::Marker)
+                        .rposition(|v| v == &LuaValue::Marker)
                         .expect("no function call args marker found");
                     let num_args = self.stack_index - marker_position - 1;
 
@@ -821,7 +842,7 @@ impl<'source> VM<'source> {
                     // Find the marker indicating the start of the return values
                     let marker_position = self.stack[..self.stack_index]
                         .iter()
-                        .rposition(|v| *v == LuaValue::Marker)
+                        .rposition(|v| v == &LuaValue::Marker)
                         .expect("no return values marker found");
 
                     // Collect the return values
