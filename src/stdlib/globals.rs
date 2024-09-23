@@ -198,6 +198,61 @@ pub(crate) fn select(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<Lua
     Ok(input.into_iter().skip(index as usize).collect())
 }
 
+pub(crate) fn setmetatable(_: &mut VM, mut input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+    match (input.first(), input.get(1)) {
+        (Some(LuaValue::Object(target)), Some(LuaValue::Object(metatable))) => {
+            match (&mut *target.write().unwrap(), &*metatable.read().unwrap()) {
+                (LuaObject::Table(table), LuaObject::Table(_)) => {
+                    table.insert(
+                        LuaValue::String(b"__metatable".to_vec()),
+                        LuaValue::Object(metatable.clone()),
+                    );
+                }
+                (LuaObject::Table(_), _) => {
+                    return Err(miette!(
+                        "bad argument #2 to 'setmetatable' (table expected)"
+                    ));
+                }
+                _ => {
+                    return Err(miette!(
+                        "bad argument #1 to 'setmetatable' (table expected)"
+                    ));
+                }
+            }
+        }
+        (Some(LuaValue::Object(target)), Some(LuaValue::Nil)) => {
+            match &mut *target.write().unwrap() {
+                LuaObject::Table(table) => {
+                    table.remove(&LuaValue::String(b"__metatable".to_vec()));
+                }
+                _ => {
+                    return Err(miette!(
+                        "bad argument #1 to 'setmetatable' (table expected)"
+                    ));
+                }
+            }
+        }
+        (Some(LuaValue::Object(target)), _) => {
+            if matches!(&*target.read().unwrap(), LuaObject::Table(_)) {
+                return Err(miette!(
+                    "bad argument #2 to 'setmetatable' (table expected)"
+                ));
+            } else {
+                return Err(miette!(
+                    "bad argument #1 to 'setmetatable' (table expected)"
+                ));
+            }
+        }
+        (_, _) => {
+            return Err(miette!(
+                "bad argument #1 to 'setmetatable' (table expected)"
+            ));
+        }
+    }
+
+    Ok(vec![input.swap_remove(0)])
+}
+
 pub(crate) fn tostring(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     let value = input.first().unwrap_or(&LuaValue::Nil);
 

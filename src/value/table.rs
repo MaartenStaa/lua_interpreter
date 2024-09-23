@@ -83,6 +83,10 @@ impl LuaTable {
         self.is_sequence = true;
         self.last_number_key = last_number_key;
     }
+
+    pub fn remove(&mut self, key: &LuaValue) -> Option<LuaValue> {
+        self.fields.remove(key)
+    }
 }
 
 impl Default for LuaTable {
