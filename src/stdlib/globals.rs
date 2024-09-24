@@ -274,6 +274,34 @@ pub(crate) fn setmetatable(_: &mut VM, mut input: Vec<LuaValue>) -> miette::Resu
     Ok(vec![input.swap_remove(0)])
 }
 
+pub(crate) fn tonumber(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+    let value = match input.first() {
+        Some(value) => value,
+        None => {
+            return Err(miette::miette!(
+                "bad argument #1 to 'tonumber' (value expected)"
+            ));
+        }
+    };
+
+    let value = match value {
+        n @ LuaValue::Number(_) => n.clone(),
+        LuaValue::String(s) => {
+            let s = String::from_utf8_lossy(s);
+            match s.parse::<i64>() {
+                Ok(n) => n.into(),
+                Err(_) => match s.parse::<f64>() {
+                    Ok(n) => n.into(),
+                    Err(_) => LuaValue::Nil,
+                },
+            }
+        }
+        _ => LuaValue::Nil,
+    };
+
+    Ok(vec![value])
+}
+
 pub(crate) fn tostring(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     let value = input.first().unwrap_or(&LuaValue::Nil);
 
