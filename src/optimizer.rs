@@ -508,18 +508,22 @@ fn optimize_binary_op(
                 node: Literal::Boolean(lhs >= rhs),
                 span,
             }),
-            (BinaryOperator::Equal, Expression::Literal(lhs), Expression::Literal(rhs)) => {
-                Expression::Literal(TokenTree {
-                    node: Literal::Boolean(lhs == rhs),
-                    span,
-                })
-            }
-            (BinaryOperator::NotEqual, Expression::Literal(lhs), Expression::Literal(rhs)) => {
-                Expression::Literal(TokenTree {
-                    node: Literal::Boolean(lhs != rhs),
-                    span,
-                })
-            }
+            (
+                BinaryOperator::Equal,
+                Expression::Literal(TokenTree { node: lhs, .. }),
+                Expression::Literal(TokenTree { node: rhs, .. }),
+            ) => Expression::Literal(TokenTree {
+                node: Literal::Boolean(lhs == rhs),
+                span,
+            }),
+            (
+                BinaryOperator::NotEqual,
+                Expression::Literal(TokenTree { node: lhs, .. }),
+                Expression::Literal(TokenTree { node: rhs, .. }),
+            ) => Expression::Literal(TokenTree {
+                node: Literal::Boolean(lhs != rhs),
+                span,
+            }),
             (
                 BinaryOperator::BitwiseOr,
                 Expression::Literal(TokenTree {
