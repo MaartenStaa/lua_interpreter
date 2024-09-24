@@ -26,6 +26,10 @@ pub enum Instruction {
     Shl,
     Shr,
 
+    // Logical
+    And,
+    Or,
+
     // Comparison
     Eq,
     Ne,

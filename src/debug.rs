@@ -158,6 +158,16 @@ pub fn print_instructions(vm: &VM) {
                 1
             }
 
+            // Logical
+            Instruction::And => {
+                println!("AND");
+                1
+            }
+            Instruction::Or => {
+                println!("OR");
+                1
+            }
+
             // Comparison
             Instruction::Eq => {
                 println!("EQ");

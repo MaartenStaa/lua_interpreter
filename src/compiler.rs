@@ -809,6 +809,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
         expression: TokenTree<Expression>,
         result_mode: ExpressionResult,
     ) {
+        let span = expression.span;
         match expression.node {
             Expression::Literal(literal) => {
                 self.compile_load_literal(literal);
@@ -819,6 +820,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                     self.chunk.push_instruction(Instruction::JmpFalse, None);
                     let jmp_false_addr = self.chunk.push_addr_placeholder();
                     self.compile_expression(*rhs, ExpressionResult::Single);
+                    self.chunk.push_instruction(Instruction::And, Some(span));
                     self.chunk.patch_addr_placeholder(jmp_false_addr);
                 }
                 BinaryOperator::Or => {
@@ -826,6 +828,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                     self.chunk.push_instruction(Instruction::JmpTrue, None);
                     let jmp_true_addr = self.chunk.push_addr_placeholder();
                     self.compile_expression(*rhs, ExpressionResult::Single);
+                    self.chunk.push_instruction(Instruction::Or, Some(span));
                     self.chunk.patch_addr_placeholder(jmp_true_addr);
                 }
                 _ => {

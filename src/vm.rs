@@ -516,6 +516,28 @@ impl<'source> VM<'source> {
                     1
                 }
 
+                // Logical
+                Instruction::And => {
+                    let b = self.pop();
+                    let a = self.pop();
+                    if !a.as_boolean() {
+                        self.push(a);
+                    } else {
+                        self.push(b);
+                    }
+                    1
+                }
+                Instruction::Or => {
+                    let b = self.pop();
+                    let a = self.pop();
+                    if a.as_boolean() {
+                        self.push(a);
+                    } else {
+                        self.push(b);
+                    }
+                    1
+                }
+
                 // Comparison
                 Instruction::Eq => {
                     let b = self.pop();
