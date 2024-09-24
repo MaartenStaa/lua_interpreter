@@ -88,6 +88,12 @@ enum VariableMode {
     Write,
 }
 
+#[derive(Debug, PartialEq)]
+enum ExpressionResult {
+    Single,
+    Multiple,
+}
+
 impl<'a, 'source> Compiler<'a, 'source> {
     pub fn new(vm: &'a mut VM<'source>, filename: PathBuf, source: Cow<'source, str>) -> Self {
         Self {
@@ -165,9 +171,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
             if return_statement.is_empty() {
                 self.push_load_nil();
             } else {
-                for return_statement in return_statement {
-                    self.compile_expression(return_statement);
-                }
+                self.compile_expression_list(return_statement);
             }
             self.chunk.push_instruction(Instruction::Return, None);
         }
@@ -189,7 +193,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
             Statement::FunctionCall(function_call) => {
                 // Marker for the return values
                 self.push_load_marker();
-                self.compile_function_call(function_call);
+                self.compile_function_call(function_call, ExpressionResult::Multiple);
                 self.chunk
                     .push_instruction(Instruction::Discard, Some(span));
                 BlockResult::new()
@@ -213,9 +217,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                     self.chunk.push_const_index(marker_const_index);
                 }
 
-                for expression in expressions {
-                    self.compile_expression(expression);
-                }
+                self.compile_expression_list(expressions);
 
                 if needs_alignment {
                     // Align number of values with number of variables
@@ -272,9 +274,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                     self.chunk.push_const_index(marker_const_index);
                 }
 
-                for expression in explist {
-                    self.compile_expression(expression);
-                }
+                self.compile_expression_list(explist);
 
                 if needs_alignment {
                     // Align number of values with number of variables
@@ -301,8 +301,8 @@ impl<'a, 'source> Compiler<'a, 'source> {
                             // And then we swap the value and the table:
                             // SWAP 2
                             // [value, table, index]
-                            self.compile_expression(*index);
-                            self.compile_prefix_expression(*target);
+                            self.compile_expression(*index, ExpressionResult::Single);
+                            self.compile_prefix_expression(*target, ExpressionResult::Single);
                             self.chunk.push_instruction(Instruction::Swap, None);
                             self.chunk.push_instruction(2, None);
                             self.chunk
@@ -318,7 +318,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                             self.chunk
                                 .push_instruction(Instruction::LoadConst, Some(span));
                             self.chunk.push_const_index(const_index);
-                            self.compile_prefix_expression(*target);
+                            self.compile_prefix_expression(*target, ExpressionResult::Single);
                             self.chunk.push_instruction(Instruction::Swap, None);
                             self.chunk.push_instruction(2, None);
                             self.chunk
@@ -338,7 +338,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
             } => {
                 let mut block_result = BlockResult::new();
                 // Push expression
-                self.compile_expression(condition);
+                self.compile_expression(condition, ExpressionResult::Single);
                 // Jump to the end of the block if the condition is false
                 self.chunk.push_instruction(Instruction::JmpFalse, None);
                 let jmp_false_addr = self.chunk.push_addr_placeholder();
@@ -361,7 +361,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                     // Pop the initial condition
                     self.chunk.push_instruction(Instruction::Pop, None);
                     // Push the new condition
-                    self.compile_expression(else_if.node.condition);
+                    self.compile_expression(else_if.node.condition, ExpressionResult::Single);
                     // Jump to the end of the block if the condition is false
                     self.chunk.push_instruction(Instruction::JmpFalse, None);
                     let jmp_false_addr = self.chunk.push_addr_placeholder();
@@ -430,7 +430,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                         new_scope: true,
                     },
                 );
-                self.compile_expression(condition);
+                self.compile_expression(condition, ExpressionResult::Single);
                 self.chunk.push_instruction(Instruction::JmpFalse, None);
                 self.chunk.push_addr(start_addr);
                 self.chunk.push_instruction(Instruction::Pop, None);
@@ -441,7 +441,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
             }
             Statement::While { condition, block } => {
                 let start_addr = self.chunk.get_current_addr();
-                self.compile_expression(condition);
+                self.compile_expression(condition, ExpressionResult::Single);
                 self.chunk.push_instruction(Instruction::JmpFalse, None);
                 let jmp_false_addr = self.chunk.push_addr_placeholder();
                 let block_result = self.compile_block(
@@ -472,17 +472,17 @@ impl<'a, 'source> Compiler<'a, 'source> {
                         // FIXME: Coerce all to float if initial and step are floats
 
                         // Define the initial value and variable
-                        self.compile_expression(initial);
+                        self.compile_expression(initial, ExpressionResult::Single);
                         let identifier_local = self.add_local(name.node.identifier);
 
                         // Create fake variables to hold the limit and step. Note that we use
                         // variable names that are invalid in Lua to avoid conflicts with user
                         // variables.
-                        self.compile_expression(limit);
+                        self.compile_expression(limit, ExpressionResult::Single);
                         let limit_local = self.add_local("#limit".to_string());
 
                         if let Some(step) = step {
-                            self.compile_expression(step);
+                            self.compile_expression(step, ExpressionResult::Single);
                         } else {
                             // TODO: Decrementing loops
                             self.compile_load_literal(TokenTree {
@@ -539,9 +539,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                     ForCondition::GenericFor { names, expressions } => {
                         // Evaluate the expressions and make sure there are three
                         self.push_load_marker();
-                        for expression in expressions {
-                            self.compile_expression(expression);
-                        }
+                        self.compile_expression_list(expressions);
                         self.chunk.push_instruction(Instruction::Align, None);
                         // TODO: The manual makes reference to a possible fourth value, the closing
                         // value, but we haven't implemented that yet.
@@ -575,6 +573,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                         self.chunk.push_instruction(Instruction::GetLocal, None);
                         self.chunk.push_instruction(iterator_local, None);
                         self.chunk.push_instruction(Instruction::Call, None);
+                        self.chunk.push_instruction(0, None);
                         // Align to number of names
                         self.chunk.push_instruction(Instruction::Align, None);
                         self.chunk.push_instruction(names.len() as u8, None);
@@ -644,20 +643,22 @@ impl<'a, 'source> Compiler<'a, 'source> {
         }
     }
 
-    fn compile_function_call(&mut self, function_call: TokenTree<FunctionCall>) {
+    fn compile_function_call(
+        &mut self,
+        function_call: TokenTree<FunctionCall>,
+        result_mode: ExpressionResult,
+    ) {
         // Marker for the start of the function call arguments
         self.push_load_marker();
 
         // If this is a method call, we need to push the object as the first argument
         if function_call.node.as_method {
-            self.compile_prefix_expression(*function_call.node.function);
+            self.compile_prefix_expression(*function_call.node.function, ExpressionResult::Single);
 
             // It's unfortunate to duplicate the argument loop here with the else below, but this
             // avoids the borrow checker complaining, and having to `clone()` the function call
             // node above.
-            for argument in function_call.node.args {
-                self.compile_expression(argument);
-            }
+            self.compile_expression_list(function_call.node.args);
 
             let method_name = function_call.node.name.expect("method call without name");
 
@@ -675,9 +676,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
 
             self.chunk.push_instruction(Instruction::GetTable, None);
         } else {
-            for argument in function_call.node.args {
-                self.compile_expression(argument);
-            }
+            self.compile_expression_list(function_call.node.args);
 
             match *function_call.node.function {
                 TokenTree {
@@ -691,13 +690,21 @@ impl<'a, 'source> Compiler<'a, 'source> {
                     self.variable(name, VariableMode::Read);
                 }
                 prefix_expression => {
-                    self.compile_prefix_expression(prefix_expression);
+                    self.compile_prefix_expression(prefix_expression, ExpressionResult::Single);
                 }
             }
         }
 
         self.chunk
             .push_instruction(Instruction::Call, Some(function_call.span));
+        self.chunk.push_instruction(
+            if result_mode == ExpressionResult::Single {
+                1
+            } else {
+                0
+            },
+            None,
+        );
     }
 
     fn compile_function_def(&mut self, function_def: TokenTree<FunctionDef>) {
@@ -782,37 +789,56 @@ impl<'a, 'source> Compiler<'a, 'source> {
         }
     }
 
-    fn compile_expression(&mut self, expression: TokenTree<Expression>) {
+    fn compile_expression_list(&mut self, expressions: Vec<TokenTree<Expression>>) {
+        let num_expressions = expressions.len();
+        for (i, expression) in expressions.into_iter().enumerate() {
+            let is_last = i == num_expressions - 1;
+            self.compile_expression(
+                expression,
+                if is_last {
+                    ExpressionResult::Multiple
+                } else {
+                    ExpressionResult::Single
+                },
+            );
+        }
+    }
+
+    fn compile_expression(
+        &mut self,
+        expression: TokenTree<Expression>,
+        result_mode: ExpressionResult,
+    ) {
         match expression.node {
             Expression::Literal(literal) => {
                 self.compile_load_literal(literal);
             }
             Expression::BinaryOp { op, lhs, rhs } => match &op.node {
                 BinaryOperator::And => {
-                    self.compile_expression(*lhs);
+                    self.compile_expression(*lhs, ExpressionResult::Single);
                     self.chunk.push_instruction(Instruction::JmpFalse, None);
                     let jmp_false_addr = self.chunk.push_addr_placeholder();
-                    self.compile_expression(*rhs);
+                    self.compile_expression(*rhs, ExpressionResult::Single);
                     self.chunk.patch_addr_placeholder(jmp_false_addr);
                 }
                 BinaryOperator::Or => {
-                    self.compile_expression(*lhs);
+                    self.compile_expression(*lhs, ExpressionResult::Single);
                     self.chunk.push_instruction(Instruction::JmpTrue, None);
                     let jmp_true_addr = self.chunk.push_addr_placeholder();
-                    self.compile_expression(*rhs);
+                    self.compile_expression(*rhs, ExpressionResult::Single);
                     self.chunk.patch_addr_placeholder(jmp_true_addr);
                 }
                 _ => {
-                    self.compile_expression(*lhs);
-                    self.compile_expression(*rhs);
+                    self.compile_expression(*lhs, ExpressionResult::Single);
+                    self.compile_expression(*rhs, ExpressionResult::Single);
                     self.compile_binary_operator(op, expression.span);
                 }
             },
             Expression::PrefixExpression(function_call) => {
-                self.compile_prefix_expression(function_call);
+                self.compile_prefix_expression(function_call, result_mode);
             }
             Expression::UnaryOp { op, rhs } => {
-                self.compile_expression(*rhs);
+                self.compile_expression(*rhs, ExpressionResult::Single);
                 self.compile_unary_operator(op, expression.span);
             }
             Expression::FunctionDef(function_def) => {
@@ -826,29 +852,40 @@ impl<'a, 'source> Compiler<'a, 'source> {
                 self.chunk
                     .push_instruction(Instruction::LoadVararg, Some(expression.span));
                 self.chunk.push_instruction(vararg_local_index, None);
+                self.chunk.push_instruction(
+                    if result_mode == ExpressionResult::Single {
+                        1
+                    } else {
+                        0
+                    },
+                    None,
+                );
             }
         }
     }
 
-    fn compile_prefix_expression(&mut self, prefix_expression: TokenTree<PrefixExpression>) {
+    fn compile_prefix_expression(
+        &mut self,
+        prefix_expression: TokenTree<PrefixExpression>,
+        result_mode: ExpressionResult,
+    ) {
         match prefix_expression.node {
             PrefixExpression::FunctionCall(function_call) => {
-                // FIXME: In some contexts we only consume the first return value
-                self.compile_function_call(function_call);
+                self.compile_function_call(function_call, result_mode);
             }
             PrefixExpression::Parenthesized(expression) => {
-                self.compile_expression(*expression);
+                self.compile_expression(*expression, ExpressionResult::Single);
             }
             PrefixExpression::Variable(variable) => match variable.node {
                 Variable::Name(name) => self.variable(name, VariableMode::Read),
                 Variable::Indexed(prefix, index) => {
-                    self.compile_prefix_expression(*prefix);
-                    self.compile_expression(*index);
+                    self.compile_prefix_expression(*prefix, ExpressionResult::Single);
+                    self.compile_expression(*index, ExpressionResult::Single);
                     self.chunk
                         .push_instruction(Instruction::GetTable, Some(prefix_expression.span));
                 }
                 Variable::Field(prefix, name) => {
-                    self.compile_prefix_expression(*prefix);
+                    self.compile_prefix_expression(*prefix, ExpressionResult::Single);
                     let const_index =
                         self.get_const_index(LuaConst::String(name.node.identifier.into_bytes()));
                     self.chunk
@@ -866,7 +903,8 @@ impl<'a, 'source> Compiler<'a, 'source> {
             .push_instruction(Instruction::NewTable, Some(table.span));
 
         let mut index = 1;
-        for field in table.node.fields {
+        let num_fields = table.node.fields.len();
+        for (i, field) in table.node.fields.into_iter().enumerate() {
             match field.node {
                 Field::Named(name, value) => {
                     let const_index =
@@ -874,19 +912,32 @@ impl<'a, 'source> Compiler<'a, 'source> {
                     self.chunk
                         .push_instruction(Instruction::LoadConst, Some(field.span));
                     self.chunk.push_const_index(const_index);
-                    self.compile_expression(value);
+                    self.compile_expression(value, ExpressionResult::Single);
                 }
                 Field::Indexed(index_expression, value) => {
-                    self.compile_expression(index_expression);
-                    self.compile_expression(value);
+                    self.compile_expression(index_expression, ExpressionResult::Single);
+                    self.compile_expression(value, ExpressionResult::Single);
                 }
                 Field::Value(value) => {
+                    let is_last_field = i == num_fields - 1;
+                    if is_last_field {
+                        // Can allow multiple values for the last field
+                        let marker_const_index = self.get_const_index(LuaConst::Marker);
+                        self.chunk
+                            .push_instruction(Instruction::LoadConst, Some(field.span));
+                        self.chunk.push_const_index(marker_const_index);
+                        self.compile_expression(value, ExpressionResult::Multiple);
+                        self.chunk
+                            .push_instruction(Instruction::AppendToTable, Some(field.span));
+                        break;
+                    }
+
                     let index_const =
                         self.get_const_index(LuaConst::Number(LuaNumber::Integer(index)));
                     self.chunk
                         .push_instruction(Instruction::LoadConst, Some(field.span));
                     self.chunk.push_const_index(index_const);
-                    self.compile_expression(value);
+                    self.compile_expression(value, ExpressionResult::Single);
 
                     index += 1;
                 }

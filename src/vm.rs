@@ -75,6 +75,7 @@ struct CallFrame {
     frame_pointer: usize,
     return_addr: usize,
     upvalues: [Option<Arc<RwLock<LuaValue>>>; u8::MAX as usize],
+    allow_multi_return_values: bool,
 }
 
 impl CallFrame {
@@ -86,6 +87,7 @@ impl CallFrame {
             frame_pointer: 0,
             return_addr: 0,
             upvalues: [const { None }; u8::MAX as usize],
+            allow_multi_return_values: true,
         }
     }
 }
@@ -186,6 +188,7 @@ impl<'source> VM<'source> {
         frame_pointer: usize,
         return_addr: usize,
         upvalues: Option<Vec<Option<Arc<RwLock<LuaValue>>>>>,
+        allow_multi_return_values: bool,
     ) {
         // Reuse the existing object to keep the `upvalues` vec
         self.call_stack[self.call_stack_index].name = name;
@@ -193,6 +196,9 @@ impl<'source> VM<'source> {
         self.call_stack[self.call_stack_index].border_frame = border_frame;
         self.call_stack[self.call_stack_index].frame_pointer = frame_pointer;
         self.call_stack[self.call_stack_index].return_addr = return_addr;
+        self.call_stack[self.call_stack_index].allow_multi_return_values =
+            allow_multi_return_values;
+
         if let Some(upvalues) = upvalues {
             // TODO: See if we can be more efficient here
             for (i, upvalue) in upvalues.into_iter().enumerate() {
@@ -280,6 +286,7 @@ impl<'source> VM<'source> {
             0,
             0,
             None,
+            false,
         );
 
         loop {
@@ -684,12 +691,15 @@ impl<'source> VM<'source> {
                 Instruction::LoadVararg => {
                     let local_index =
                         self.chunks[chunk_index].instructions[self.chunks[chunk_index].ip + 1];
+                    let is_single_vararg =
+                        self.chunks[chunk_index].instructions[self.chunks[chunk_index].ip + 2] == 1;
                     let frame_pointer = self.call_stack[self.call_stack_index - 1].frame_pointer;
                     let vararg = self.stack[frame_pointer + local_index as usize].clone();
                     match vararg {
                         LuaValue::Object(o) => match &*o.read().unwrap() {
                             LuaObject::Table(table) => {
-                                for i in 1..=table.len() {
+                                let max = if is_single_vararg { 1 } else { table.len() };
+                                for i in 1..=max {
                                     let value = table
                                         .get(&LuaValue::Number(LuaNumber::Integer(i as i64)))
                                         .cloned()
@@ -708,7 +718,7 @@ impl<'source> VM<'source> {
                             unreachable!("vararg is not a table or nil");
                         }
                     };
-                    2
+                    3
                 }
 
                 // Table
@@ -765,6 +775,38 @@ impl<'source> VM<'source> {
                             return Err(miette!("attempt to index a non-table"));
                         }
                     }
+                    1
+                }
+                Instruction::AppendToTable => {
+                    // Find the latest marker, and append each value after it to the table at the
+                    // stack right before the marker
+                    let marker_index = self.stack[..self.stack_index]
+                        .iter()
+                        .rposition(|v| v == &LuaValue::Marker)
+                        .expect("no marker found");
+                    let table = &self.stack[marker_index - 1].clone();
+                    let num_values = self.stack_index - marker_index - 1;
+
+                    for _ in 0..num_values {
+                        let value = self.pop();
+                        match table {
+                            LuaValue::Object(o) => match &mut *o.write().unwrap() {
+                                LuaObject::Table(t) => {
+                                    t.append(value);
+                                }
+                                _ => {
+                                    return Err(miette!("attempt to index a non-table"));
+                                }
+                            },
+                            _ => {
+                                return Err(miette!("attempt to index a non-table"));
+                            }
+                        }
+                    }
+
+                    // Get rid of the marker
+                    self.pop();
+
                     1
                 }
 
@@ -834,6 +876,9 @@ impl<'source> VM<'source> {
                         self.pop();
                     }
 
+                    let is_single_return =
+                        self.chunks[chunk_index].instructions[self.chunks[chunk_index].ip + 1] == 1;
+
                     match function {
                         Some(LuaObject::Closure(closure)) => {
                             self.push_call_frame(
@@ -841,8 +886,9 @@ impl<'source> VM<'source> {
                                 closure.chunk,
                                 false,
                                 self.stack_index - num_args,
-                                self.chunks[chunk_index].ip + 1,
+                                self.chunks[chunk_index].ip + 2,
                                 Some(closure.upvalues),
+                                !is_single_return,
                             );
                             self.chunks[closure.chunk].ip = closure.ip as usize;
 
@@ -857,6 +903,7 @@ impl<'source> VM<'source> {
                                 self.stack_index - num_args,
                                 self.chunks[chunk_index].ip + 1,
                                 None,
+                                !is_single_return,
                             );
                             let mut args = Vec::with_capacity(num_args);
                             for _ in 0..num_args {
@@ -865,9 +912,12 @@ impl<'source> VM<'source> {
                             args.reverse();
                             for value in f(self, args)? {
                                 self.push(value);
+                                if is_single_return {
+                                    break;
+                                }
                             }
                             self.pop_call_frame();
-                            1
+                            2
                         }
                         _ => {
                             return Err(miette!("attempt to call a non-function"));
@@ -903,8 +953,6 @@ impl<'source> VM<'source> {
 
                     // Put the return values back
                     return_values.reverse();
-                    // TODO: Only push the first return value in certain contexts, like in the
-                    // argument list of a function call
                     for value in return_values {
                         self.push(value);
                     }

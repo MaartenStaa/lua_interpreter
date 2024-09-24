@@ -239,8 +239,12 @@ pub fn print_instructions(vm: &VM) {
             }
             Instruction::LoadVararg => {
                 let local_index = instructions[instruction_pointer + 1];
-                println!("LOAD_VARARG   {local_index}");
-                2
+                let is_single_value = instructions[instruction_pointer + 2] == 1;
+                println!(
+                    "LOAD_VARARG   {local_index} {}",
+                    if is_single_value { "single" } else { "multi" }
+                );
+                3
             }
 
             // Table
@@ -256,11 +260,19 @@ pub fn print_instructions(vm: &VM) {
                 println!("GET_TABLE");
                 1
             }
+            Instruction::AppendToTable => {
+                println!("APPEND_TO_TABLE");
+                1
+            }
 
             // Function
             Instruction::Call => {
-                println!("CALL");
-                1
+                let is_single_return = instructions[instruction_pointer + 1] == 1;
+                println!(
+                    "CALL        {}",
+                    if is_single_return { "single" } else { "multi" },
+                );
+                2
             }
             Instruction::Return => {
                 println!("RETURN");

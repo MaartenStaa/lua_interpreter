@@ -57,6 +57,7 @@ pub enum Instruction {
     NewTable,
     SetTable,
     GetTable,
+    AppendToTable,
 
     // Function
     Call,

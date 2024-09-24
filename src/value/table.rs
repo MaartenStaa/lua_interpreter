@@ -75,6 +75,13 @@ impl LuaTable {
         self.fields.insert(key, value);
     }
 
+    pub fn append(&mut self, value: LuaValue) {
+        self.insert(
+            LuaValue::Number(LuaNumber::Integer(self.last_number_key + 1)),
+            value,
+        );
+    }
+
     pub fn get(&self, key: &LuaValue) -> Option<&LuaValue> {
         self.fields.get(key)
     }
