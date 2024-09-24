@@ -13,6 +13,10 @@ pub static TABLE: LazyLock<LuaValue> = LazyLock::new(|| {
         "concat".into(),
         LuaObject::NativeFunction("concat", concat).into(),
     );
+    table.insert(
+        "pack".into(),
+        LuaObject::NativeFunction("pack", pack).into(),
+    );
 
     table.into()
 });
@@ -95,4 +99,17 @@ fn concat(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     }
 
     Ok(vec![LuaValue::String(result)])
+}
+
+fn pack(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+    let mut result = LuaTable::new();
+
+    let len = input.len();
+    for (i, v) in input.into_iter().enumerate() {
+        result.insert((i as i64 + 1).into(), v);
+    }
+
+    result.insert("n".into(), (len as i64).into());
+
+    Ok(vec![result.into()])
 }
