@@ -2,14 +2,17 @@ use std::{
     ffi::OsString,
     fs,
     path::Path,
-    sync::atomic::{AtomicBool, Ordering},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, RwLock,
+    },
 };
 
 use crate::{
     compiler::Compiler,
     value::{
         metatables::{GLOBAL_BOOLEAN_METATABLE, GLOBAL_NUMBER_METATABLE, GLOBAL_STRING_METATABLE},
-        LuaNumber, LuaObject, LuaValue,
+        LuaClosure, LuaNumber, LuaObject, LuaValue,
     },
     vm::VM,
 };
@@ -119,6 +122,54 @@ pub(crate) fn ipairs(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<Lua
     ])
 }
 
+pub(crate) fn load(vm: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+    let source = match input.first() {
+        Some(LuaValue::String(s)) => s,
+        // TODO: Support functions, returning chunks of code
+        Some(value) => {
+            return Err(miette!(
+                "bad argument #1 to 'load' (string expected, got {})",
+                value.type_name()
+            ));
+        }
+        None => {
+            return Err(miette!(
+                "bad argument #1 to 'load' (string expected, got no value)"
+            ));
+        }
+    };
+
+    let source = String::from_utf8_lossy(source).to_string();
+    let name = match input.get(1) {
+        Some(LuaValue::String(s)) => String::from_utf8_lossy(s).to_string(),
+        Some(value) => {
+            return Err(miette!(
+                "bad argument #2 to 'load' (string expected, got {})",
+                value.type_name()
+            ));
+        }
+        None => "chunk".to_string(),
+    };
+
+    let compiler = Compiler::new(vm, None, name.clone(), source.into());
+    let Ok(chunk_index) = compiler.compile(None) else {
+        return Ok(vec![
+            LuaValue::Nil,
+            LuaValue::String("compilation error".into()),
+        ]);
+    };
+
+    // Return a function that runs the chunk
+    Ok(vec![LuaValue::Object(Arc::new(RwLock::new(
+        LuaObject::Closure(LuaClosure {
+            name: Some(name),
+            chunk: chunk_index,
+            ip: 0,
+            upvalues: vec![],
+        }),
+    )))])
+}
+
 pub(crate) fn print(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     for (i, value) in input.into_iter().enumerate() {
         if i != 0 {
@@ -177,7 +228,7 @@ pub(crate) fn require(vm: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<L
 
     let source = fs::read_to_string(path).map_err(|_| miette!("unable to read module {name}",))?;
 
-    let compiler = Compiler::new(vm, path.to_owned(), source.into());
+    let compiler = Compiler::new(vm, Some(path.to_owned()), name.to_string(), source.into());
     let chunk_index = compiler.compile(None)?;
     let result = vm.run_chunk(chunk_index)?;
 

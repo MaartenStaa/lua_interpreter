@@ -8,6 +8,7 @@ mod object;
 mod table;
 
 pub use attribute::LuaVariableAttribute;
+pub use closure::LuaClosure;
 pub use constant::{LuaConst, LuaFunctionDefinition};
 pub use number::LuaNumber;
 pub use object::LuaObject;
