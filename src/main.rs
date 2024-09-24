@@ -1,11 +1,14 @@
-use std::{borrow::Cow, path::PathBuf};
+use std::{
+    borrow::Cow,
+    path::{Path, PathBuf},
+};
 
 use clap::Parser;
 use lua_interpreter::{
     compiler::Compiler, debug, lexer::Lexer, optimizer::optimize as optimize_ast, parser,
     token::TokenKind, vm::VM,
 };
-use miette::LabeledSpan;
+use miette::{LabeledSpan, NamedSource};
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -42,14 +45,13 @@ fn main() {
     let source = std::fs::read_to_string(&filename).expect("failed to read source code file");
 
     if debug_lexer {
-        let lexer = Lexer::new(&filename, &source);
-        let source_code = lexer.get_source_code();
+        let lexer = Lexer::new(Some(&filename), &source);
 
-        run_debug_lexer(lexer, source_code);
+        run_debug_lexer(lexer, &filename, &source);
         return;
     }
 
-    let mut parser = parser::Parser::new(&filename, &source);
+    let mut parser = parser::Parser::new(Some(&filename), &source);
     if debug_parser {
         run_debug_parser(parser);
         return;
@@ -68,8 +70,15 @@ fn main() {
         optimize_ast(ast)
     };
 
+    let chunk_name = filename
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "<file>".to_string());
+
     let mut vm = VM::new();
-    if let Err(e) = Compiler::new(&mut vm, filename, Cow::Borrowed(&source)).compile(Some(ast)) {
+    if let Err(e) = Compiler::new(&mut vm, Some(filename), chunk_name, Cow::Borrowed(&source))
+        .compile(Some(ast))
+    {
         eprintln!("compilation failed: {e:?}");
         std::process::exit(1);
     }
@@ -80,7 +89,11 @@ fn main() {
     vm.run();
 }
 
-fn run_debug_lexer(lexer: Lexer, source_code: miette::NamedSource<String>) {
+fn run_debug_lexer(lexer: Lexer, filename: &Path, source: &str) {
+    let filename = filename
+        .file_name()
+        .map(|f| f.to_string_lossy().to_string())
+        .unwrap_or_else(|| "<file>".to_string());
     for token in lexer {
         match token {
             Ok(t) => {
@@ -93,7 +106,7 @@ fn run_debug_lexer(lexer: Lexer, source_code: miette::NamedSource<String>) {
                     severity = miette::Severity::Advice,
                     "found a token",
                 )
-                .with_source_code(source_code.clone());
+                .with_source_code(NamedSource::new(filename.clone(), source.to_owned()));
                 eprintln!("{:?}", diag);
             }
             Err(e) => {

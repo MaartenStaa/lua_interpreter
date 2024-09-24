@@ -24,7 +24,8 @@ pub type ConstIndex = u16;
 #[derive(Debug, Clone)]
 pub struct Chunk<'source> {
     index: usize,
-    filename: PathBuf,
+    filename: Option<PathBuf>,
+    chunk_name: String,
     source: Cow<'source, str>,
     instructions: Vec<u8>,
     instruction_spans: HashMap<usize, Span>,
@@ -32,11 +33,12 @@ pub struct Chunk<'source> {
 }
 
 impl<'source> Chunk<'source> {
-    pub fn new(filename: PathBuf, source: Cow<'source, str>) -> Self {
+    pub fn new(filename: Option<PathBuf>, chunk_name: String, source: Cow<'source, str>) -> Self {
         Self {
             // NOTE: This is set by the VM when the chunk is added
             index: 0,
             filename,
+            chunk_name,
             source,
             instructions: vec![],
             instruction_spans: HashMap::new(),
@@ -44,8 +46,8 @@ impl<'source> Chunk<'source> {
         }
     }
 
-    pub fn get_filename(&self) -> &Path {
-        &self.filename
+    pub fn get_filename(&self) -> Option<&Path> {
+        self.filename.as_deref()
     }
 
     pub fn get_source(&self) -> &str {
@@ -123,7 +125,9 @@ impl<'source> VM<'source> {
         let index = self.chunks.len();
         chunk.index = index;
 
-        self.chunk_map.insert(chunk.filename.clone(), index);
+        if let Some(filename) = &chunk.filename {
+            self.chunk_map.insert(filename.clone(), index);
+        }
         self.chunks.push(chunk);
 
         index
@@ -261,12 +265,21 @@ impl<'source> VM<'source> {
             }
 
             let Chunk {
-                filename, source, ..
+                filename,
+                chunk_name,
+                source,
+                ..
             } = &self.chunks[0];
-            err = err.with_source_code(
-                NamedSource::new(filename.to_string_lossy(), source.to_string())
-                    .with_language("lua"),
-            );
+            if let Some(filename) = filename {
+                err = err.with_source_code(
+                    NamedSource::new(filename.to_string_lossy(), source.to_string())
+                        .with_language("lua"),
+                );
+            } else {
+                err = err.with_source_code(
+                    NamedSource::new(chunk_name, source.to_string()).with_language("lua"),
+                );
+            }
 
             eprintln!("{:?}", err);
             std::process::exit(1);
@@ -277,10 +290,7 @@ impl<'source> VM<'source> {
 
     pub(crate) fn run_chunk(&mut self, initial_chunk_index: usize) -> miette::Result<LuaValue> {
         self.push_call_frame(
-            self.chunks[initial_chunk_index]
-                .filename
-                .file_name()
-                .map(|s| s.to_string_lossy().to_string()),
+            Some(self.chunks[initial_chunk_index].chunk_name.clone()),
             initial_chunk_index,
             true,
             0,

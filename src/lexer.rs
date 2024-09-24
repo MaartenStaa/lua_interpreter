@@ -1,10 +1,10 @@
 use std::path::Path;
 
 use crate::token::{Span, Token, TokenKind};
-use miette::{miette, Context, LabeledSpan, NamedSource};
+use miette::{miette, Context, LabeledSpan};
 
 pub struct Lexer<'path, 'source> {
-    filename: &'path Path,
+    filename: Option<&'path Path>,
     source: &'source str,
     rest: &'source str,
     pub position: usize,
@@ -12,7 +12,7 @@ pub struct Lexer<'path, 'source> {
 }
 
 impl<'path, 'source> Lexer<'path, 'source> {
-    pub fn new(filename: &'path Path, source: &'source str) -> Self {
+    pub fn new(filename: Option<&'path Path>, source: &'source str) -> Self {
         Self {
             filename,
             source,
@@ -22,9 +22,15 @@ impl<'path, 'source> Lexer<'path, 'source> {
         }
     }
 
-    pub fn get_source_code(&self) -> NamedSource<String> {
-        NamedSource::new(self.filename.to_string_lossy(), self.source.to_string())
-            .with_language("lua")
+    pub fn with_source_code(&self, report: miette::Report) -> miette::Report {
+        if let Some(filename) = self.filename {
+            return report.with_source_code(
+                miette::NamedSource::new(filename.to_string_lossy(), self.source.to_string())
+                    .with_language("lua"),
+            );
+        } else {
+            report.with_source_code(self.source.to_string())
+        }
     }
 }
 
@@ -213,14 +219,13 @@ impl<'path, 'source> Iterator for Lexer<'path, 'source> {
                 c if c.is_whitespace() => continue,
 
                 _ => {
-                    return Some(Err(miette!(
+                    return Some(Err(self.with_source_code(miette!(
                         labels = vec![LabeledSpan::at(
                             c_start..self.position,
                             "unexpected character"
                         )],
                         "unexpected token {c}"
-                    )
-                    .with_source_code(self.get_source_code())))
+                    ))))
                 }
             };
 
@@ -423,14 +428,13 @@ impl<'path, 'source> Lexer<'path, 'source> {
                         let mut hex = ['0'; 2];
                         (0..2).try_for_each(|i| -> miette::Result<()> {
                             hex[i] = chars.next().ok_or_else(|| {
-                                miette!(
+                                self.with_source_code(miette!(
                                     labels = vec![LabeledSpan::at(
                                         self.position..self.position + 2,
                                         "expected two hex digits"
                                     )],
                                     "unexpected end of string"
-                                )
-                                .with_source_code(self.get_source_code())
+                                ))
                             })?;
                             Ok(())
                         })?;
@@ -441,14 +445,13 @@ impl<'path, 'source> Lexer<'path, 'source> {
                         hex.iter().try_fold(0u8, |acc, c| {
                             c.to_digit(16)
                                 .ok_or_else(|| {
-                                    miette!(
+                                    self.with_source_code(miette!(
                                         labels = vec![LabeledSpan::at(
                                             self.position - 2..self.position + 1,
                                             "invalid hex escape"
                                         )],
                                         "invalid hex escape"
-                                    )
-                                    .with_source_code(self.get_source_code())
+                                    ))
                                 })
                                 .map(|d| acc * 16 + d as u8)
                         })?
@@ -457,14 +460,13 @@ impl<'path, 'source> Lexer<'path, 'source> {
                         let escape_start = self.position - 1;
 
                         if !matches!(chars.next(), Some('{')) {
-                            return Err(miette!(
+                            return Err(self.with_source_code(miette!(
                                 labels = vec![LabeledSpan::at(
                                     self.position - 1..self.position + 1,
                                     "expected { after \\u"
                                 )],
                                 "expected {{ after \\u"
-                            )
-                            .with_source_code(self.get_source_code()));
+                            )));
                         }
 
                         // Lua allows any value up to 2^31 - 1, so account for up to 8 hex digits
@@ -478,25 +480,23 @@ impl<'path, 'source> Lexer<'path, 'source> {
                             }
 
                             if !c.is_ascii_hexdigit() {
-                                return Err(miette!(
+                                return Err(self.with_source_code(miette!(
                                     labels = vec![LabeledSpan::at(
                                         self.position - 1..self.position + 1,
                                         "expected hex digit"
                                     )],
                                     "expected hex digit"
-                                )
-                                .with_source_code(self.get_source_code()));
+                                )));
                             }
 
                             if n == 8 {
-                                return Err(miette!(
+                                return Err(self.with_source_code(miette!(
                                     labels = vec![LabeledSpan::at(
                                         escape_start..self.position + 1,
                                         "too many hex digits"
                                     )],
                                     "too many hex digits"
-                                )
-                                .with_source_code(self.get_source_code()));
+                                )));
                             }
 
                             hex[n] = c;
@@ -504,23 +504,21 @@ impl<'path, 'source> Lexer<'path, 'source> {
                         }
 
                         if n == 0 {
-                            return Err(miette!(
+                            return Err(self.with_source_code(miette!(
                                 labels = vec![LabeledSpan::at(
                                     escape_start..self.position + 1,
                                     "expected at least one hex digit"
                                 )],
                                 "expected at least one hex digit"
-                            )
-                            .with_source_code(self.get_source_code()));
+                            )));
                         } else if !seen_close_brace {
-                            return Err(miette!(
+                            return Err(self.with_source_code(miette!(
                                 labels = vec![LabeledSpan::at(
                                     escape_start..self.position + 1,
                                     "expected } to close escape"
                                 )],
                                 "expected }} to close escape"
-                            )
-                            .with_source_code(self.get_source_code()));
+                            )));
                         }
 
                         self.position += n + 3;
@@ -550,27 +548,25 @@ impl<'path, 'source> Lexer<'path, 'source> {
                         digits[..n].iter().try_fold(0u8, |acc, c| {
                             c.to_digit(10)
                                 .ok_or_else(|| {
-                                    miette!(
+                                    self.with_source_code(miette!(
                                         labels = vec![LabeledSpan::at(
                                             self.position - n..self.position + 1,
                                             "invalid decimal escape"
                                         )],
                                         "invalid decimal escape"
-                                    )
-                                    .with_source_code(self.get_source_code())
+                                    ))
                                 })
                                 .map(|d| acc * 10u8 + d as u8)
                         })?
                     }
                     _ => {
-                        return Err(miette!(
+                        return Err(self.with_source_code(miette!(
                             labels = vec![LabeledSpan::at(
                                 self.position - 1..self.position + 1,
                                 "invalid escape sequence"
                             )],
                             "invalid escape sequence"
-                        )
-                        .with_source_code(self.get_source_code()));
+                        )));
                     }
                 };
 
@@ -624,14 +620,13 @@ impl<'path, 'source> Lexer<'path, 'source> {
                     }
                 }
                 '\n' if long_form.is_none() => {
-                    return Err(miette!(
+                    return Err(self.with_source_code(miette!(
                         labels = vec![LabeledSpan::at(
                             self.position - 1..self.position,
                             "unexpected newline in string"
                         )],
                         "unexpected newline in string"
-                    )
-                    .with_source_code(self.get_source_code()));
+                    )));
                 }
                 _ => string.push(c as u8),
             }
@@ -639,7 +634,7 @@ impl<'path, 'source> Lexer<'path, 'source> {
             self.position += c.len_utf8();
         }
 
-        Err(miette!(
+        Err(self.with_source_code(miette!(
             labels = vec![LabeledSpan::at(
                 self.position..self.position + 1,
                 if let Some(equals) = long_form {
@@ -649,8 +644,7 @@ impl<'path, 'source> Lexer<'path, 'source> {
                 }
             )],
             "unexpected end of string"
-        )
-        .with_source_code(self.get_source_code()))
+        )))
     }
 
     fn parse_number(
@@ -703,11 +697,10 @@ impl<'path, 'source> Lexer<'path, 'source> {
         let next = self.rest.chars().next();
         match next {
             Some(c) if c.is_ascii_alphabetic() => {
-                return Err(miette!(
+                return Err(self.with_source_code(miette!(
                     labels = vec![LabeledSpan::at(start..self.position + 1, "this literal")],
                     "invalid number literal"
-                )
-                .with_source_code(self.get_source_code()));
+                )))
             }
             _ => {}
         }
@@ -722,11 +715,10 @@ impl<'path, 'source> Lexer<'path, 'source> {
                 (false, true) => TokenKind::Integer(parse_hex_number(literal[2..].chars())),
                 // Float
                 (true, false) => TokenKind::Float(literal.parse().map_err(|e| {
-                    miette!(
+                    self.with_source_code(miette!(
                         labels = vec![LabeledSpan::at(start..self.position, "this literal")],
                         "failed to parse float literal: {e}"
-                    )
-                    .with_source_code(self.get_source_code())
+                    ))
                 })?),
                 // Hex float
                 (true, true) => {
@@ -746,23 +738,21 @@ impl<'path, 'source> Lexer<'path, 'source> {
                         0f64
                     } else {
                         i64::from_str_radix(base_str, 16).map_err(|e| {
-                            miette!(
+                            self.with_source_code(miette!(
                                 labels =
                                     vec![LabeledSpan::at(start..self.position, "this literal")],
                                 "failed to parse hex float literal: {e}"
-                            )
-                            .with_source_code(self.get_source_code())
+                            ))
                         })? as f64
                     };
                     let fraction = if has_fraction {
                         let fraction_str = &literal[fraction_start + 1..exponent_start];
                         let fraction = i64::from_str_radix(fraction_str, 16).map_err(|e| {
-                            miette!(
+                            self.with_source_code(miette!(
                                 labels =
                                     vec![LabeledSpan::at(start..self.position, "this literal")],
                                 "failed to parse hex float literal fraction: {e}"
-                            )
-                            .with_source_code(self.get_source_code())
+                            ))
                         })? as f64;
                         let fraction_digits = fraction_str.len() as f64;
                         fraction / 16f64.powf(fraction_digits)
@@ -774,12 +764,11 @@ impl<'path, 'source> Lexer<'path, 'source> {
                     TokenKind::Float(if has_exponent {
                         let exponent_str = &literal[exponent_start + 1..];
                         let exponent = exponent_str.parse::<f64>().map_err(|e| {
-                            miette!(
+                            self.with_source_code(miette!(
                                 labels =
                                     vec![LabeledSpan::at(start..self.position, "this literal")],
                                 "failed to parse hex float literal exponent: {e}"
-                            )
-                            .with_source_code(self.get_source_code())
+                            ))
                         })?;
 
                         value * 2f64.powf(exponent)
@@ -943,14 +932,14 @@ mod tests {
             ("0X1.921FB54442D18P+1", TokenKind::Float(3.141592653589793)),
             ("0x.0p-3", TokenKind::Float(0.0)),
         ] {
-            let mut lexer = Lexer::new(Path::new("test.lua"), input);
+            let mut lexer = Lexer::new(Some(Path::new("test.lua")), input);
             let token = lexer.next().unwrap().unwrap();
             assert_eq!(token.kind, expected, "when parsing '{input}'");
         }
 
         // Invalid numbers
         for input in &["0x5pf", "0xi"] {
-            let mut lexer = Lexer::new(Path::new("test.lua"), input);
+            let mut lexer = Lexer::new(Some(Path::new("test.lua")), input);
             let token = lexer.next().unwrap();
             assert!(token.is_err());
         }
@@ -966,7 +955,7 @@ mod tests {
             "[[alo\n123\"]]",
             "[==[alo\n123\"]==]",
         ] {
-            let mut lexer = Lexer::new(Path::new("test.lua"), example);
+            let mut lexer = Lexer::new(Some(Path::new("test.lua")), example);
             let token = lexer.next().unwrap().unwrap();
             assert_eq!(
                 token.kind,
@@ -983,7 +972,7 @@ mod tests {
                 vec![b' ', b' ', b'f', b'o', b'o', b' ', b'b', b'a', b'r'],
             ),
         ] {
-            let mut lexer = Lexer::new(Path::new("test.lua"), input);
+            let mut lexer = Lexer::new(Some(Path::new("test.lua")), input);
             let token = lexer.next().unwrap().unwrap();
             assert_eq!(token.kind, TokenKind::String(expected));
         }
@@ -995,13 +984,13 @@ mod tests {
             "-- this is a comment\n",
             "--[=[\n  example of a long [comment],\n  [[spanning several [lines]]]\n\n]=]",
         ] {
-            let mut lexer = Lexer::new(Path::new("test.lua"), input);
+            let mut lexer = Lexer::new(Some(Path::new("test.lua")), input);
             let token = lexer.next();
             assert!(token.is_none(), "when parsing '{input}'");
 
             // Also check that we can find tokens after the comment
             let input = format!("{} 3", input);
-            let mut lexer = Lexer::new(Path::new("test.lua"), &input);
+            let mut lexer = Lexer::new(Some(Path::new("test.lua")), &input);
             let token = lexer.next().unwrap().unwrap();
             assert_eq!(token.kind, TokenKind::Integer(3));
         }

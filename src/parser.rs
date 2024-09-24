@@ -7,14 +7,14 @@ use crate::token::{Span, Token, TokenKind};
 use miette::{miette, Context, LabeledSpan};
 
 pub struct Parser<'path, 'source> {
-    pub filename: &'path Path,
+    pub filename: Option<&'path Path>,
     source: &'source str,
     lexer: Lexer<'path, 'source>,
     scopes: Vec<DraftScope>,
 }
 
 impl<'path, 'source> Parser<'path, 'source> {
-    pub fn new(filename: &'path Path, source: &'source str) -> Self {
+    pub fn new(filename: Option<&'path Path>, source: &'source str) -> Self {
         Self {
             filename,
             source,
@@ -44,10 +44,14 @@ impl<'path, 'source> Parser<'path, 'source> {
     }
 
     fn with_source_code(&self, report: miette::Report) -> miette::Report {
-        report.with_source_code(
-            miette::NamedSource::new(self.filename.to_string_lossy(), self.source.to_string())
-                .with_language("lua"),
-        )
+        if let Some(filename) = self.filename {
+            return report.with_source_code(
+                miette::NamedSource::new(filename.to_string_lossy(), self.source.to_string())
+                    .with_language("lua"),
+            );
+        } else {
+            report.with_source_code(self.source.to_string())
+        }
     }
 
     fn parse_block(&mut self, inside_vararg_function: bool) -> miette::Result<TokenTree<Block>> {

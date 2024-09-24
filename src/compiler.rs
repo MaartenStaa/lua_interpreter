@@ -95,9 +95,14 @@ enum ExpressionResult {
 }
 
 impl<'a, 'source> Compiler<'a, 'source> {
-    pub fn new(vm: &'a mut VM<'source>, filename: PathBuf, source: Cow<'source, str>) -> Self {
+    pub fn new(
+        vm: &'a mut VM<'source>,
+        filename: Option<PathBuf>,
+        chunk_name: String,
+        source: Cow<'source, str>,
+    ) -> Self {
         Self {
-            chunk: Chunk::new(filename, source),
+            chunk: Chunk::new(filename, chunk_name, source),
             chunk_index: vm.get_next_chunk_index(),
             vm,
             // Start at the root of the file.
