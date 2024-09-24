@@ -2,7 +2,7 @@ use std::path::Path;
 
 use crate::ast::*;
 use crate::lexer::Lexer;
-use crate::scope::{DraftScope, NameLocation};
+use crate::scope::DraftScope;
 use crate::token::{Span, Token, TokenKind};
 use miette::{miette, Context, LabeledSpan};
 
@@ -284,8 +284,7 @@ impl<'path, 'source> Parser<'path, 'source> {
                     let (name, implicit_self_parameter) = {
                         let name = self.parse_name().wrap_err("in function declaration")?;
                         let mut name_span = name.span;
-                        let mut name =
-                            TokenTree::new(Variable::Name(self.declare_variable(name)), name_span);
+                        let mut name = TokenTree::new(Variable::Name(name), name_span);
                         let mut implicit_self_parameter = None;
 
                         loop {
@@ -329,8 +328,7 @@ impl<'path, 'source> Parser<'path, 'source> {
                                         ),
                                         Span::new(name_span.start, method_name_span.end),
                                     );
-                                    implicit_self_parameter =
-                                        Some(Name::unresolved("self".to_string()));
+                                    implicit_self_parameter = Some(Name("self".to_string()));
                                     break;
                                 }
                                 _ => break,
@@ -344,7 +342,7 @@ impl<'path, 'source> Parser<'path, 'source> {
                         .parse_function_body(
                             implicit_self_parameter,
                             match &name.node {
-                                Variable::Name(name) => Some(name.node.identifier.clone()),
+                                Variable::Name(name) => Some(name.node.0.clone()),
                                 _ => None,
                             },
                         )
@@ -417,12 +415,9 @@ impl<'path, 'source> Parser<'path, 'source> {
             let name = self
                 .parse_name()
                 .wrap_err("in local function declaration")?;
-            let name = self.declare_variable(name);
             let function_def = self
-                .parse_function_body(None, Some(name.node.identifier.clone()))
-                .wrap_err_with(|| {
-                    format!("in local {} function declaration", name.node.identifier)
-                })?;
+                .parse_function_body(None, Some(name.node.0.clone()))
+                .wrap_err_with(|| format!("in local {} function declaration", name.node.0))?;
 
             let name_span = name.span;
             let function_def_span = function_def.span;
@@ -542,7 +537,7 @@ impl<'path, 'source> Parser<'path, 'source> {
                     let end = n.attribute.as_ref().map_or(n.name.span.end, |a| a.span.end);
                     TokenTree::new(
                         AttributedName {
-                            name: self.declare_variable(n.name),
+                            name: n.name,
                             attribute: n.attribute,
                         },
                         Span::new(start, end),
@@ -571,8 +566,6 @@ impl<'path, 'source> Parser<'path, 'source> {
                 let initial = self
                     .expect_expression(inside_vararg_function)
                     .wrap_err("initializer expression in for statement")?;
-
-                let name = self.declare_variable(name);
 
                 self.lexer.expect(|k| k == &TokenKind::Comma, ",")?;
                 let limit = self
@@ -631,11 +624,6 @@ impl<'path, 'source> Parser<'path, 'source> {
                         _ => break,
                     }
                 }
-
-                let names = names
-                    .into_iter()
-                    .map(|n| self.declare_variable(n))
-                    .collect();
 
                 TokenTree::new(
                     ForCondition::GenericFor { names, expressions },
@@ -806,7 +794,7 @@ impl<'path, 'source> Parser<'path, 'source> {
                 kind: TokenKind::Identifier(ident),
                 span,
             }) => {
-                let name = self.lookup_variable(Name::unresolved(ident.to_string()));
+                let name = Name(ident.to_string());
                 TokenTree::new(
                     PrefixExpression::Variable(TokenTree::new(
                         Variable::Name(TokenTree::new(name, span)),
@@ -1107,11 +1095,12 @@ impl<'path, 'source> Parser<'path, 'source> {
                     };
 
                     if let Some(name) = name {
+                        let name_span = name.span;
                         let value_span = value.span;
+
                         fields.push(TokenTree::new(
-                            // TODO: We resolve and then unresolve? That's annoying.
-                            Field::Named(TokenTree::new(name.node.unresolve(), name.span), value),
-                            Span::new(name.span.start, value_span.end),
+                            Field::Named(name, value),
+                            Span::new(name_span.start, value_span.end),
                         ));
                     } else {
                         let value_span = value.span;
@@ -1461,7 +1450,7 @@ impl<'path, 'source> Parser<'path, 'source> {
 
     fn parse_function_body(
         &mut self,
-        implicit_self_parameter: Option<Name<()>>,
+        implicit_self_parameter: Option<Name>,
         name: Option<String>,
     ) -> miette::Result<TokenTree<FunctionDef>> {
         self.begin_scope();
@@ -1528,11 +1517,6 @@ impl<'path, 'source> Parser<'path, 'source> {
             }
         }
 
-        let parameters = parameters
-            .into_iter()
-            .map(|n| self.declare_variable(n))
-            .collect();
-
         self.lexer.expect(|k| k == &TokenKind::CloseParen, ")")?;
         let block = self
             .parse_block_inner(has_varargs)
@@ -1552,7 +1536,7 @@ impl<'path, 'source> Parser<'path, 'source> {
         ))
     }
 
-    fn parse_name(&mut self) -> miette::Result<TokenTree<Name<()>>> {
+    fn parse_name(&mut self) -> miette::Result<TokenTree<Name>> {
         let token = self
             .lexer
             .expect(|k| matches!(k, &TokenKind::Identifier(_)), "identifier")?;
@@ -1561,10 +1545,7 @@ impl<'path, 'source> Parser<'path, 'source> {
             _ => unreachable!(),
         };
 
-        Ok(TokenTree::new(
-            Name::unresolved(name.to_string()),
-            token.span,
-        ))
+        Ok(TokenTree::new(Name(name.to_string()), token.span))
     }
 }
 
@@ -1609,23 +1590,9 @@ impl<'path, 'source> Parser<'path, 'source> {
         self.scopes.pop();
     }
 
-    fn declare_variable<T>(&mut self, name: TokenTree<Name<T>>) -> TokenTree<Name<NameLocation>> {
-        let current_scope = self.scopes.len() - 1;
-        let current_scope = &mut self.scopes[current_scope];
-        current_scope.register_variable(&name.node.identifier);
-
-        TokenTree::new(
-            Name {
-                location: NameLocation { scope_offset: 0 },
-                identifier: name.node.identifier,
-            },
-            name.span,
-        )
-    }
-
-    fn declare_label<T>(&mut self, name: &Name<T>, span: Span) -> miette::Result<()> {
+    fn declare_label(&mut self, name: &Name, span: Span) -> miette::Result<()> {
         for scope in self.scopes.iter_mut().rev() {
-            if scope.has_label(&name.identifier) {
+            if scope.has_label(&name.0) {
                 return Err(miette!(
                     labels = vec![span.labeled("label already defined")],
                     "label already defined in this scope"
@@ -1634,29 +1601,8 @@ impl<'path, 'source> Parser<'path, 'source> {
         }
 
         let current_scope = self.scopes.last_mut().unwrap();
-        current_scope.register_label(&name.identifier);
+        current_scope.register_label(&name.0);
 
         Ok(())
-    }
-
-    fn lookup_variable<T>(&mut self, name: Name<T>) -> Name<NameLocation> {
-        for (scope_offset, scope) in self.scopes.iter().rev().enumerate() {
-            if scope.has_variable(&name.identifier) {
-                return Name {
-                    location: NameLocation { scope_offset },
-                    identifier: name.identifier,
-                };
-            }
-        }
-
-        // We've reached the global scope. Undefined variables are
-        // implicitly declared as global (though without an initial value)
-        self.scopes[0].register_variable(&name.identifier);
-        Name {
-            location: NameLocation {
-                scope_offset: self.scopes.len() - 1,
-            },
-            identifier: name.identifier,
-        }
     }
 }

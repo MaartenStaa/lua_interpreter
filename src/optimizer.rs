@@ -184,7 +184,7 @@ fn optimize_prefix_expression(prefix: TokenTree<PrefixExpression>) -> TokenTree<
     )
 }
 
-fn optimize_variable<T>(var: TokenTree<Variable<T>>) -> TokenTree<Variable<T>> {
+fn optimize_variable(var: TokenTree<Variable>) -> TokenTree<Variable> {
     let span = var.span;
     TokenTree::new(
         match var.node {

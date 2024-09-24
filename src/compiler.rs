@@ -232,7 +232,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                 }
 
                 for name in names {
-                    let local_index = self.add_local(name.node.name.node.identifier);
+                    let local_index = self.add_local(name.node.name.node.0);
                     match name.node.attribute {
                         Some(TokenTree {
                             node: LocalAttribute::Const,
@@ -317,9 +317,8 @@ impl<'a, 'source> Compiler<'a, 'source> {
                         }
                         Variable::Field(target, name) => {
                             // Same story as above, but with a string key
-                            let const_index = self.get_const_index(LuaConst::String(
-                                name.node.identifier.into_bytes(),
-                            ));
+                            let const_index =
+                                self.get_const_index(LuaConst::String(name.node.0.into_bytes()));
                             self.chunk
                                 .push_instruction(Instruction::LoadConst, Some(span));
                             self.chunk.push_const_index(const_index);
@@ -478,7 +477,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
 
                         // Define the initial value and variable
                         self.compile_expression(initial, ExpressionResult::Single);
-                        let identifier_local = self.add_local(name.node.identifier);
+                        let identifier_local = self.add_local(name.node.0);
 
                         // Create fake variables to hold the limit and step. Note that we use
                         // variable names that are invalid in Lua to avoid conflicts with user
@@ -555,12 +554,12 @@ impl<'a, 'source> Compiler<'a, 'source> {
                         let iterator_local = self.add_local("#iterator".to_string());
                         let state_local = self.add_local("#state".to_string());
                         // NOTE: The syntax ensures there is at least one name
-                        let control_local = self.add_local(names[0].node.identifier.clone());
+                        let control_local = self.add_local(names[0].node.0.clone());
 
                         // Initialize the other variables to nil
                         for name in &names[1..] {
                             self.push_load_nil();
-                            self.add_local(name.node.identifier.clone());
+                            self.add_local(name.node.0.clone());
                         }
 
                         // Call the iterator function
@@ -589,7 +588,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                             self.chunk
                                 .push_instruction(Instruction::SetLocal, Some(span));
                             let local_index = self
-                                .resolve_local(&name.node.identifier)
+                                .resolve_local(&name.node.0)
                                 .expect("parser ensures that variable is in scope");
                             self.chunk.push_instruction(local_index, None);
                         }
@@ -674,7 +673,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
             self.chunk.push_instruction(1, None);
 
             let method_name_const_index =
-                self.get_const_index(LuaConst::String(method_name.node.identifier.into_bytes()));
+                self.get_const_index(LuaConst::String(method_name.node.0.into_bytes()));
             self.chunk
                 .push_instruction(Instruction::LoadConst, Some(function_call.span));
             self.chunk.push_const_index(method_name_const_index);
@@ -741,7 +740,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
         // Define the function arguments
         let parameter_count = function_def.node.parameters.len();
         for parameter in function_def.node.parameters {
-            self.add_local(parameter.node.identifier);
+            self.add_local(parameter.node.0);
         }
 
         if function_def.node.has_varargs {
@@ -895,7 +894,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                 Variable::Field(prefix, name) => {
                     self.compile_prefix_expression(*prefix, ExpressionResult::Single);
                     let const_index =
-                        self.get_const_index(LuaConst::String(name.node.identifier.into_bytes()));
+                        self.get_const_index(LuaConst::String(name.node.0.into_bytes()));
                     self.chunk
                         .push_instruction(Instruction::LoadConst, Some(prefix_expression.span));
                     self.chunk.push_const_index(const_index);
@@ -916,7 +915,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
             match field.node {
                 Field::Named(name, value) => {
                     let const_index =
-                        self.get_const_index(LuaConst::String(name.node.identifier.into_bytes()));
+                        self.get_const_index(LuaConst::String(name.node.0.into_bytes()));
                     self.chunk
                         .push_instruction(Instruction::LoadConst, Some(field.span));
                     self.chunk.push_const_index(const_index);
@@ -1027,8 +1026,8 @@ impl<'a, 'source> Compiler<'a, 'source> {
         }
     }
 
-    fn variable<T>(&mut self, name: TokenTree<Name<T>>, mode: VariableMode) {
-        if let Some(local) = self.resolve_local(&name.node.identifier) {
+    fn variable(&mut self, name: TokenTree<Name>, mode: VariableMode) {
+        if let Some(local) = self.resolve_local(&name.node.0) {
             self.chunk.push_instruction(
                 match mode {
                     VariableMode::Read => Instruction::GetLocal,
@@ -1037,7 +1036,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                 Some(name.span),
             );
             self.chunk.push_instruction(local, None);
-        } else if let Some(upvalue) = self.resolve_upvalue(&name.node.identifier) {
+        } else if let Some(upvalue) = self.resolve_upvalue(&name.node.0) {
             self.chunk.push_instruction(
                 match mode {
                     VariableMode::Read => Instruction::GetUpval,
@@ -1054,7 +1053,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                 },
                 Some(name.span),
             );
-            let const_index = self.get_global_name_index(name.node.identifier.into_bytes());
+            let const_index = self.get_global_name_index(name.node.0.into_bytes());
             self.chunk.push_const_index(const_index);
         }
     }

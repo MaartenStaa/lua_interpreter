@@ -1,6 +1,6 @@
 // Reference: https://www.lua.org/manual/5.4/manual.html#9
 
-use crate::{scope::NameLocation, token::Span};
+use crate::token::Span;
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct TokenTree<T> {
@@ -23,7 +23,7 @@ pub struct Block {
 #[derive(Debug, PartialEq, Clone)]
 pub enum Statement {
     Assignment {
-        varlist: Vec<TokenTree<Variable<NameLocation>>>,
+        varlist: Vec<TokenTree<Variable>>,
         explist: Vec<TokenTree<Expression>>,
     },
     Block(TokenTree<Block>),
@@ -45,43 +45,19 @@ pub enum Statement {
         condition: TokenTree<ForCondition>,
         block: TokenTree<Block>,
     },
-    Goto(TokenTree<Name<()>>),
-    Label(TokenTree<Name<()>>),
+    Goto(TokenTree<Name>),
+    Label(TokenTree<Name>),
     Break,
     FunctionCall(TokenTree<FunctionCall>),
-    LocalDeclaraction(
-        Vec<TokenTree<AttributedName<NameLocation>>>,
-        Vec<TokenTree<Expression>>,
-    ),
+    LocalDeclaraction(Vec<TokenTree<AttributedName>>, Vec<TokenTree<Expression>>),
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub struct Name<L> {
-    pub identifier: String,
-    pub location: L,
-}
-
-impl Name<()> {
-    pub fn unresolved(identifier: String) -> Self {
-        Self {
-            identifier,
-            location: (),
-        }
-    }
-}
-
-impl<T> Name<T> {
-    pub fn unresolve(self) -> Name<()> {
-        Name {
-            identifier: self.identifier,
-            location: (),
-        }
-    }
-}
+pub struct Name(pub String);
 
 #[derive(Debug, PartialEq, Clone)]
-pub struct AttributedName<L> {
-    pub name: TokenTree<Name<L>>,
+pub struct AttributedName {
+    pub name: TokenTree<Name>,
     pub attribute: Option<TokenTree<LocalAttribute>>,
 }
 
@@ -92,10 +68,10 @@ pub enum LocalAttribute {
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub enum Variable<L> {
-    Name(TokenTree<Name<L>>),
+pub enum Variable {
+    Name(TokenTree<Name>),
     Indexed(Box<TokenTree<PrefixExpression>>, Box<TokenTree<Expression>>),
-    Field(Box<TokenTree<PrefixExpression>>, TokenTree<Name<()>>),
+    Field(Box<TokenTree<PrefixExpression>>, TokenTree<Name>),
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -107,13 +83,13 @@ pub struct ElseIf {
 #[derive(Debug, PartialEq, Clone)]
 pub enum ForCondition {
     NumericFor {
-        name: TokenTree<Name<NameLocation>>,
+        name: TokenTree<Name>,
         initial: TokenTree<Expression>,
         limit: TokenTree<Expression>,
         step: Option<TokenTree<Expression>>,
     },
     GenericFor {
-        names: Vec<TokenTree<Name<NameLocation>>>,
+        names: Vec<TokenTree<Name>>,
         expressions: Vec<TokenTree<Expression>>,
     },
 }
@@ -138,7 +114,7 @@ pub enum Expression {
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum PrefixExpression {
-    Variable(TokenTree<Variable<NameLocation>>),
+    Variable(TokenTree<Variable>),
     FunctionCall(TokenTree<FunctionCall>),
     Parenthesized(Box<TokenTree<Expression>>),
 }
@@ -147,7 +123,7 @@ pub enum PrefixExpression {
 pub struct FunctionCall {
     pub function: Box<TokenTree<PrefixExpression>>,
     pub as_method: bool,
-    pub name: Option<TokenTree<Name<()>>>,
+    pub name: Option<TokenTree<Name>>,
     pub args: Vec<TokenTree<Expression>>,
 }
 
@@ -228,7 +204,7 @@ pub struct TableConstructor {
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Field {
-    Named(TokenTree<Name<()>>, TokenTree<Expression>),
+    Named(TokenTree<Name>, TokenTree<Expression>),
     Indexed(TokenTree<Expression>, TokenTree<Expression>),
     Value(TokenTree<Expression>),
 }
@@ -236,7 +212,7 @@ pub enum Field {
 #[derive(Debug, PartialEq, Clone)]
 pub struct FunctionDef {
     pub name: Option<String>,
-    pub parameters: Vec<TokenTree<Name<NameLocation>>>,
+    pub parameters: Vec<TokenTree<Name>>,
     pub has_varargs: bool,
     pub block: TokenTree<Block>,
 }

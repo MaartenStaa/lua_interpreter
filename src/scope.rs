@@ -36,10 +36,3 @@ impl DraftScope {
         self.labels.insert(label.to_string());
     }
 }
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct NameLocation {
-    /// Which scope the name is defined in/can be found in. 0 means the current
-    /// scope, 1 means the parent scope, and so on.
-    pub scope_offset: usize,
-}
