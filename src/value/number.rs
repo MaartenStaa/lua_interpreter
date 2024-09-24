@@ -1,7 +1,7 @@
 use miette::miette;
 use std::{fmt::Display, hash::Hash};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum LuaNumber {
     Integer(i64),
     Float(f64),
@@ -57,6 +57,17 @@ impl Display for LuaNumber {
                     write!(f, "{}", fl)
                 }
             }
+        }
+    }
+}
+
+impl PartialEq for LuaNumber {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (LuaNumber::Integer(a), LuaNumber::Integer(b)) => a == b,
+            (LuaNumber::Float(a), LuaNumber::Float(b)) => a == b,
+            (LuaNumber::Integer(a), LuaNumber::Float(b)) => (*a as f64) == *b,
+            (LuaNumber::Float(a), LuaNumber::Integer(b)) => *a == (*b as f64),
         }
     }
 }

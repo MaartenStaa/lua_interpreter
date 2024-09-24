@@ -159,10 +159,21 @@ pub enum Literal {
     String(Vec<u8>),
 }
 
-#[derive(Debug, PartialEq, Copy, Clone)]
+#[derive(Debug, Copy, Clone)]
 pub enum Number {
     Integer(i64),
     Float(f64),
+}
+
+impl PartialEq for Number {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Number::Integer(a), Number::Integer(b)) => a == b,
+            (Number::Float(a), Number::Float(b)) => a == b,
+            (Number::Integer(a), Number::Float(b)) => (*a as f64) == *b,
+            (Number::Float(a), Number::Integer(b)) => *a == (*b as f64),
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Clone)]

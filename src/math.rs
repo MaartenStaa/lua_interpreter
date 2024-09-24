@@ -42,7 +42,46 @@ macro_rules! impl_number_ops {
 impl_number_ops!(Add, +, add, wrapping_add, ast::Number);
 impl_number_ops!(Sub, -, sub, wrapping_sub, ast::Number);
 impl_number_ops!(Mul, *, mul, wrapping_mul, ast::Number);
-impl_number_ops!(Rem, %, rem, wrapping_rem, ast::Number);
+
+impl ops::Rem for ast::Number {
+    type Output = ast::Number;
+
+    fn rem(self, rhs: Self) -> Self::Output {
+        match (self, rhs) {
+            (ast::Number::Integer(a), ast::Number::Integer(b)) => {
+                if a < 0 {
+                    ast::Number::Integer(b - a.abs().wrapping_rem(b))
+                } else {
+                    ast::Number::Integer(a.wrapping_rem(b))
+                }
+            }
+            // TODO: Are these right?
+            (ast::Number::Float(a), ast::Number::Float(b)) => ast::Number::Float(a % b),
+            (ast::Number::Integer(a), ast::Number::Float(b)) => ast::Number::Float(a as f64 % b),
+            (ast::Number::Float(a), ast::Number::Integer(b)) => ast::Number::Float(a % b as f64),
+        }
+    }
+}
+
+impl ops::Rem for &ast::Number {
+    type Output = ast::Number;
+
+    fn rem(self, rhs: Self) -> Self::Output {
+        match (self, rhs) {
+            (ast::Number::Integer(a), ast::Number::Integer(b)) => {
+                if *a < 0 {
+                    ast::Number::Integer(b - a.abs().wrapping_rem(*b))
+                } else {
+                    ast::Number::Integer(a.wrapping_rem(*b))
+                }
+            }
+            // TODO: Are these right?
+            (ast::Number::Float(a), ast::Number::Float(b)) => ast::Number::Float(a % b),
+            (ast::Number::Integer(a), ast::Number::Float(b)) => ast::Number::Float(*a as f64 % b),
+            (ast::Number::Float(a), ast::Number::Integer(b)) => ast::Number::Float(a % *b as f64),
+        }
+    }
+}
 
 impl ops::Div for ast::Number {
     type Output = Self;
@@ -538,8 +577,90 @@ impl LuaObject {
 impl_number_ops!(Add, +, add, wrapping_add, LuaNumber);
 impl_number_ops!(Sub, -, sub, wrapping_sub, LuaNumber);
 impl_number_ops!(Mul, *, mul, wrapping_mul, LuaNumber);
-impl_number_ops!(Div, /, div, wrapping_div, LuaNumber);
-impl_number_ops!(Rem, %, rem, wrapping_rem, LuaNumber);
+
+impl ops::Rem for LuaNumber {
+    type Output = LuaNumber;
+
+    fn rem(self, rhs: Self) -> Self::Output {
+        match (self, rhs) {
+            (LuaNumber::Integer(a), LuaNumber::Integer(b)) => {
+                if a < 0 {
+                    LuaNumber::Integer(b - a.abs().wrapping_rem(b))
+                } else {
+                    LuaNumber::Integer(a.wrapping_rem(b))
+                }
+            }
+            // TODO: Are these right?
+            (LuaNumber::Float(a), LuaNumber::Float(b)) => LuaNumber::Float(a % b),
+            (LuaNumber::Integer(a), LuaNumber::Float(b)) => LuaNumber::Float(a as f64 % b),
+            (LuaNumber::Float(a), LuaNumber::Integer(b)) => LuaNumber::Float(a % b as f64),
+        }
+    }
+}
+
+impl ops::Rem for &LuaNumber {
+    type Output = LuaNumber;
+
+    fn rem(self, rhs: Self) -> Self::Output {
+        match (self, rhs) {
+            (LuaNumber::Integer(a), LuaNumber::Integer(b)) => {
+                if *a < 0 {
+                    LuaNumber::Integer(b - a.abs().wrapping_rem(*b))
+                } else {
+                    LuaNumber::Integer(a.wrapping_rem(*b))
+                }
+            }
+            // TODO: Are these right?
+            (LuaNumber::Float(a), LuaNumber::Float(b)) => LuaNumber::Float(a % b),
+            (LuaNumber::Integer(a), LuaNumber::Float(b)) => LuaNumber::Float(*a as f64 % b),
+            (LuaNumber::Float(a), LuaNumber::Integer(b)) => LuaNumber::Float(a % *b as f64),
+        }
+    }
+}
+
+impl ops::Div for LuaNumber {
+    type Output = Self;
+
+    fn div(self, rhs: Self) -> Self::Output {
+        if matches!(&rhs, LuaNumber::Integer(0) | LuaNumber::Float(0.0)) {
+            return LuaNumber::Float(if matches!(self, LuaNumber::Integer(0)) {
+                f64::NAN
+            } else {
+                f64::INFINITY
+            });
+        }
+
+        match (self, rhs) {
+            (LuaNumber::Integer(a), LuaNumber::Integer(b)) => LuaNumber::Float(a as f64 / b as f64),
+            (LuaNumber::Float(a), LuaNumber::Float(b)) => LuaNumber::Float(a / b),
+            (LuaNumber::Integer(a), LuaNumber::Float(b)) => LuaNumber::Float(a as f64 / b),
+            (LuaNumber::Float(a), LuaNumber::Integer(b)) => LuaNumber::Float(a / b as f64),
+        }
+    }
+}
+
+impl ops::Div for &LuaNumber {
+    type Output = LuaNumber;
+
+    fn div(self, rhs: Self) -> Self::Output {
+        if matches!(&rhs, LuaNumber::Integer(0) | LuaNumber::Float(0.0)) {
+            return LuaNumber::Float(if matches!(self, LuaNumber::Integer(0)) {
+                f64::NAN
+            } else {
+                f64::INFINITY
+            });
+        }
+
+        match (self, rhs) {
+            (LuaNumber::Integer(a), LuaNumber::Integer(b)) => {
+                LuaNumber::Float(*a as f64 / *b as f64)
+            }
+            (LuaNumber::Float(a), LuaNumber::Float(b)) => LuaNumber::Float(a / b),
+            (LuaNumber::Integer(a), LuaNumber::Float(b)) => LuaNumber::Float(*a as f64 / b),
+            (LuaNumber::Float(a), LuaNumber::Integer(b)) => LuaNumber::Float(a / *b as f64),
+        }
+    }
+}
 
 impl ops::Neg for &LuaNumber {
     type Output = LuaNumber;
