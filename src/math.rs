@@ -456,7 +456,8 @@ impl PartialOrd for LuaValue {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         match (self, other) {
             (LuaValue::Number(a), LuaValue::Number(b)) => a.partial_cmp(b),
-            _ => todo!("LuaValue::partial_cmp"),
+            (LuaValue::String(a), LuaValue::String(b)) => a.partial_cmp(b),
+            _ => todo!("LuaValue::partial_cmp (metatables)"),
         }
     }
 }
