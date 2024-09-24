@@ -7,7 +7,10 @@ use std::{
 
 use crate::{
     compiler::Compiler,
-    value::{LuaNumber, LuaObject, LuaValue},
+    value::{
+        metatables::{GLOBAL_BOOLEAN_METATABLE, GLOBAL_NUMBER_METATABLE, GLOBAL_STRING_METATABLE},
+        LuaNumber, LuaObject, LuaValue,
+    },
     vm::VM,
 };
 
@@ -51,8 +54,9 @@ pub(crate) fn getmetatable(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<V
             LuaObject::Table(t) => t.get(&LuaValue::String(b"__metatable".to_vec())).cloned(),
             _ => None,
         },
-        // TODO: For other types, need to check global metatable (only settable via
-        // debug.setmetatable).
+        LuaValue::String(_) => Some(GLOBAL_STRING_METATABLE.clone()),
+        LuaValue::Number(_) => Some(GLOBAL_NUMBER_METATABLE.clone()),
+        LuaValue::Boolean(_) => Some(GLOBAL_BOOLEAN_METATABLE.clone()),
         _ => None,
     };
 

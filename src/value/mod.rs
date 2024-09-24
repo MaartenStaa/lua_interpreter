@@ -2,6 +2,7 @@ mod attribute;
 mod closure;
 mod constant;
 mod conversions;
+pub(crate) mod metatables;
 mod number;
 mod object;
 mod table;
