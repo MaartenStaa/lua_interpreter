@@ -467,6 +467,20 @@ fn optimize_binary_op(
                 span,
             }),
             (
+                BinaryOperator::LessThan,
+                Expression::Literal(TokenTree {
+                    node: Literal::String(lhs),
+                    ..
+                }),
+                Expression::Literal(TokenTree {
+                    node: Literal::String(rhs),
+                    ..
+                }),
+            ) => Expression::Literal(TokenTree {
+                node: Literal::Boolean(lhs < rhs),
+                span,
+            }),
+            (
                 BinaryOperator::GreaterThan,
                 Expression::Literal(TokenTree {
                     node: Literal::Number(lhs),
@@ -474,6 +488,20 @@ fn optimize_binary_op(
                 }),
                 Expression::Literal(TokenTree {
                     node: Literal::Number(rhs),
+                    ..
+                }),
+            ) => Expression::Literal(TokenTree {
+                node: Literal::Boolean(lhs > rhs),
+                span,
+            }),
+            (
+                BinaryOperator::GreaterThan,
+                Expression::Literal(TokenTree {
+                    node: Literal::String(lhs),
+                    ..
+                }),
+                Expression::Literal(TokenTree {
+                    node: Literal::String(rhs),
                     ..
                 }),
             ) => Expression::Literal(TokenTree {
@@ -495,6 +523,20 @@ fn optimize_binary_op(
                 span,
             }),
             (
+                BinaryOperator::LessThanOrEqual,
+                Expression::Literal(TokenTree {
+                    node: Literal::String(lhs),
+                    ..
+                }),
+                Expression::Literal(TokenTree {
+                    node: Literal::String(rhs),
+                    ..
+                }),
+            ) => Expression::Literal(TokenTree {
+                node: Literal::Boolean(lhs <= rhs),
+                span,
+            }),
+            (
                 BinaryOperator::GreaterThanOrEqual,
                 Expression::Literal(TokenTree {
                     node: Literal::Number(lhs),
@@ -502,6 +544,20 @@ fn optimize_binary_op(
                 }),
                 Expression::Literal(TokenTree {
                     node: Literal::Number(rhs),
+                    ..
+                }),
+            ) => Expression::Literal(TokenTree {
+                node: Literal::Boolean(lhs >= rhs),
+                span,
+            }),
+            (
+                BinaryOperator::GreaterThanOrEqual,
+                Expression::Literal(TokenTree {
+                    node: Literal::String(lhs),
+                    ..
+                }),
+                Expression::Literal(TokenTree {
+                    node: Literal::String(rhs),
                     ..
                 }),
             ) => Expression::Literal(TokenTree {
