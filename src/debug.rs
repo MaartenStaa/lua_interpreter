@@ -7,6 +7,16 @@ use crate::{
     vm::{ConstIndex, JumpAddr, VM},
 };
 
+const IP_WIDTH: usize = 4;
+const IP_HEX_WIDTH: usize = 2;
+const IP_TEXT_WIDTH: usize = 16;
+
+macro_rules! instr {
+    ($name:expr) => {
+        print!("{:01$}", $name, IP_TEXT_WIDTH);
+    };
+}
+
 pub fn print_instructions(vm: &VM) {
     let instructions = vm
         .get_chunk(0)
@@ -21,7 +31,10 @@ pub fn print_instructions(vm: &VM) {
         }
 
         let instruction = instructions[instruction_pointer];
-        print!("{instruction_pointer:04}    {instruction:02x}  ");
+        print!(
+            "{instruction_pointer:00$}    {instruction:01$x}  ",
+            IP_WIDTH, IP_HEX_WIDTH
+        );
 
         let instruction_increment = match Instruction::from(instruction) {
             // Stack manipulation
@@ -29,7 +42,7 @@ pub fn print_instructions(vm: &VM) {
                 let const_index_bytes = &instructions
                     [instruction_pointer + 1..instruction_pointer + 1 + size_of::<ConstIndex>()];
                 let const_index = ConstIndex::from_be_bytes(const_index_bytes.try_into().unwrap());
-                print!("LOAD_CONST    ");
+                instr!("LOAD_CONST");
                 print_const(&consts[const_index as usize]);
                 println!();
                 1 + size_of::<ConstIndex>()
@@ -38,7 +51,7 @@ pub fn print_instructions(vm: &VM) {
                 let const_index_bytes = &instructions
                     [instruction_pointer + 1..instruction_pointer + 1 + size_of::<ConstIndex>()];
                 let const_index = ConstIndex::from_be_bytes(const_index_bytes.try_into().unwrap());
-                print!("LOAD_CLOSURE  ");
+                instr!("LOAD_CLOSURE");
                 print_const(&consts[const_index as usize]);
                 println!();
 
@@ -71,22 +84,26 @@ pub fn print_instructions(vm: &VM) {
             }
             Instruction::Swap => {
                 let swap_offset = instructions[instruction_pointer + 1];
-                println!("SWAP          {swap_offset}");
+                instr!("SWAP");
+                println!("{swap_offset}");
                 2
             }
             Instruction::Align => {
                 let align_offset = instructions[instruction_pointer + 1];
-                println!("ALIGN         {align_offset}");
+                instr!("ALIGN");
+                println!("{align_offset}");
                 2
             }
             Instruction::AlignVararg => {
                 let align_offset = instructions[instruction_pointer + 1];
-                println!("ALIGN_VARARG  {align_offset}");
+                instr!("ALIGN_VARARG");
+                println!("{align_offset}");
                 2
             }
             Instruction::DupFromMarker => {
                 let offset = instructions[instruction_pointer + 1];
-                println!("DUP_FROM_MARK {offset}");
+                instr!("DUP_FROM_MARK");
+                println!("{offset}");
                 2
             }
 
@@ -196,7 +213,7 @@ pub fn print_instructions(vm: &VM) {
                 let name_index_bytes = &instructions
                     [instruction_pointer + 1..instruction_pointer + 1 + size_of::<ConstIndex>()];
                 let name_index = ConstIndex::from_be_bytes(name_index_bytes.try_into().unwrap());
-                print!("SET_GLOBAL    ");
+                instr!("SET_GLOBAL");
                 print_const(&consts[name_index as usize]);
                 println!("   ({name_index})");
                 1 + size_of::<ConstIndex>()
@@ -205,43 +222,49 @@ pub fn print_instructions(vm: &VM) {
                 let name_index_bytes = &instructions
                     [instruction_pointer + 1..instruction_pointer + 1 + size_of::<ConstIndex>()];
                 let name_index = ConstIndex::from_be_bytes(name_index_bytes.try_into().unwrap());
-                print!("GET_GLOBAL    ");
+                instr!("GET_GLOBAL");
                 print_const(&consts[name_index as usize]);
                 println!("   ({name_index})");
                 1 + size_of::<ConstIndex>()
             }
             Instruction::SetLocal => {
                 let local_index = instructions[instruction_pointer + 1];
-                println!("SET_LOCAL     {local_index}");
+                instr!("SET_LOCAL");
+                println!("{local_index}");
                 2
             }
             Instruction::GetLocal => {
                 let local_index = instructions[instruction_pointer + 1];
-                println!("GET_LOCAL     {local_index}");
+                instr!("GET_LOCAL");
+                println!("{local_index}");
                 2
             }
             Instruction::SetLocalAttr => {
                 let local_index = instructions[instruction_pointer + 1];
                 let attr_value = instructions[instruction_pointer + 2];
                 let attr = LuaVariableAttribute::try_from(attr_value).expect("valid attribute");
-                println!("SET_LOCAL_ATTR {local_index} {attr:?}");
+                instr!("SET_LOCAL_ATTR");
+                println!("{local_index} {attr:?}");
                 3
             }
             Instruction::SetUpval => {
                 let upval_index = instructions[instruction_pointer + 1];
-                println!("SET_UPVAL     {upval_index}");
+                instr!("SET_UPVAL");
+                println!("{upval_index}");
                 2
             }
             Instruction::GetUpval => {
                 let upval_index = instructions[instruction_pointer + 1];
-                println!("GET_UPVAL     {upval_index}");
+                instr!("GET_UPVAL");
+                println!("{upval_index}");
                 2
             }
             Instruction::LoadVararg => {
                 let local_index = instructions[instruction_pointer + 1];
                 let is_single_value = instructions[instruction_pointer + 2] == 1;
+                instr!("LOAD_VARARG");
                 println!(
-                    "LOAD_VARARG   {local_index} {}",
+                    "{local_index} {}",
                     if is_single_value { "single" } else { "multi" }
                 );
                 3
@@ -268,10 +291,8 @@ pub fn print_instructions(vm: &VM) {
             // Function
             Instruction::Call => {
                 let is_single_return = instructions[instruction_pointer + 1] == 1;
-                println!(
-                    "CALL        {}",
-                    if is_single_return { "single" } else { "multi" },
-                );
+                instr!("CALL");
+                println!("{}", if is_single_return { "single" } else { "multi" });
                 2
             }
             Instruction::Return => {
@@ -284,21 +305,24 @@ pub fn print_instructions(vm: &VM) {
                 let offset_bytes = &instructions
                     [instruction_pointer + 1..instruction_pointer + 1 + size_of::<JumpAddr>()];
                 let offset = JumpAddr::from_be_bytes(offset_bytes.try_into().unwrap());
-                println!("JMP           {offset:04}");
+                instr!("JMP");
+                println!("{offset:04}");
                 1 + size_of::<JumpAddr>()
             }
             Instruction::JmpTrue => {
                 let offset_bytes = &instructions
                     [instruction_pointer + 1..instruction_pointer + 1 + size_of::<JumpAddr>()];
                 let offset = JumpAddr::from_be_bytes(offset_bytes.try_into().unwrap());
-                println!("JMP_TRUE      {offset:04}");
+                instr!("JMP_TRUE");
+                println!("{offset:04}");
                 1 + size_of::<JumpAddr>()
             }
             Instruction::JmpFalse => {
                 let offset_bytes = &instructions
                     [instruction_pointer + 1..instruction_pointer + 1 + size_of::<JumpAddr>()];
                 let offset = JumpAddr::from_be_bytes(offset_bytes.try_into().unwrap());
-                println!("JMP_FALSE     {offset:04}");
+                instr!("JMP_FALSE");
+                println!("{offset:04}");
                 1 + size_of::<JumpAddr>()
             }
         };
