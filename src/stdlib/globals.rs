@@ -13,6 +13,8 @@ use crate::{
 
 use miette::miette;
 
+use super::{math::MATH, string::STRING, table::TABLE};
+
 pub const _VERSION: &str = "LuaRust 5.4";
 
 pub(crate) fn assert(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
@@ -143,8 +145,23 @@ pub(crate) fn require(vm: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<L
         }
     };
 
-    // TODO: Use `package.path` to search for modules
     let name = String::from_utf8_lossy(name);
+
+    // Allow loading stdlib modules via `require`
+    match name.as_ref() {
+        "math" => {
+            return Ok(vec![MATH.clone()]);
+        }
+        "string" => {
+            return Ok(vec![STRING.clone()]);
+        }
+        "table" => {
+            return Ok(vec![TABLE.clone()]);
+        }
+        _ => {}
+    }
+
+    // TODO: Use `package.path` to search for modules
     let mut name_os = OsString::from(name.as_ref());
     name_os.push(".lua");
 
