@@ -15,6 +15,7 @@ pub fn lookup_global(name: &str) -> Option<LuaValue> {
         "getmetatable" => Some(LuaObject::NativeFunction("getmetatable", getmetatable).into()),
         "ipairs" => Some(LuaObject::NativeFunction("ipairs", ipairs).into()),
         "load" => Some(LuaObject::NativeFunction("load", load).into()),
+        "pcall" => Some(LuaObject::NativeFunction("pcall", pcall).into()),
         "print" => Some(LuaObject::NativeFunction("print", print).into()),
         "require" => Some(LuaObject::NativeFunction("require", require).into()),
         "select" => Some(LuaObject::NativeFunction("select", select).into()),

@@ -13,7 +13,7 @@ use crate::{
     macros::{assert_closure, assert_table},
     stdlib,
     token::Span,
-    value::{LuaConst, LuaNumber, LuaObject, LuaTable, LuaValue, LuaVariableAttribute},
+    value::{LuaClosure, LuaConst, LuaNumber, LuaObject, LuaTable, LuaValue, LuaVariableAttribute},
 };
 
 const MAX_STACK_SIZE: usize = 256;
@@ -288,7 +288,10 @@ impl<'source> VM<'source> {
         }
     }
 
-    pub(crate) fn run_chunk(&mut self, initial_chunk_index: usize) -> miette::Result<LuaValue> {
+    pub(crate) fn run_chunk(
+        &mut self,
+        initial_chunk_index: usize,
+    ) -> miette::Result<Vec<LuaValue>> {
         self.push_call_frame(
             Some(self.chunks[initial_chunk_index].chunk_name.clone()),
             initial_chunk_index,
@@ -299,6 +302,34 @@ impl<'source> VM<'source> {
             false,
         );
 
+        self.run_inner()
+    }
+
+    pub(crate) fn run_closure(
+        &mut self,
+        value: LuaClosure,
+        args: Vec<LuaValue>,
+    ) -> miette::Result<Vec<LuaValue>> {
+        let frame_pointer = self.stack_index;
+        for arg in args {
+            self.push(arg);
+        }
+
+        self.push_call_frame(
+            value.name.clone(),
+            value.chunk,
+            true,
+            frame_pointer,
+            // NOTE: `return_addr` doesn't matter for a border frame
+            0,
+            Some(value.upvalues),
+            false,
+        );
+
+        self.run_inner()
+    }
+
+    fn run_inner(&mut self) -> miette::Result<Vec<LuaValue>> {
         loop {
             let chunk_index = self.call_stack[self.call_stack_index - 1].chunk;
             let instruction = self.chunks[chunk_index].instructions[self.chunks[chunk_index].ip];
@@ -969,13 +1000,14 @@ impl<'source> VM<'source> {
                     let mut return_values: Vec<_> = (marker_position + 1..self.stack_index)
                         .map(|_| self.pop())
                         .collect();
+                    return_values.reverse();
 
                     // Pop the marker
                     self.pop();
 
                     // Check if this is the root frame, or if we're leaving this chunk
                     if frame.border_frame {
-                        return Ok(return_values.pop().unwrap_or(LuaValue::Nil));
+                        return Ok(return_values);
                     }
 
                     let parent_call_frame = &self.call_stack[self.call_stack_index - 1];
@@ -984,7 +1016,6 @@ impl<'source> VM<'source> {
                     self.stack_index = frame.frame_pointer;
 
                     // Put the return values back
-                    return_values.reverse();
                     for value in return_values {
                         self.push(value);
                     }

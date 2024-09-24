@@ -170,6 +170,47 @@ pub(crate) fn load(vm: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaV
     )))])
 }
 
+pub(crate) fn pcall(vm: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+    let mut input = input.into_iter();
+    let function = match input.next() {
+        Some(LuaValue::Object(o)) => o,
+        Some(value) => {
+            return Err(miette!(
+                "bad argument #1 to 'pcall' (function expected, got {})",
+                value.type_name()
+            ));
+        }
+        None => {
+            return Err(miette!(
+                "bad argument #1 to 'pcall' (function expected, got no value)"
+            ));
+        }
+    };
+
+    let args = input.collect();
+    let result = match function.read().unwrap().clone() {
+        LuaObject::Closure(closure) => vm.run_closure(closure, args),
+        LuaObject::NativeFunction(_, f) => f(vm, args),
+        _ => {
+            return Err(miette!(
+                "bad argument #1 to 'pcall' (function expected, got {})",
+                function.read().unwrap().type_name()
+            ));
+        }
+    };
+
+    Ok(match result {
+        Ok(mut values) => {
+            values.insert(0, LuaValue::Boolean(true));
+            values
+        }
+        Err(e) => vec![
+            LuaValue::Boolean(false),
+            LuaValue::String(e.to_string().into_bytes()),
+        ],
+    })
+}
+
 pub(crate) fn print(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     for (i, value) in input.into_iter().enumerate() {
         if i != 0 {
@@ -230,9 +271,9 @@ pub(crate) fn require(vm: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<L
 
     let compiler = Compiler::new(vm, Some(path.to_owned()), name.to_string(), source.into());
     let chunk_index = compiler.compile(None)?;
-    let result = vm.run_chunk(chunk_index)?;
+    let mut result = vm.run_chunk(chunk_index)?;
 
-    Ok(vec![result, LuaValue::Nil])
+    Ok(vec![result.swap_remove(0), LuaValue::Nil])
 }
 
 pub(crate) fn select(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
