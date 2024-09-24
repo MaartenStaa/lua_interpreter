@@ -36,7 +36,7 @@ pub(crate) fn assert(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<Lua
         };
     }
 
-    Ok(vec![LuaValue::Nil])
+    Ok(input)
 }
 
 pub(crate) fn getmetatable(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
