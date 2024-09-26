@@ -250,7 +250,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                                 .push_instruction(Instruction::SetLocalAttr, Some(span));
                             self.chunk.push_instruction(local_index, None);
                             self.chunk
-                                .push_instruction(LuaVariableAttribute::Constant as u8, None);
+                                .push_instruction(LuaVariableAttribute::Constant, None);
                         }
                         Some(TokenTree {
                             node: LocalAttribute::Close,
@@ -260,7 +260,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                                 .push_instruction(Instruction::SetLocalAttr, Some(span));
                             self.chunk.push_instruction(local_index, None);
                             self.chunk
-                                .push_instruction(LuaVariableAttribute::ToBeClosed as u8, None);
+                                .push_instruction(LuaVariableAttribute::ToBeClosed, None);
                         }
                         None => {}
                     }
@@ -665,9 +665,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                         self.push_load_marker();
                         self.compile_expression_list(expressions);
                         self.chunk.push_instruction(Instruction::Align, None);
-                        // TODO: The manual makes reference to a possible fourth value, the closing
-                        // value, but we haven't implemented that yet.
-                        self.chunk.push_instruction(3, None);
+                        self.chunk.push_instruction(4, None);
 
                         // Save the result as locals: the iterator function, the state, the initial
                         // value for the control variable (which is the first name).
@@ -675,6 +673,11 @@ impl<'a, 'source> Compiler<'a, 'source> {
                         let state_local = self.add_local("#state".to_string());
                         // NOTE: The syntax ensures there is at least one name
                         let control_local = self.add_local(names[0].node.0.clone());
+                        let closing_local = self.add_local("#closing".to_string());
+                        self.chunk.push_instruction(Instruction::SetLocalAttr, None);
+                        self.chunk.push_instruction(closing_local, None);
+                        self.chunk
+                            .push_instruction(LuaVariableAttribute::ToBeClosed, None);
 
                         // Initialize the other variables to nil
                         for name in &names[1..] {

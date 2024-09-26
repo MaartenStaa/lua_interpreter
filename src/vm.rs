@@ -14,7 +14,10 @@ use crate::{
     macros::{assert_closure, assert_table},
     stdlib,
     token::Span,
-    value::{LuaClosure, LuaConst, LuaNumber, LuaObject, LuaTable, LuaValue, LuaVariableAttribute},
+    value::{
+        metatables::{CALL_KEY, CLOSE_KEY},
+        LuaClosure, LuaConst, LuaNumber, LuaObject, LuaTable, LuaValue, LuaVariableAttribute,
+    },
 };
 
 const MAX_STACK_SIZE: usize = 256;
@@ -400,7 +403,24 @@ impl<'source> VM<'source> {
                     1 + size_of::<ConstIndex>() + upval_bytes
                 }
                 Instruction::Pop => {
-                    self.pop();
+                    let attr = self.stack_attrs[self.stack_index - 1];
+                    let value = self.pop();
+                    // If this is a closing value, and it's not nil or false, close it
+                    let to_be_closed = LuaVariableAttribute::ToBeClosed as u8;
+                    if attr & to_be_closed == to_be_closed && value.as_boolean() {
+                        if let Some(__close) = value.get_metavalue(&CLOSE_KEY) {
+                            let close = assert_closure!(read, __close, close, close.clone());
+                            // TODO: Second value refers to "the error object that caused the exit
+                            // (if any)", but we don't have that yet. Sound like we'll need to
+                            // unwind the stack for that.
+                            let args = vec![value, LuaValue::Nil];
+                            self.run_closure(close, args)?;
+                        } else {
+                            return Err(miette!(
+                                "variable marked for closing has a non-closeable value"
+                            ));
+                        }
+                    }
                     1
                 }
                 Instruction::Discard => {
@@ -889,32 +909,17 @@ impl<'source> VM<'source> {
                         LuaValue::Object(o) => match &*o.read().unwrap() {
                             closure @ LuaObject::Closure(_) => Some(closure.clone()),
                             n @ LuaObject::NativeFunction(_, _) => Some(n.clone()),
-                            LuaObject::Table(table) => {
-                                let metatable = table.get(&"__metatable".into());
-                                let __call = match metatable {
-                                    Some(LuaValue::Object(o)) => match &*o.read().unwrap() {
-                                        LuaObject::Table(t) => {
-                                            is_metamethod = Some(function.clone());
-
-                                            t.get(&"__call".into()).cloned()
-                                        }
+                            other => other.get_metavalue(&CALL_KEY).and_then(|__call| {
+                                is_metamethod = Some(function.clone());
+                                match __call {
+                                    LuaValue::Object(__call) => match &*__call.read().unwrap() {
+                                        closure @ LuaObject::Closure(_) => Some(closure.clone()),
+                                        n @ LuaObject::NativeFunction(_, _) => Some(n.clone()),
                                         _ => None,
                                     },
                                     _ => None,
-                                };
-
-                                match __call {
-                                    Some(LuaValue::Object(o)) => match &*o.read().unwrap() {
-                                        closure @ LuaObject::Closure(_) => Some(closure.clone()),
-                                        n @ LuaObject::NativeFunction(_, _) => Some(n.clone()),
-                                        _ => {
-                                            return Err(miette!("attempt to call a non-function (metamethod '__call' is not a function)"));
-                                        }
-                                    },
-                                    _ => None,
                                 }
-                            }
-                            _ => None,
+                            }),
                         },
                         _ => None,
                     };

@@ -1,7 +1,7 @@
 macro_rules! assert_closure(
-    (read, $value:expr, $closure:ident, $tt:tt) => {
+    (read, $value:expr, $closure:ident, $tt:stmt) => {
         match $value {
-            LuaValue::Object(o) => match $ref*o.read().unwrap() {
+            LuaValue::Object(o) => match &*o.read().unwrap() {
                 LuaObject::Closure($closure) => {
                     $tt
                 },
@@ -10,7 +10,7 @@ macro_rules! assert_closure(
             _ => unreachable!("assert_object!() called on non-function value"),
         }
     };
-    (write, $value:expr, $closure:ident, $tt:tt) => {
+    (write, $value:expr, $closure:ident, $tt:stmt) => {
         match $value {
             LuaValue::Object(o) => match &mut*o.write().unwrap() {
                 LuaObject::Closure($closure) => {
@@ -21,7 +21,7 @@ macro_rules! assert_closure(
             _ => unreachable!("assert_object!() called on non-function value"),
         }
     };
-    ($value:expr, $closure:ident, $tt:tt) => {
+    ($value:expr, $closure:ident, $tt:stmt) => {
         assert_closure!(read, $value, $closure,  $tt)
     }
 );
@@ -36,7 +36,7 @@ macro_rules! assert_function_const(
 );
 
 macro_rules! assert_table(
-    ($value:expr, $table:ident, $tt:tt) => {
+    ($value:expr, $table:ident, $tt:stmt) => {
         match $value {
             LuaValue::Object(o) => match &*o.read().unwrap() {
                 LuaObject::Table($table) => {

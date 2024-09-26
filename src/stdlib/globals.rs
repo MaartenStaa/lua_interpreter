@@ -10,10 +10,7 @@ use std::{
 
 use crate::{
     compiler::Compiler,
-    value::{
-        metatables::{GLOBAL_BOOLEAN_METATABLE, GLOBAL_NUMBER_METATABLE, GLOBAL_STRING_METATABLE},
-        LuaClosure, LuaNumber, LuaObject, LuaValue,
-    },
+    value::{metatables::METATABLE_KEY, LuaClosure, LuaNumber, LuaObject, LuaValue},
     vm::VM,
 };
 
@@ -52,16 +49,7 @@ pub(crate) fn getmetatable(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<V
         }
     };
 
-    let metatable = match value {
-        LuaValue::Object(o) => match &*o.read().unwrap() {
-            LuaObject::Table(t) => t.get(&LuaValue::String(b"__metatable".to_vec())).cloned(),
-            _ => None,
-        },
-        LuaValue::String(_) => Some(GLOBAL_STRING_METATABLE.clone()),
-        LuaValue::Number(_) => Some(GLOBAL_NUMBER_METATABLE.clone()),
-        LuaValue::Boolean(_) => Some(GLOBAL_BOOLEAN_METATABLE.clone()),
-        _ => None,
-    };
+    let metatable = value.get_metatable();
 
     Ok(vec![metatable.unwrap_or(LuaValue::Nil)])
 }
@@ -316,10 +304,7 @@ pub(crate) fn setmetatable(_: &mut VM, mut input: Vec<LuaValue>) -> miette::Resu
         (Some(LuaValue::Object(target)), Some(LuaValue::Object(metatable))) => {
             match (&mut *target.write().unwrap(), &*metatable.read().unwrap()) {
                 (LuaObject::Table(table), LuaObject::Table(_)) => {
-                    table.insert(
-                        LuaValue::String(b"__metatable".to_vec()),
-                        LuaValue::Object(metatable.clone()),
-                    );
+                    table.insert(METATABLE_KEY.clone(), LuaValue::Object(metatable.clone()));
                 }
                 (LuaObject::Table(_), _) => {
                     return Err(miette!(
@@ -336,7 +321,7 @@ pub(crate) fn setmetatable(_: &mut VM, mut input: Vec<LuaValue>) -> miette::Resu
         (Some(LuaValue::Object(target)), Some(LuaValue::Nil)) => {
             match &mut *target.write().unwrap() {
                 LuaObject::Table(table) => {
-                    table.remove(&LuaValue::String(b"__metatable".to_vec()));
+                    table.remove(&METATABLE_KEY);
                 }
                 _ => {
                     return Err(miette!(

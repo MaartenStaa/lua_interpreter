@@ -7,6 +7,12 @@ pub enum LuaVariableAttribute {
     ToBeClosed = 2,
 }
 
+impl Into<u8> for LuaVariableAttribute {
+    fn into(self) -> u8 {
+        self as u8
+    }
+}
+
 impl TryFrom<u8> for LuaVariableAttribute {
     type Error = miette::Report;
 
