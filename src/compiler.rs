@@ -30,12 +30,19 @@ struct Upvalue {
 #[derive(Debug)]
 struct BlockOptions {
     is_loop: bool,
+    loop_scope_depth: u8,
     new_scope: bool,
 }
 
 #[derive(Debug, Default)]
+struct BreakJump {
+    addr: usize,
+    locals: usize,
+}
+
+#[derive(Debug, Default)]
 struct BlockResult {
-    breaks: Vec<usize>,
+    breaks: Vec<BreakJump>,
 }
 
 #[derive(Debug)]
@@ -123,6 +130,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
             ast,
             BlockOptions {
                 is_loop: false,
+                loop_scope_depth: 0,
                 new_scope: true,
             },
         );
@@ -352,6 +360,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                     block,
                     BlockOptions {
                         is_loop: options.is_loop,
+                        loop_scope_depth: options.loop_scope_depth,
                         new_scope: true,
                     },
                 ));
@@ -375,6 +384,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                         else_if.node.block,
                         BlockOptions {
                             is_loop: options.is_loop,
+                            loop_scope_depth: options.loop_scope_depth,
                             new_scope: true,
                         },
                     ));
@@ -391,6 +401,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                         else_block,
                         BlockOptions {
                             is_loop: options.is_loop,
+                            loop_scope_depth: options.loop_scope_depth,
                             new_scope: true,
                         },
                     ));
@@ -410,36 +421,80 @@ impl<'a, 'source> Compiler<'a, 'source> {
             }
             Statement::Break => {
                 // TODO: Issue an error if not in a loop
+                if !options.is_loop {
+                    todo!("break outside of loop")
+                }
 
+                // Check the number of locals defined so far.
+                let locals = self
+                    .frames
+                    .last()
+                    .expect("frames is not empty")
+                    .locals
+                    .iter()
+                    .filter(|local| local.depth >= options.loop_scope_depth)
+                    .count();
+
+                // Jump past the rest of the loop (sort of, we do some intermediate jumps to clean
+                // up all locals along the way, both in the scope of the loop itself, and any
+                // underlying ones such as if statements).
                 self.chunk.push_instruction(Instruction::Jmp, Some(span));
                 let break_jump = self.chunk.push_addr_placeholder();
 
                 BlockResult {
-                    breaks: vec![break_jump],
+                    breaks: vec![BreakJump {
+                        addr: break_jump,
+                        locals,
+                    }],
                 }
             }
             Statement::Repeat { block, condition } => {
                 // Jump into the block
                 self.chunk.push_instruction(Instruction::Jmp, None);
                 let inside_block_jump = self.chunk.push_addr_placeholder();
+
                 // Pop the condition value
                 let start_addr = self.chunk.get_current_addr();
                 self.chunk.push_instruction(Instruction::Pop, None);
                 self.chunk.patch_addr_placeholder(inside_block_jump);
+
+                let loop_scope_depth = self.begin_scope();
                 let block_result = self.compile_block(
                     block,
                     BlockOptions {
                         is_loop: true,
-                        new_scope: true,
+                        loop_scope_depth,
+                        new_scope: false,
                     },
                 );
+                self.end_scope();
+
                 self.compile_expression(condition, ExpressionResult::Single);
                 self.chunk.push_instruction(Instruction::JmpFalse, None);
                 self.chunk.push_addr(start_addr);
                 self.chunk.push_instruction(Instruction::Pop, None);
-                for break_jump in block_result.breaks {
-                    self.chunk.patch_addr_placeholder(break_jump);
+
+                let jmps: Vec<_> = block_result
+                    .breaks
+                    .into_iter()
+                    .map(|jump| {
+                        // Skip over the extra pops here for non-breaks
+                        self.chunk.push_instruction(Instruction::Jmp, None);
+                        let jmp = self.chunk.push_addr_placeholder();
+
+                        // Pop the locals defined in the loop before the break
+                        self.chunk.patch_addr_placeholder(jump.addr);
+                        for _ in 0..jump.locals {
+                            self.chunk.push_instruction(Instruction::Pop, None);
+                        }
+
+                        jmp
+                    })
+                    .collect();
+                for addr in jmps {
+                    self.chunk.patch_addr_placeholder(addr);
                 }
+
                 BlockResult::new()
             }
             Statement::While { condition, block } => {
@@ -447,23 +502,54 @@ impl<'a, 'source> Compiler<'a, 'source> {
                 self.compile_expression(condition, ExpressionResult::Single);
                 self.chunk.push_instruction(Instruction::JmpFalse, None);
                 let jmp_false_addr = self.chunk.push_addr_placeholder();
+                self.chunk.push_instruction(Instruction::Pop, None);
+
+                let loop_scope_depth = self.begin_scope();
                 let block_result = self.compile_block(
                     block,
                     BlockOptions {
                         is_loop: true,
-                        new_scope: true,
+                        loop_scope_depth,
+                        new_scope: false,
                     },
                 );
+                self.end_scope();
+
                 self.chunk.push_instruction(Instruction::Jmp, None);
                 self.chunk.push_addr(start_addr);
-                for break_jump in block_result.breaks {
-                    self.chunk.patch_addr_placeholder(break_jump);
+
+                let jmps: Vec<_> = block_result
+                    .breaks
+                    .into_iter()
+                    .map(|jump| {
+                        // Skip over the extra pops here for non-breaks
+                        self.chunk.push_instruction(Instruction::Jmp, None);
+                        let jmp = self.chunk.push_addr_placeholder();
+
+                        // Pop the locals defined in the loop before the break
+                        self.chunk.patch_addr_placeholder(jump.addr);
+                        for _ in 0..jump.locals {
+                            self.chunk.push_instruction(Instruction::Pop, None);
+                        }
+
+                        jmp
+                    })
+                    .collect();
+                for addr in jmps {
+                    self.chunk.patch_addr_placeholder(addr);
                 }
+
+                self.chunk.push_instruction(Instruction::Jmp, None);
+                let jmp_exit_loop_addr = self.chunk.push_addr_placeholder();
                 self.chunk.patch_addr_placeholder(jmp_false_addr);
+                // Pop the loop condition value
+                self.chunk.push_instruction(Instruction::Pop, None);
+                self.chunk.patch_addr_placeholder(jmp_exit_loop_addr);
+
                 BlockResult::new()
             }
             Statement::For { condition, block } => {
-                self.begin_scope();
+                let loop_scope_depth = self.begin_scope();
 
                 let (continue_addr, jmp_exit_loop_addr) = match condition.node {
                     ForCondition::NumericFor {
@@ -488,10 +574,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                             self.compile_expression(step, ExpressionResult::Single);
                         } else {
                             // TODO: Decrementing loops
-                            self.compile_load_literal(TokenTree {
-                                node: Literal::Number(Number::Integer(1)),
-                                span,
-                            });
+                            self.compile_load_literal(Literal::Number(Number::Integer(1)), None);
                         }
                         let step_local = self.add_local("#step".to_string());
 
@@ -500,10 +583,9 @@ impl<'a, 'source> Compiler<'a, 'source> {
 
                         // Evaluate the limit
                         self.chunk
-                            .push_instruction(Instruction::GetLocal, Some(span));
+                            .push_instruction(Instruction::GetLocal, Some(name.span));
                         self.chunk.push_instruction(identifier_local, None);
-                        self.chunk
-                            .push_instruction(Instruction::GetLocal, Some(span));
+                        self.chunk.push_instruction(Instruction::GetLocal, None);
                         self.chunk.push_instruction(limit_local, None);
                         // TODO: Handle decreasing loops
                         self.chunk.push_instruction(Instruction::Le, None);
@@ -520,14 +602,12 @@ impl<'a, 'source> Compiler<'a, 'source> {
                         // Compile the step
                         let step_addr = self.chunk.get_current_addr();
                         self.chunk
-                            .push_instruction(Instruction::GetLocal, Some(span));
+                            .push_instruction(Instruction::GetLocal, Some(name.span));
                         self.chunk.push_instruction(identifier_local, None);
-                        self.chunk
-                            .push_instruction(Instruction::GetLocal, Some(span));
+                        self.chunk.push_instruction(Instruction::GetLocal, None);
                         self.chunk.push_instruction(step_local, None);
                         self.chunk.push_instruction(Instruction::Add, None);
-                        self.chunk
-                            .push_instruction(Instruction::SetLocal, Some(span));
+                        self.chunk.push_instruction(Instruction::SetLocal, None);
                         self.chunk.push_instruction(identifier_local, None);
 
                         // After step, jump to the condition
@@ -615,7 +695,8 @@ impl<'a, 'source> Compiler<'a, 'source> {
                     block,
                     BlockOptions {
                         is_loop: true,
-                        new_scope: false,
+                        loop_scope_depth,
+                        new_scope: true,
                     },
                 );
 
@@ -627,18 +708,37 @@ impl<'a, 'source> Compiler<'a, 'source> {
                 self.chunk.patch_addr_placeholder(jmp_exit_loop_addr);
                 self.chunk.push_instruction(Instruction::Pop, None);
 
+                self.end_scope();
+
                 // Patch any break jumps
-                for break_jump in block_result.breaks {
-                    self.chunk.patch_addr_placeholder(break_jump);
+                let jmps: Vec<_> = block_result
+                    .breaks
+                    .into_iter()
+                    .map(|jump| {
+                        // Skip over the extra pops here for non-breaks
+                        self.chunk.push_instruction(Instruction::Jmp, None);
+                        let jmp = self.chunk.push_addr_placeholder();
+
+                        // Pop the locals defined in the loop before the break
+                        self.chunk.patch_addr_placeholder(jump.addr);
+                        for _ in 0..jump.locals {
+                            self.chunk.push_instruction(Instruction::Pop, None);
+                        }
+
+                        jmp
+                    })
+                    .collect();
+                for addr in jmps {
+                    self.chunk.patch_addr_placeholder(addr);
                 }
 
-                self.end_scope();
                 BlockResult::new()
             }
             Statement::Block(block) => self.compile_block(
                 block,
                 BlockOptions {
                     is_loop: options.is_loop,
+                    loop_scope_depth: options.loop_scope_depth,
                     new_scope: true,
                 },
             ),
@@ -755,6 +855,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
             function_def.node.block,
             BlockOptions {
                 is_loop: false,
+                loop_scope_depth: 0,
                 // Already started the function scope above
                 new_scope: false,
             },
@@ -815,7 +916,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
         let span = expression.span;
         match expression.node {
             Expression::Literal(literal) => {
-                self.compile_load_literal(literal);
+                self.compile_load_literal(literal.node, Some(literal.span));
             }
             Expression::BinaryOp { op, lhs, rhs } => match &op.node {
                 BinaryOperator::And => {
@@ -952,8 +1053,8 @@ impl<'a, 'source> Compiler<'a, 'source> {
         }
     }
 
-    fn compile_load_literal(&mut self, literal: TokenTree<Literal>) {
-        let const_index = match literal.node {
+    fn compile_load_literal(&mut self, literal: Literal, span: Option<Span>) {
+        let const_index = match literal {
             Literal::Nil => self.get_const_index(LuaConst::Nil),
             Literal::Boolean(b) => self.get_const_index(LuaConst::Boolean(b)),
             Literal::Number(Number::Float(f)) => {
@@ -965,8 +1066,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
             Literal::String(s) => self.get_const_index(LuaConst::String(s)),
         };
 
-        self.chunk
-            .push_instruction(Instruction::LoadConst, Some(literal.span));
+        self.chunk.push_instruction(Instruction::LoadConst, span);
         self.chunk.push_const_index(const_index);
     }
 
@@ -1063,9 +1163,10 @@ impl<'a, 'source> Compiler<'a, 'source> {
         self.frames.pop().expect("frame exists")
     }
 
-    fn begin_scope(&mut self) {
+    fn begin_scope(&mut self) -> u8 {
         let current_frame = self.frames.last_mut().unwrap();
         current_frame.scope_depth += 1;
+        current_frame.scope_depth
     }
 
     fn end_scope(&mut self) {
