@@ -76,9 +76,15 @@ fn main() {
         .unwrap_or_else(|| "<file>".to_string());
 
     let mut vm = VM::new();
-    if let Err(e) = Compiler::new(&mut vm, Some(filename), chunk_name, Cow::Borrowed(&source))
-        .compile(Some(ast))
+    if let Err(e) = Compiler::new(
+        &mut vm,
+        Some(filename),
+        chunk_name.clone(),
+        Cow::Borrowed(&source),
+    )
+    .compile(Some(ast))
     {
+        let e = e.with_source_code(NamedSource::new(chunk_name, source));
         eprintln!("compilation failed: {e:?}");
         std::process::exit(1);
     }
