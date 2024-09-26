@@ -26,7 +26,7 @@ impl<'path, 'source> Parser<'path, 'source> {
     pub fn parse(&mut self) -> miette::Result<TokenTree<Block>> {
         let result = self
             // NOTE: Don't start a new scope right away at the top-level
-            .parse_block_inner(false)
+            .parse_block_inner(0, false)
             .map_err(|r| self.with_source_code(r))?;
 
         // Ensure we've consumed all tokens
@@ -54,9 +54,13 @@ impl<'path, 'source> Parser<'path, 'source> {
         }
     }
 
-    fn parse_block(&mut self, inside_vararg_function: bool) -> miette::Result<TokenTree<Block>> {
+    fn parse_block(
+        &mut self,
+        start: usize,
+        inside_vararg_function: bool,
+    ) -> miette::Result<TokenTree<Block>> {
         self.begin_scope();
-        let block = self.parse_block_inner(inside_vararg_function)?;
+        let block = self.parse_block_inner(start, inside_vararg_function)?;
         self.end_scope();
 
         Ok(block)
@@ -64,10 +68,9 @@ impl<'path, 'source> Parser<'path, 'source> {
 
     fn parse_block_inner(
         &mut self,
+        start: usize,
         inside_vararg_function: bool,
     ) -> miette::Result<TokenTree<Block>> {
-        let start = self.lexer.position;
-
         let mut statements = Vec::new();
         while let Some(statement) = self.parse_statement(inside_vararg_function)? {
             statements.push(statement);
@@ -104,12 +107,18 @@ impl<'path, 'source> Parser<'path, 'source> {
             _ => None,
         };
 
+        let end = return_statement
+            .as_ref()
+            .and_then(|r| r.last().map(|e| e.span.end))
+            .or_else(|| statements.last().map(|s| s.span.end))
+            .unwrap_or(start);
+
         Ok(TokenTree {
             node: Block {
                 statements,
                 return_statement,
             },
-            span: Span::new(start, self.lexer.position),
+            span: Span::new(start, end),
         })
     }
 
@@ -151,8 +160,9 @@ impl<'path, 'source> Parser<'path, 'source> {
                     let span = *span;
                     self.lexer.next();
                     let name = self.parse_name().wrap_err("in label")?;
-                    self.lexer.expect(|k| k == &TokenKind::DoubleColon, "::")?;
-                    let end = self.lexer.position;
+                    let double_colon_token =
+                        self.lexer.expect(|k| k == &TokenKind::DoubleColon, "::")?;
+                    let end = double_colon_token.span.end;
                     self.declare_label(&name.node, Span::new(span.start, end))?;
                     Ok(Some(TokenTree::new(Statement::Label(name), span)))
                 }
@@ -170,15 +180,15 @@ impl<'path, 'source> Parser<'path, 'source> {
                     kind: TokenKind::Do,
                     span,
                 }) => {
-                    let Span { start, .. } = *span;
+                    let Span { start, end: do_end } = *span;
                     self.lexer.next();
                     let block = self
-                        .parse_block(inside_vararg_function)
+                        .parse_block(do_end, inside_vararg_function)
                         .wrap_err("in do statement")?;
-                    self.lexer.expect(|k| k == &TokenKind::End, "end")?;
+                    let end_token = self.lexer.expect(|k| k == &TokenKind::End, "end")?;
                     Ok(Some(TokenTree::new(
                         Statement::Block(block),
-                        Span::new(start, self.lexer.position),
+                        Span::new(start, end_token.span.end),
                     )))
                 }
                 Some(Token {
@@ -190,32 +200,36 @@ impl<'path, 'source> Parser<'path, 'source> {
                     let condition = self
                         .expect_expression(inside_vararg_function)
                         .wrap_err("in while statement")?;
-                    self.lexer.expect(|k| k == &TokenKind::Do, "do")?;
+                    let do_token = self.lexer.expect(|k| k == &TokenKind::Do, "do")?;
                     let block = self
-                        .parse_block(inside_vararg_function)
+                        .parse_block(do_token.span.start, inside_vararg_function)
                         .wrap_err("in while statement")?;
-                    self.lexer.expect(|k| k == &TokenKind::End, "end")?;
+                    let end_token = self.lexer.expect(|k| k == &TokenKind::End, "end")?;
                     Ok(Some(TokenTree::new(
                         Statement::While { condition, block },
-                        Span::new(start, self.lexer.position),
+                        Span::new(start, end_token.span.end),
                     )))
                 }
                 Some(Token {
                     kind: TokenKind::Repeat,
                     span,
                 }) => {
-                    let Span { start, .. } = *span;
+                    let Span {
+                        start,
+                        end: repeat_end,
+                    } = *span;
                     self.lexer.next();
                     let block = self
-                        .parse_block(inside_vararg_function)
+                        .parse_block(repeat_end, inside_vararg_function)
                         .wrap_err("in repeat statement")?;
                     self.lexer.expect(|k| k == &TokenKind::Until, "until")?;
                     let condition = self
                         .expect_expression(inside_vararg_function)
                         .wrap_err("in repeat statement")?;
+                    let end = condition.span.end;
                     Ok(Some(TokenTree::new(
                         Statement::Repeat { block, condition },
-                        Span::new(start, self.lexer.position),
+                        Span::new(start, end),
                     )))
                 }
                 Some(Token {
@@ -227,26 +241,28 @@ impl<'path, 'source> Parser<'path, 'source> {
                     let condition = self
                         .expect_expression(inside_vararg_function)
                         .wrap_err("in if statement")?;
-                    self.lexer.expect(|k| k == &TokenKind::Then, "then")?;
+                    let then_token = self.lexer.expect(|k| k == &TokenKind::Then, "then")?;
                     let block = self
-                        .parse_block(inside_vararg_function)
+                        .parse_block(then_token.span.end, inside_vararg_function)
                         .wrap_err("in if statement")?;
                     let mut else_ifs = Vec::new();
                     loop {
                         match self.lexer.peek()? {
                             Some(token) if token.kind == TokenKind::ElseIf => {
-                                let else_if_start = self.lexer.position;
+                                let else_if_start = token.span.start;
                                 self.lexer.next();
                                 let condition = self
                                     .expect_expression(inside_vararg_function)
                                     .wrap_err("in elseif")?;
-                                self.lexer.expect(|k| k == &TokenKind::Then, "then")?;
+                                let then_token =
+                                    self.lexer.expect(|k| k == &TokenKind::Then, "then")?;
                                 let block = self
-                                    .parse_block(inside_vararg_function)
+                                    .parse_block(then_token.span.end, inside_vararg_function)
                                     .wrap_err("in elseif")?;
+                                let block_span = block.span;
                                 else_ifs.push(TokenTree::new(
                                     ElseIf { condition, block },
-                                    Span::new(else_if_start, self.lexer.position),
+                                    Span::new(else_if_start, block_span.end),
                                 ));
                             }
                             _ => break,
@@ -254,16 +270,16 @@ impl<'path, 'source> Parser<'path, 'source> {
                     }
                     let else_block =
                         if self.lexer.peek()?.map(|t| &t.kind) == Some(&TokenKind::Else) {
-                            self.lexer.next();
+                            let else_token = self.lexer.next().expect("else").expect("else");
                             Some(
-                                self.parse_block(inside_vararg_function)
+                                self.parse_block(else_token.span.end, inside_vararg_function)
                                     .wrap_err("in else")?,
                             )
                         } else {
                             None
                         };
 
-                    self.lexer.expect(|k| k == &TokenKind::End, "end")?;
+                    let end_token = self.lexer.expect(|k| k == &TokenKind::End, "end")?;
 
                     Ok(Some(TokenTree::new(
                         Statement::If {
@@ -272,14 +288,14 @@ impl<'path, 'source> Parser<'path, 'source> {
                             else_ifs,
                             else_block,
                         },
-                        Span::new(start, self.lexer.position),
+                        Span::new(start, end_token.span.end),
                     )))
                 }
                 Some(Token {
                     kind: TokenKind::Function,
-                    ..
+                    span,
                 }) => {
-                    let start = self.lexer.position;
+                    let start = span.start;
                     self.lexer.next();
                     let (name, implicit_self_parameter) = {
                         let name = self.parse_name().wrap_err("in function declaration")?;
@@ -340,6 +356,7 @@ impl<'path, 'source> Parser<'path, 'source> {
 
                     let function_def = self
                         .parse_function_body(
+                            start,
                             implicit_self_parameter,
                             match &name.node {
                                 Variable::Name(name) => Some(name.node.0.clone()),
@@ -357,14 +374,14 @@ impl<'path, 'source> Parser<'path, 'source> {
                                 function_def_span,
                             )],
                         },
-                        Span::new(start, self.lexer.position),
+                        Span::new(start, function_def_span.end),
                     )))
                 }
                 Some(Token {
                     kind: TokenKind::For,
-                    ..
+                    span,
                 }) => {
-                    let start = self.lexer.position;
+                    let start = span.start;
                     self.lexer.next();
                     self.parse_for_statement(start, inside_vararg_function)
                         .wrap_err("in for statement")
@@ -416,7 +433,7 @@ impl<'path, 'source> Parser<'path, 'source> {
                 .parse_name()
                 .wrap_err("in local function declaration")?;
             let function_def = self
-                .parse_function_body(None, Some(name.node.0.clone()))
+                .parse_function_body(start, None, Some(name.node.0.clone()))
                 .wrap_err_with(|| format!("in local {} function declaration", name.node.0))?;
 
             let name_span = name.span;
@@ -435,7 +452,7 @@ impl<'path, 'source> Parser<'path, 'source> {
                         function_def_span,
                     )],
                 ),
-                Span::new(start, self.lexer.position),
+                Span::new(start, function_def_span.end),
             ))
         } else {
             let mut attributed_names = Vec::new();
@@ -530,7 +547,7 @@ impl<'path, 'source> Parser<'path, 'source> {
                 vec![]
             };
 
-            let attributed_names = attributed_names
+            let attributed_names: Vec<_> = attributed_names
                 .into_iter()
                 .map(|n| {
                     let start = n.name.span.start;
@@ -545,9 +562,12 @@ impl<'path, 'source> Parser<'path, 'source> {
                 })
                 .collect();
 
+            let end_position = expressions
+                .last()
+                .map_or(attributed_names.last().unwrap().span.end, |e| e.span.end);
             Ok(TokenTree::new(
                 Statement::LocalDeclaraction(attributed_names, expressions),
-                Span::new(start, self.lexer.position),
+                Span::new(start, end_position),
             ))
         }
     }
@@ -581,6 +601,7 @@ impl<'path, 'source> Parser<'path, 'source> {
                     }
                     _ => None,
                 };
+                let end = step.as_ref().map_or(limit.span.end, |s| s.span.end);
 
                 TokenTree::new(
                     ForCondition::NumericFor {
@@ -589,7 +610,7 @@ impl<'path, 'source> Parser<'path, 'source> {
                         limit,
                         step,
                     },
-                    Span::new(start_position, self.lexer.position),
+                    Span::new(start_position, end),
                 )
             }
             Some(Token {
@@ -610,7 +631,7 @@ impl<'path, 'source> Parser<'path, 'source> {
 
                 self.lexer.expect(|k| k == &TokenKind::In, "in")?;
                 let mut expressions = Vec::new();
-                loop {
+                let end_position = loop {
                     expressions.push(
                         self.expect_expression(inside_vararg_function)
                             .wrap_err("iterator expressions in for statement")?,
@@ -621,13 +642,13 @@ impl<'path, 'source> Parser<'path, 'source> {
                             self.lexer.next();
                             continue;
                         }
-                        _ => break,
+                        _ => break expressions.last().unwrap().span.end,
                     }
-                }
+                };
 
                 TokenTree::new(
                     ForCondition::GenericFor { names, expressions },
-                    Span::new(start_position, self.lexer.position),
+                    Span::new(start_position, end_position),
                 )
             }
             Some(token) => {
@@ -647,17 +668,17 @@ impl<'path, 'source> Parser<'path, 'source> {
             }
         };
 
-        self.lexer.expect(|k| k == &TokenKind::Do, "do")?;
+        let do_token = self.lexer.expect(|k| k == &TokenKind::Do, "do")?;
         let block = self
-            .parse_block_inner(inside_vararg_function)
+            .parse_block_inner(do_token.span.end, inside_vararg_function)
             .wrap_err("in block of for statement")?;
-        self.lexer.expect(|k| k == &TokenKind::End, "end")?;
+        let end_token = self.lexer.expect(|k| k == &TokenKind::End, "end")?;
 
         self.end_scope();
 
         Ok(TokenTree::new(
             Statement::For { condition, block },
-            Span::new(start_position, self.lexer.position),
+            Span::new(start_position, end_token.span.end),
         ))
     }
 
@@ -717,13 +738,9 @@ impl<'path, 'source> Parser<'path, 'source> {
                             node: PrefixExpression::Variable(v),
                             ..
                         } => v,
-                        _ => {
+                        TokenTree { span, .. } => {
                             return Err(miette!(
-                                labels = vec![LabeledSpan::at(
-                                    // TODO: This location is wrong
-                                    self.lexer.position..self.lexer.position,
-                                    "expected variable"
-                                )],
+                                labels = vec![span.labeled("expected variable")],
                                 "unexpected token"
                             ));
                         }
@@ -732,7 +749,7 @@ impl<'path, 'source> Parser<'path, 'source> {
 
                 self.lexer.expect(|k| k == &TokenKind::Equals, "=")?;
                 let mut explist = Vec::new();
-                loop {
+                let end_position = loop {
                     explist.push(
                         self.expect_expression(inside_vararg_function)
                             .wrap_err("in varlist")?,
@@ -746,13 +763,13 @@ impl<'path, 'source> Parser<'path, 'source> {
                             self.lexer.next();
                             continue;
                         }
-                        _ => break,
+                        _ => break explist.last().unwrap().span.end,
                     }
-                }
+                };
 
                 return Ok(TokenTree::new(
                     Statement::Assignment { varlist, explist },
-                    Span::new(start, self.lexer.position),
+                    Span::new(start, end_position),
                 ));
             }
             _ => {}
@@ -763,11 +780,8 @@ impl<'path, 'source> Parser<'path, 'source> {
                 node: PrefixExpression::FunctionCall(f),
                 span,
             } => Ok(TokenTree::new(Statement::FunctionCall(f), span)),
-            _ => Err(miette!(
-                labels = vec![LabeledSpan::at(
-                    self.lexer.position..self.lexer.position,
-                    "expected function call or variable assignment"
-                )],
+            TokenTree { span, .. } => Err(miette!(
+                labels = vec![span.labeled("expected function call or variable assignment")],
                 "unexpected token"
             )),
         }
@@ -780,14 +794,13 @@ impl<'path, 'source> Parser<'path, 'source> {
         let mut prefix = match self.lexer.next().transpose()? {
             Some(Token {
                 kind: TokenKind::OpenParen,
-                ..
+                span,
             }) => {
-                let start = self.lexer.position;
                 let expression = self.expect_expression(inside_vararg_function)?;
-                self.lexer.expect(|k| k == &TokenKind::CloseParen, ")")?;
+                let closing_paren = self.lexer.expect(|k| k == &TokenKind::CloseParen, ")")?;
                 TokenTree::new(
                     PrefixExpression::Parenthesized(Box::new(expression)),
-                    Span::new(start, self.lexer.position),
+                    Span::new(span.start, closing_paren.span.end),
                 )
             }
             Some(Token {
@@ -831,8 +844,9 @@ impl<'path, 'source> Parser<'path, 'source> {
                 }) => {
                     self.lexer.next();
                     let expression = self.expect_expression(inside_vararg_function)?;
-                    self.lexer.expect(|k| k == &TokenKind::CloseBracket, "]")?;
-                    let span = Span::new(prefix.span.start, self.lexer.position);
+                    let closing_bracket =
+                        self.lexer.expect(|k| k == &TokenKind::CloseBracket, "]")?;
+                    let span = Span::new(prefix.span.start, closing_bracket.span.end);
                     prefix = TokenTree::new(
                         PrefixExpression::Variable(TokenTree::new(
                             Variable::Indexed(Box::new(prefix), Box::new(expression)),
@@ -865,7 +879,7 @@ impl<'path, 'source> Parser<'path, 'source> {
                     let args = self
                         .parse_args(inside_vararg_function)
                         .wrap_err("in prefix expression")?;
-                    let span = Span::new(prefix.span.start, self.lexer.position);
+                    let span = Span::new(prefix.span.start, args.span.end);
                     prefix = TokenTree::new(
                         PrefixExpression::FunctionCall(TokenTree::new(
                             FunctionCall {
@@ -880,13 +894,13 @@ impl<'path, 'source> Parser<'path, 'source> {
                     );
                 }
                 Some(Token {
-                    kind: TokenKind::OpenParen | TokenKind::String(_),
+                    kind: TokenKind::OpenParen | TokenKind::String(_) | TokenKind::OpenBrace,
                     ..
                 }) => {
                     let args = self
                         .parse_args(inside_vararg_function)
                         .wrap_err("in prefix expression")?;
-                    let span = Span::new(prefix.span.start, self.lexer.position);
+                    let span = Span::new(prefix.span.start, args.span.end);
                     prefix = TokenTree::new(
                         PrefixExpression::FunctionCall(TokenTree::new(
                             FunctionCall {
@@ -894,31 +908,6 @@ impl<'path, 'source> Parser<'path, 'source> {
                                 as_method: false,
                                 name: None,
                                 args,
-                            },
-                            span,
-                        )),
-                        span,
-                    );
-                }
-                Some(Token {
-                    kind: TokenKind::OpenBrace,
-                    ..
-                }) => {
-                    let table = self
-                        .parse_table_constructor(inside_vararg_function)
-                        .wrap_err("in prefix expression")?;
-                    let table_span = table.span;
-                    let span = Span::new(prefix.span.start, table_span.end);
-                    prefix = TokenTree::new(
-                        PrefixExpression::FunctionCall(TokenTree::new(
-                            FunctionCall {
-                                function: Box::new(prefix),
-                                as_method: false,
-                                name: None,
-                                args: vec![TokenTree::new(
-                                    Expression::TableConstructor(table),
-                                    table_span,
-                                )],
                             },
                             span,
                         )),
@@ -935,7 +924,7 @@ impl<'path, 'source> Parser<'path, 'source> {
     fn parse_args(
         &mut self,
         inside_vararg_function: bool,
-    ) -> miette::Result<Vec<TokenTree<Expression>>> {
+    ) -> miette::Result<TokenTree<Vec<TokenTree<Expression>>>> {
         let mut args = Vec::new();
         if matches!(
             self.lexer.peek()?.map(|t| &t.kind),
@@ -955,14 +944,37 @@ impl<'path, 'source> Parser<'path, 'source> {
                 Expression::Literal(TokenTree::new(Literal::String(string), span)),
                 span,
             ));
-            return Ok(args);
+            return Ok(TokenTree::new(args, span));
         }
 
-        self.lexer.expect(|k| k == &TokenKind::OpenParen, "(")?;
-        loop {
+        if self.lexer.peek()?.map(|t| &t.kind) == Some(&TokenKind::OpenBrace) {
+            let table = self
+                .parse_table_constructor(inside_vararg_function)
+                .wrap_err("in function call args")?;
+            let table_span = table.span;
+
+            return Ok(TokenTree::new(
+                vec![TokenTree::new(
+                    Expression::TableConstructor(table),
+                    table_span,
+                )],
+                table_span,
+            ));
+        }
+
+        let start = self
+            .lexer
+            .expect(|k| k == &TokenKind::OpenParen, "(")?
+            .span
+            .start;
+        let end = loop {
             if self.lexer.peek()?.map(|t| &t.kind) == Some(&TokenKind::CloseParen) {
-                self.lexer.next();
-                break;
+                let close_paren = self
+                    .lexer
+                    .next()
+                    .expect("close paren")
+                    .expect("close paren");
+                break close_paren.span.end;
             }
 
             if !args.is_empty() {
@@ -973,9 +985,9 @@ impl<'path, 'source> Parser<'path, 'source> {
                 .expect_expression(inside_vararg_function)
                 .wrap_err("in function call args")?;
             args.push(expression);
-        }
+        };
 
-        Ok(args)
+        Ok(TokenTree::new(args, Span::new(start, end)))
     }
 
     fn parse_table_constructor(
@@ -994,10 +1006,11 @@ impl<'path, 'source> Parser<'path, 'source> {
                     }
                     Some(Token {
                         kind: TokenKind::CloseBrace,
-                        ..
+                        span,
                     }) => {
+                        let span = *span;
                         self.lexer.next();
-                        break;
+                        break span.end;
                     }
                     Some(t) => {
                         return Err(miette!(
@@ -1021,24 +1034,27 @@ impl<'path, 'source> Parser<'path, 'source> {
             };
         }
 
-        let start = self.lexer.position;
-
-        self.lexer.expect(|k| k == &TokenKind::OpenBrace, "{")?;
+        let open_brace_start = self
+            .lexer
+            .expect(|k| k == &TokenKind::OpenBrace, "{")?
+            .span
+            .start;
         let mut fields = vec![];
-        loop {
+        let closing_brace_end = loop {
             match self.lexer.peek()? {
                 Some(Token {
                     kind: TokenKind::CloseBrace,
-                    ..
+                    span,
                 }) => {
+                    let span = *span;
                     self.lexer.next();
-                    break;
+                    break span.end;
                 }
                 Some(Token {
                     kind: TokenKind::OpenBracket,
-                    ..
+                    span,
                 }) => {
-                    let field_start = self.lexer.position;
+                    let field_start = span.start;
                     self.lexer.next();
                     let key = self
                         .expect_expression(inside_vararg_function)
@@ -1048,9 +1064,10 @@ impl<'path, 'source> Parser<'path, 'source> {
                     let value = self
                         .expect_expression(inside_vararg_function)
                         .wrap_err("field value in table constructor")?;
+                    let field_end = value.span.end;
                     fields.push(TokenTree::new(
                         Field::Indexed(key, value),
-                        Span::new(field_start, self.lexer.position),
+                        Span::new(field_start, field_end),
                     ));
 
                     expect_end_of_field!();
@@ -1085,10 +1102,7 @@ impl<'path, 'source> Parser<'path, 'source> {
                         Some(expression) => (None, expression),
                         None => {
                             return Err(miette!(
-                                labels = vec![LabeledSpan::at(
-                                    self.lexer.position..self.lexer.position,
-                                    "expected table field"
-                                )],
+                                labels = vec![self.lexer.eof_label("expected table field")],
                                 "unexpected token"
                             ))
                         }
@@ -1138,11 +1152,11 @@ impl<'path, 'source> Parser<'path, 'source> {
                     ))
                 }
             }
-        }
+        };
 
         Ok(TokenTree {
             node: TableConstructor { fields },
-            span: Span::new(start, self.lexer.position),
+            span: Span::new(open_brace_start, closing_brace_end),
         })
     }
 
@@ -1161,10 +1175,7 @@ impl<'path, 'source> Parser<'path, 'source> {
         match self.parse_expression_within(min_bp, inside_vararg_function)? {
             Some(expression) => Ok(expression),
             None => Err(miette!(
-                labels = vec![LabeledSpan::at(
-                    self.lexer.position..self.lexer.position,
-                    "here"
-                )],
+                labels = vec![self.lexer.eof_label("here")],
                 "expected an expression"
             )),
         }
@@ -1185,15 +1196,16 @@ impl<'path, 'source> Parser<'path, 'source> {
         let mut lhs = match self.lexer.peek()? {
             Some(Token {
                 kind: TokenKind::Identifier(_) | TokenKind::OpenParen,
-                ..
+                span,
             }) => {
-                let start = self.lexer.position;
+                let start = span.start;
+                let prefix_expression = self
+                    .parse_prefix_expression(inside_vararg_function)
+                    .wrap_err("in expression")?;
+                let end = prefix_expression.span.end;
                 TokenTree::new(
-                    Expression::PrefixExpression(
-                        self.parse_prefix_expression(inside_vararg_function)
-                            .wrap_err("in expression")?,
-                    ),
-                    Span::new(start, self.lexer.position),
+                    Expression::PrefixExpression(prefix_expression),
+                    Span::new(start, end),
                 )
             }
             Some(Token {
@@ -1306,16 +1318,16 @@ impl<'path, 'source> Parser<'path, 'source> {
                 span,
             }) => {
                 let span = *span;
-                let start = self.lexer.position;
                 self.lexer.next();
                 let ((), r_bp) = prefix_binding_power(&TokenKind::Not);
                 let rhs = self.expect_expression_within(r_bp, inside_vararg_function)?;
+                let end = rhs.span.end;
                 TokenTree::new(
                     Expression::UnaryOp {
                         op: TokenTree::new(UnaryOperator::Not, span),
                         rhs: Box::new(rhs),
                     },
-                    Span::new(start, self.lexer.position),
+                    Span::new(span.start, end),
                 )
             }
             Some(Token {
@@ -1323,16 +1335,16 @@ impl<'path, 'source> Parser<'path, 'source> {
                 span,
             }) => {
                 let span = *span;
-                let start = self.lexer.position;
                 self.lexer.next();
                 let ((), r_bp) = prefix_binding_power(&TokenKind::Hash);
                 let rhs = self.expect_expression_within(r_bp, inside_vararg_function)?;
+                let end = rhs.span.end;
                 TokenTree::new(
                     Expression::UnaryOp {
                         op: TokenTree::new(UnaryOperator::Length, span),
                         rhs: Box::new(rhs),
                     },
-                    Span::new(start, self.lexer.position),
+                    Span::new(span.start, end),
                 )
             }
             Some(Token {
@@ -1340,28 +1352,28 @@ impl<'path, 'source> Parser<'path, 'source> {
                 span,
             }) => {
                 let span = *span;
-                let start = self.lexer.position;
                 self.lexer.next();
                 let ((), r_bp) = prefix_binding_power(&TokenKind::Tilde);
                 let rhs = self.expect_expression_within(r_bp, inside_vararg_function)?;
+                let end = rhs.span.end;
                 TokenTree::new(
                     Expression::UnaryOp {
                         op: TokenTree::new(UnaryOperator::BitwiseNot, span),
                         rhs: Box::new(rhs),
                     },
-                    Span::new(start, self.lexer.position),
+                    Span::new(span.start, end),
                 )
             }
             Some(Token {
                 kind: TokenKind::Function,
-                ..
+                span: Span { start, .. },
             }) => {
-                let start = self.lexer.position;
+                let start = *start;
                 self.lexer.next();
-                TokenTree::new(
-                    Expression::FunctionDef(self.parse_function_body(None, None)?),
-                    Span::new(start, self.lexer.position),
-                )
+                let function_def = self.parse_function_body(start, None, None)?;
+                let end = function_def.span.end;
+
+                TokenTree::new(Expression::FunctionDef(function_def), Span::new(start, end))
             }
             Some(Token {
                 kind: TokenKind::OpenBrace,
@@ -1402,7 +1414,7 @@ impl<'path, 'source> Parser<'path, 'source> {
                         .parse_args(inside_vararg_function)
                         .wrap_err("in expression method call")?;
 
-                    let span = Span::new(prefix.span.start, self.lexer.position);
+                    let span = Span::new(prefix.span.start, args.span.end);
 
                     lhs = TokenTree::new(
                         Expression::PrefixExpression(TokenTree::new(
@@ -1450,19 +1462,19 @@ impl<'path, 'source> Parser<'path, 'source> {
 
     fn parse_function_body(
         &mut self,
+        start_position: usize,
         implicit_self_parameter: Option<Name>,
         name: Option<String>,
     ) -> miette::Result<TokenTree<FunctionDef>> {
         self.begin_scope();
 
-        let start = self.lexer.position;
+        let open_paren = self.lexer.expect(|k| k == &TokenKind::OpenParen, "(")?;
 
-        self.lexer.expect(|k| k == &TokenKind::OpenParen, "(")?;
         let mut parameters = Vec::new();
         if let Some(name) = implicit_self_parameter {
             parameters.push(TokenTree::new(
                 name,
-                Span::new(self.lexer.position, self.lexer.position),
+                Span::new(open_paren.span.end, open_paren.span.end),
             ));
         }
         let mut has_varargs = false;
@@ -1517,11 +1529,11 @@ impl<'path, 'source> Parser<'path, 'source> {
             }
         }
 
-        self.lexer.expect(|k| k == &TokenKind::CloseParen, ")")?;
+        let close_paren = self.lexer.expect(|k| k == &TokenKind::CloseParen, ")")?;
         let block = self
-            .parse_block_inner(has_varargs)
+            .parse_block_inner(close_paren.span.end, has_varargs)
             .wrap_err("in function definition")?;
-        self.lexer.expect(|k| k == &TokenKind::End, "end")?;
+        let end_token = self.lexer.expect(|k| k == &TokenKind::End, "end")?;
 
         self.end_scope();
 
@@ -1532,7 +1544,7 @@ impl<'path, 'source> Parser<'path, 'source> {
                 has_varargs,
                 block,
             },
-            Span::new(start, self.lexer.position),
+            Span::new(start_position, end_token.span.end),
         ))
     }
 

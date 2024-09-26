@@ -124,7 +124,7 @@ pub struct FunctionCall {
     pub function: Box<TokenTree<PrefixExpression>>,
     pub as_method: bool,
     pub name: Option<TokenTree<Name>>,
-    pub args: Vec<TokenTree<Expression>>,
+    pub args: TokenTree<Vec<TokenTree<Expression>>>,
 }
 
 #[derive(Debug, PartialEq, Clone)]

@@ -7,7 +7,7 @@ pub struct Lexer<'path, 'source> {
     filename: Option<&'path Path>,
     source: &'source str,
     rest: &'source str,
-    pub position: usize,
+    position: usize,
     peeked: Option<Token<'source>>,
 }
 
@@ -20,6 +20,11 @@ impl<'path, 'source> Lexer<'path, 'source> {
             position: 0,
             peeked: None,
         }
+    }
+
+    pub fn eof_label(&self, message: &str) -> LabeledSpan {
+        let source_len = self.source.len();
+        LabeledSpan::at(source_len..source_len, message)
     }
 
     pub fn with_source_code(&self, report: miette::Report) -> miette::Report {

@@ -199,8 +199,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                 // Marker for the return values
                 self.push_load_marker();
                 self.compile_function_call(function_call, ExpressionResult::Multiple);
-                self.chunk
-                    .push_instruction(Instruction::Discard, Some(span));
+                self.chunk.push_instruction(Instruction::Discard, None);
                 BlockResult::new()
             }
             Statement::LocalDeclaraction(names, expressions) => {
@@ -662,7 +661,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
             // It's unfortunate to duplicate the argument loop here with the else below, but this
             // avoids the borrow checker complaining, and having to `clone()` the function call
             // node above.
-            self.compile_expression_list(function_call.node.args);
+            self.compile_expression_list(function_call.node.args.node);
 
             let method_name = function_call.node.name.expect("method call without name");
 
@@ -680,7 +679,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
 
             self.chunk.push_instruction(Instruction::GetTable, None);
         } else {
-            self.compile_expression_list(function_call.node.args);
+            self.compile_expression_list(function_call.node.args.node);
 
             match *function_call.node.function {
                 TokenTree {
@@ -930,8 +929,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                     if is_last_field {
                         // Can allow multiple values for the last field
                         let marker_const_index = self.get_const_index(LuaConst::Marker);
-                        self.chunk
-                            .push_instruction(Instruction::LoadConst, Some(field.span));
+                        self.chunk.push_instruction(Instruction::LoadConst, None);
                         self.chunk.push_const_index(marker_const_index);
                         self.compile_expression(value, ExpressionResult::Multiple);
                         self.chunk
@@ -941,8 +939,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
 
                     let index_const =
                         self.get_const_index(LuaConst::Number(LuaNumber::Integer(index)));
-                    self.chunk
-                        .push_instruction(Instruction::LoadConst, Some(field.span));
+                    self.chunk.push_instruction(Instruction::LoadConst, None);
                     self.chunk.push_const_index(index_const);
                     self.compile_expression(value, ExpressionResult::Single);
 

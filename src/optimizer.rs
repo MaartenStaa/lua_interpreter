@@ -107,17 +107,22 @@ fn optimize_for_condition(condition: TokenTree<ForCondition>) -> TokenTree<ForCo
 
 fn optimize_function_call(function_call: TokenTree<FunctionCall>) -> TokenTree<FunctionCall> {
     let span = function_call.span;
+    let args_span = function_call.node.args.span;
     TokenTree::new(
         FunctionCall {
             function: Box::new(optimize_prefix_expression(*function_call.node.function)),
             as_method: function_call.node.as_method,
             name: function_call.node.name,
-            args: function_call
-                .node
-                .args
-                .into_iter()
-                .map(optimize_expression)
-                .collect(),
+            args: TokenTree::new(
+                function_call
+                    .node
+                    .args
+                    .node
+                    .into_iter()
+                    .map(optimize_expression)
+                    .collect(),
+                args_span,
+            ),
         },
         span,
     )
