@@ -1,6 +1,7 @@
 pub mod ast;
 pub mod compiler;
 pub mod debug;
+pub(crate) mod error;
 mod helpers;
 mod instruction;
 pub mod lexer;

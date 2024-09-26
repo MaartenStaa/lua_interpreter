@@ -71,6 +71,9 @@ pub enum Instruction {
     Jmp,
     JmpTrue,
     JmpFalse,
+
+    // Other
+    Error,
 }
 
 impl From<Instruction> for u8 {

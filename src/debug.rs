@@ -1,6 +1,7 @@
 use std::mem::size_of;
 
 use crate::{
+    error::RuntimeError,
     instruction::Instruction,
     macros::assert_function_const,
     value::{LuaConst, LuaFunctionDefinition, LuaVariableAttribute},
@@ -334,6 +335,15 @@ pub fn print_instructions(vm: &VM) {
                 instr!("JMP_FALSE");
                 println!("{offset:04}");
                 1 + size_of::<JumpAddr>()
+            }
+
+            // Other
+            Instruction::Error => {
+                let error_code = instructions[instruction_pointer + 1];
+                let error = RuntimeError::try_from(error_code).expect("valid error code");
+                instr!("ERROR");
+                println!("{:?}", error);
+                2
             }
         };
         instruction_pointer += instruction_increment;

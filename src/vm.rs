@@ -6,9 +6,10 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use miette::{miette, NamedSource};
+use miette::{miette, IntoDiagnostic, NamedSource};
 
 use crate::{
+    error::RuntimeError,
     instruction::Instruction,
     macros::{assert_closure, assert_table},
     stdlib,
@@ -334,6 +335,14 @@ impl<'source> VM<'source> {
             let chunk_index = self.call_stack[self.call_stack_index - 1].chunk;
             let instruction = self.chunks[chunk_index].instructions[self.chunks[chunk_index].ip];
 
+            macro_rules! instr_param {
+                ($offset:expr) => {
+                    self.chunks[chunk_index].instructions[self.chunks[chunk_index].ip + $offset]
+                };
+                () => {
+                    instr_param!(1)
+                };
+            }
             macro_rules! const_index {
                 () => {{
                     let bytes = &self.chunks[chunk_index].instructions[self.chunks[chunk_index].ip
@@ -403,8 +412,7 @@ impl<'source> VM<'source> {
                     1
                 }
                 Instruction::Swap => {
-                    let swap_offset =
-                        self.chunks[chunk_index].instructions[self.chunks[chunk_index].ip + 1];
+                    let swap_offset = instr_param!();
                     let a = self.stack_index - 1;
                     let b = self.stack_index - 1 - swap_offset as usize;
                     self.stack.swap(a, b);
@@ -412,8 +420,7 @@ impl<'source> VM<'source> {
                 }
                 instr @ Instruction::Align | instr @ Instruction::AlignVararg => {
                     let collect_varargs = matches!(instr, Instruction::AlignVararg);
-                    let align_amount =
-                        self.chunks[chunk_index].instructions[self.chunks[chunk_index].ip + 1];
+                    let align_amount = instr_param!();
 
                     assert!(self.stack_index > 0, "cannot align an empty stack");
 
@@ -469,8 +476,7 @@ impl<'source> VM<'source> {
                     2
                 }
                 Instruction::DupFromMarker => {
-                    let offset =
-                        self.chunks[chunk_index].instructions[self.chunks[chunk_index].ip + 1];
+                    let offset = instr_param!();
                     assert!(offset > 0, "dup_from_marker offset must be greater than 0");
 
                     let marker_index = self.stack[..self.stack_index]
@@ -677,8 +683,7 @@ impl<'source> VM<'source> {
                     1 + size_of::<ConstIndex>()
                 }
                 Instruction::SetLocal => {
-                    let local_index =
-                        self.chunks[chunk_index].instructions[self.chunks[chunk_index].ip + 1];
+                    let local_index = instr_param!();
                     let frame_pointer = self.call_stack[self.call_stack_index - 1].frame_pointer;
                     let value = self.pop();
 
@@ -699,8 +704,7 @@ impl<'source> VM<'source> {
                     2
                 }
                 Instruction::GetLocal => {
-                    let local_index =
-                        self.chunks[chunk_index].instructions[self.chunks[chunk_index].ip + 1];
+                    let local_index = instr_param!();
                     let current_frame = &self.call_stack[self.call_stack_index - 1];
 
                     let value = &self.stack[current_frame.frame_pointer + local_index as usize];
@@ -713,10 +717,8 @@ impl<'source> VM<'source> {
                     2
                 }
                 Instruction::SetLocalAttr => {
-                    let local_index =
-                        self.chunks[chunk_index].instructions[self.chunks[chunk_index].ip + 1];
-                    let attr_value =
-                        self.chunks[chunk_index].instructions[self.chunks[chunk_index].ip + 2];
+                    let local_index = instr_param!(1);
+                    let attr_value = instr_param!(2);
 
                     self.stack_attrs[self.call_stack[self.call_stack_index - 1].frame_pointer
                         + local_index as usize] |= attr_value;
@@ -724,8 +726,7 @@ impl<'source> VM<'source> {
                     3
                 }
                 Instruction::SetUpval => {
-                    let upval_index =
-                        self.chunks[chunk_index].instructions[self.chunks[chunk_index].ip + 1];
+                    let upval_index = instr_param!();
                     let value = self.pop();
                     let mut upval = self.call_stack[self.call_stack_index - 1].upvalues
                         [upval_index as usize]
@@ -738,8 +739,7 @@ impl<'source> VM<'source> {
                     2
                 }
                 Instruction::GetUpval => {
-                    let upval_index =
-                        self.chunks[chunk_index].instructions[self.chunks[chunk_index].ip + 1];
+                    let upval_index = instr_param!();
                     let value = self.call_stack[self.call_stack_index - 1].upvalues
                         [upval_index as usize]
                         .as_ref()
@@ -752,10 +752,8 @@ impl<'source> VM<'source> {
                     2
                 }
                 Instruction::LoadVararg => {
-                    let local_index =
-                        self.chunks[chunk_index].instructions[self.chunks[chunk_index].ip + 1];
-                    let is_single_vararg =
-                        self.chunks[chunk_index].instructions[self.chunks[chunk_index].ip + 2] == 1;
+                    let local_index = instr_param!(1);
+                    let is_single_vararg = instr_param!(2) == 1;
                     let frame_pointer = self.call_stack[self.call_stack_index - 1].frame_pointer;
                     let vararg = self.stack[frame_pointer + local_index as usize].clone();
                     match vararg {
@@ -939,8 +937,7 @@ impl<'source> VM<'source> {
                         self.pop();
                     }
 
-                    let is_single_return =
-                        self.chunks[chunk_index].instructions[self.chunks[chunk_index].ip + 1] == 1;
+                    let is_single_return = instr_param!() == 1;
 
                     match function {
                         Some(LuaObject::Closure(closure)) => {
@@ -964,7 +961,7 @@ impl<'source> VM<'source> {
                                 0,
                                 false,
                                 self.stack_index - num_args,
-                                self.chunks[chunk_index].ip + 1,
+                                self.chunks[chunk_index].ip + 2,
                                 None,
                                 !is_single_return,
                             );
@@ -1052,6 +1049,12 @@ impl<'source> VM<'source> {
                         continue;
                     }
                     1 + size_of::<JumpAddr>()
+                }
+
+                // Other
+                Instruction::Error => {
+                    let error_type = instr_param!();
+                    return Err(RuntimeError::try_from(error_type)?).into_diagnostic();
                 }
             };
             self.chunks[chunk_index].ip += instruction_increment;

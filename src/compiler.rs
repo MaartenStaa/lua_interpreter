@@ -6,6 +6,7 @@ use crate::{
         LocalAttribute, Name, Number, PrefixExpression, Statement, TableConstructor, TokenTree,
         UnaryOperator, Variable,
     },
+    error::RuntimeError,
     instruction::Instruction,
     parser::Parser,
     token::Span,
@@ -570,13 +571,39 @@ impl<'a, 'source> Compiler<'a, 'source> {
                         self.compile_expression(limit, ExpressionResult::Single);
                         let limit_local = self.add_local("#limit".to_string());
 
-                        if let Some(step) = step {
+                        let step_local = if let Some(step) = step {
+                            let step_span = step.span;
                             self.compile_expression(step, ExpressionResult::Single);
+                            let step_local = self.add_local("#step".to_string());
+
+                            // Raise an error if the step value is equal to zero
+                            self.chunk.push_instruction(Instruction::GetLocal, None);
+                            self.chunk.push_instruction(step_local, None);
+                            self.compile_load_literal(Literal::Number(Number::Integer(0)), None);
+                            self.chunk.push_instruction(Instruction::Eq, None);
+                            self.chunk.push_instruction(Instruction::JmpFalse, None);
+                            let jmp_false_addr = self.chunk.push_addr_placeholder();
+                            self.chunk
+                                .push_instruction(Instruction::Error, Some(step_span));
+                            self.chunk
+                                .push_instruction(RuntimeError::ForLoopLimitIsZero, None);
+
+                            // Raise error
+                            self.chunk.patch_addr_placeholder(jmp_false_addr);
+                            self.chunk.push_instruction(Instruction::Pop, None);
+
+                            step_local
                         } else {
-                            // TODO: Decrementing loops
                             self.compile_load_literal(Literal::Number(Number::Integer(1)), None);
-                        }
-                        let step_local = self.add_local("#step".to_string());
+                            self.add_local("#step".to_string())
+                        };
+
+                        // Create a "variable" to remember whether this is a decreasing loop.
+                        self.chunk.push_instruction(Instruction::GetLocal, None);
+                        self.chunk.push_instruction(step_local, None);
+                        self.compile_load_literal(Literal::Number(Number::Integer(0)), None);
+                        self.chunk.push_instruction(Instruction::Lt, None);
+                        let decreasing_local = self.add_local("#decreasing".to_string());
 
                         // Label to jump back to the start of the loop
                         let condition_addr = self.chunk.get_current_addr();
@@ -587,8 +614,22 @@ impl<'a, 'source> Compiler<'a, 'source> {
                         self.chunk.push_instruction(identifier_local, None);
                         self.chunk.push_instruction(Instruction::GetLocal, None);
                         self.chunk.push_instruction(limit_local, None);
-                        // TODO: Handle decreasing loops
+
+                        // Choose either "<=" or ">=" depending on whether the loop is increasing
+                        // or decreasing.
+                        self.chunk.push_instruction(Instruction::GetLocal, None);
+                        self.chunk.push_instruction(decreasing_local, None);
+                        self.chunk.push_instruction(Instruction::JmpTrue, None);
+                        let jmp_decreasing = self.chunk.push_addr_placeholder();
+                        self.chunk.push_instruction(Instruction::Pop, None);
                         self.chunk.push_instruction(Instruction::Le, None);
+                        self.chunk.push_instruction(Instruction::Jmp, None);
+                        let jmp_after_ge = self.chunk.push_addr_placeholder();
+                        self.chunk.patch_addr_placeholder(jmp_decreasing);
+                        self.chunk.push_instruction(Instruction::Pop, None);
+                        self.chunk.push_instruction(Instruction::Ge, None);
+                        self.chunk.patch_addr_placeholder(jmp_after_ge);
+
                         self.chunk.push_instruction(Instruction::JmpFalse, None);
                         let jmp_false_addr = self.chunk.push_addr_placeholder();
 
