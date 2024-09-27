@@ -2,7 +2,6 @@ use std::path::Path;
 
 use crate::ast::*;
 use crate::lexer::Lexer;
-use crate::scope::DraftScope;
 use crate::token::{Span, Token, TokenKind};
 use miette::{miette, Context, LabeledSpan};
 
@@ -10,7 +9,6 @@ pub struct Parser<'path, 'source> {
     pub filename: Option<&'path Path>,
     source: &'source str,
     lexer: Lexer<'path, 'source>,
-    scopes: Vec<DraftScope>,
 }
 
 impl<'path, 'source> Parser<'path, 'source> {
@@ -19,7 +17,6 @@ impl<'path, 'source> Parser<'path, 'source> {
             filename,
             source,
             lexer: Lexer::new(filename, source),
-            scopes: vec![DraftScope::new()],
         }
     }
 
@@ -59,11 +56,7 @@ impl<'path, 'source> Parser<'path, 'source> {
         start: usize,
         inside_vararg_function: bool,
     ) -> miette::Result<TokenTree<Block>> {
-        self.begin_scope();
-        let block = self.parse_block_inner(start, inside_vararg_function)?;
-        self.end_scope();
-
-        Ok(block)
+        self.parse_block_inner(start, inside_vararg_function)
     }
 
     fn parse_block_inner(
@@ -151,7 +144,11 @@ impl<'path, 'source> Parser<'path, 'source> {
                     let span = *span;
                     self.lexer.next();
                     let name = self.parse_name().wrap_err("in goto statement")?;
-                    Ok(Some(TokenTree::new(Statement::Goto(name), span)))
+                    let name_span = name.span;
+                    Ok(Some(TokenTree::new(
+                        Statement::Goto(name),
+                        Span::new(span.start, name_span.end),
+                    )))
                 }
                 Some(Token {
                     kind: TokenKind::DoubleColon,
@@ -163,8 +160,10 @@ impl<'path, 'source> Parser<'path, 'source> {
                     let double_colon_token =
                         self.lexer.expect(|k| k == &TokenKind::DoubleColon, "::")?;
                     let end = double_colon_token.span.end;
-                    self.declare_label(&name.node, Span::new(span.start, end))?;
-                    Ok(Some(TokenTree::new(Statement::Label(name), span)))
+                    Ok(Some(TokenTree::new(
+                        Statement::Label(name),
+                        Span::new(span.start, end),
+                    )))
                 }
                 Some(Token {
                     kind: TokenKind::Local,
@@ -577,8 +576,6 @@ impl<'path, 'source> Parser<'path, 'source> {
         start_position: usize,
         inside_vararg_function: bool,
     ) -> miette::Result<TokenTree<Statement>> {
-        self.begin_scope();
-
         let name = self.parse_name().wrap_err("name in for statement")?;
         let condition = match self.lexer.peek()? {
             Some(token) if token.kind == TokenKind::Equals => {
@@ -673,8 +670,6 @@ impl<'path, 'source> Parser<'path, 'source> {
             .parse_block_inner(do_token.span.end, inside_vararg_function)
             .wrap_err("in block of for statement")?;
         let end_token = self.lexer.expect(|k| k == &TokenKind::End, "end")?;
-
-        self.end_scope();
 
         Ok(TokenTree::new(
             Statement::For { condition, block },
@@ -1466,8 +1461,6 @@ impl<'path, 'source> Parser<'path, 'source> {
         implicit_self_parameter: Option<Name>,
         name: Option<String>,
     ) -> miette::Result<TokenTree<FunctionDef>> {
-        self.begin_scope();
-
         let open_paren = self.lexer.expect(|k| k == &TokenKind::OpenParen, "(")?;
 
         let mut parameters = Vec::new();
@@ -1535,8 +1528,6 @@ impl<'path, 'source> Parser<'path, 'source> {
             .wrap_err("in function definition")?;
         let end_token = self.lexer.expect(|k| k == &TokenKind::End, "end")?;
 
-        self.end_scope();
-
         Ok(TokenTree::new(
             FunctionDef {
                 name,
@@ -1590,31 +1581,4 @@ fn infix_binding_power(kind: &TokenKind) -> Option<(u8, u8)> {
 
         _ => return None,
     })
-}
-
-/// Scoping methods
-impl<'path, 'source> Parser<'path, 'source> {
-    fn begin_scope(&mut self) {
-        self.scopes.push(DraftScope::new());
-    }
-
-    fn end_scope(&mut self) {
-        self.scopes.pop();
-    }
-
-    fn declare_label(&mut self, name: &Name, span: Span) -> miette::Result<()> {
-        for scope in self.scopes.iter_mut().rev() {
-            if scope.has_label(&name.0) {
-                return Err(miette!(
-                    labels = vec![span.labeled("label already defined")],
-                    "label already defined in this scope"
-                ));
-            }
-        }
-
-        let current_scope = self.scopes.last_mut().unwrap();
-        current_scope.register_label(&name.0);
-
-        Ok(())
-    }
 }

@@ -1,5 +1,5 @@
 use miette::miette;
-use std::{borrow::Cow, path::PathBuf};
+use std::{borrow::Cow, collections::HashMap, path::PathBuf};
 
 use crate::{
     ast::{
@@ -12,15 +12,33 @@ use crate::{
     parser::Parser,
     token::Span,
     value::{LuaConst, LuaFunctionDefinition, LuaNumber, LuaVariableAttribute},
-    vm::{Chunk, ConstIndex, VM},
+    vm::{Chunk, ConstIndex, JumpAddr, VM},
 };
 
 const VARARG_LOCAL_NAME: &str = "...";
+
+#[derive(Debug)]
+struct Goto {
+    addr: JumpAddr,
+    span: Span,
+    locals: usize,
+    depth: u8,
+    scope_id: usize,
+    to_end_of_scope: bool,
+}
+
+#[derive(Debug)]
+struct Label {
+    addr: JumpAddr,
+    locals: usize,
+    depth: u8,
+}
 
 #[derive(Debug, Clone)]
 struct Local {
     name: String,
     depth: u8,
+    span: Option<Span>,
 }
 
 #[derive(Debug, Clone)]
@@ -38,29 +56,48 @@ struct BlockOptions {
 
 #[derive(Debug, Default)]
 struct BreakJump {
-    addr: usize,
+    addr: JumpAddr,
     locals: usize,
 }
 
 #[derive(Debug, Default)]
 struct BlockResult {
     breaks: Vec<BreakJump>,
+    any_new_locals: Option<NewLocalsAfterGoto>,
+}
+
+#[derive(Debug)]
+struct NewLocalsAfterGoto {
+    goto: (String, Span),
+    local: (String, Option<Span>),
 }
 
 #[derive(Debug)]
 struct Frame {
     locals: Vec<Local>,
+    gotos: HashMap<String, Vec<Goto>>,
+    labels: HashMap<String, Label>,
     upvalues: Vec<Upvalue>,
     scope_depth: u8,
+    scope_id_counter: usize,
+    scope_ids: Vec<usize>,
 }
 
 impl Frame {
     fn new() -> Self {
         Self {
             locals: vec![],
+            gotos: HashMap::new(),
+            labels: HashMap::new(),
             upvalues: vec![],
             scope_depth: 0,
+            scope_id_counter: 1,
+            scope_ids: vec![0],
         }
+    }
+
+    fn scope_id(&self) -> usize {
+        *self.scope_ids.last().expect("scope_ids is not empty")
     }
 
     fn resolve_local(&self, name: &str) -> Option<u8> {
@@ -84,11 +121,43 @@ pub struct Compiler<'a, 'source> {
 
 impl BlockResult {
     fn new() -> Self {
-        Self { breaks: vec![] }
+        Self {
+            breaks: vec![],
+            any_new_locals: None,
+        }
     }
 
     fn extend(&mut self, other: Self) {
         self.breaks.extend(other.breaks);
+        if self.any_new_locals.is_none() {
+            self.any_new_locals = other.any_new_locals;
+        }
+    }
+
+    fn with_breaks(mut self, breaks: Vec<BreakJump>) -> Self {
+        self.breaks = breaks;
+        self
+    }
+
+    fn with_new_locals(mut self, any_new_locals: Option<NewLocalsAfterGoto>) -> Self {
+        self.any_new_locals = any_new_locals;
+        self
+    }
+
+    fn assert_no_new_locals(&self) -> miette::Result<()> {
+        if let Some(new_local) = &self.any_new_locals {
+            let mut labels = vec![new_local.goto.1.labeled("this goto statement")];
+            if let Some(span) = new_local.local.1 {
+                labels.push(span.labeled("this local variable definition"));
+            }
+            return Err(miette!(
+                labels = labels,
+                "<goto {}> jumps into the scope of local '{}'",
+                new_local.goto.0,
+                new_local.local.0
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -140,9 +209,21 @@ impl<'a, 'source> Compiler<'a, 'source> {
         if !has_return {
             // Add implicit final return
             self.push_load_marker();
-            self.push_load_nil();
+            self.push_load_nil(None);
             self.chunk.push_instruction(Instruction::Return, None);
         }
+
+        debug_assert!(
+            self.frames.len() == 1,
+            "should have only the root frame left"
+        );
+        debug_assert!(
+            self.frames[0].locals.is_empty(),
+            "all locals should be popped"
+        );
+
+        // Get rid of the root frame, to resolve any pending gotos and such.
+        self.end_frame()?;
 
         Ok(self.vm.add_chunk(self.chunk))
     }
@@ -153,9 +234,9 @@ impl<'a, 'source> Compiler<'a, 'source> {
         self.chunk.push_const_index(marker_const_index);
     }
 
-    fn push_load_nil(&mut self) {
+    fn push_load_nil(&mut self, span: Option<Span>) {
         let nil_const_index = self.get_const_index(LuaConst::Nil);
-        self.chunk.push_instruction(Instruction::LoadConst, None);
+        self.chunk.push_instruction(Instruction::LoadConst, span);
         self.chunk.push_const_index(nil_const_index);
     }
 
@@ -179,16 +260,20 @@ impl<'a, 'source> Compiler<'a, 'source> {
             self.begin_scope();
         }
 
-        let mut block_result = BlockResult { breaks: vec![] };
+        let mut block_result = BlockResult::new();
 
         for statement in ast.node.statements {
+            if !matches!(&statement.node, Statement::Label(_)) {
+                block_result.assert_no_new_locals()?;
+            }
+
             block_result.extend(self.compile_statement(statement, &options)?);
         }
 
         if let Some(return_statement) = ast.node.return_statement {
             self.push_load_marker();
             if return_statement.is_empty() {
-                self.push_load_nil();
+                self.push_load_nil(None);
             } else {
                 self.compile_expression_list(return_statement)?;
             }
@@ -196,10 +281,11 @@ impl<'a, 'source> Compiler<'a, 'source> {
         }
 
         if options.new_scope {
-            self.end_scope();
+            self.end_scope()?;
+            Ok(block_result.with_new_locals(None))
+        } else {
+            Ok(block_result)
         }
-
-        Ok(block_result)
     }
 
     fn compile_statement(
@@ -217,17 +303,19 @@ impl<'a, 'source> Compiler<'a, 'source> {
                 BlockResult::new()
             }
             Statement::LocalDeclaraction(names, expressions) => {
-                let needs_alignment = names.len() != expressions.len()
-                    || expressions.iter().any(|e| {
-                        matches!(
-                            e.node,
-                            Expression::PrefixExpression(TokenTree {
-                                // Function calls can produce multiple values
-                                node: PrefixExpression::FunctionCall(_),
-                                ..
-                            })
-                        )
-                    });
+                let empty_expressions = expressions.is_empty();
+                let needs_alignment = !empty_expressions
+                    && (names.len() != expressions.len()
+                        || expressions.iter().any(|e| {
+                            matches!(
+                                e.node,
+                                Expression::PrefixExpression(TokenTree {
+                                    // Function calls can produce multiple values
+                                    node: PrefixExpression::FunctionCall(_),
+                                    ..
+                                })
+                            )
+                        }));
 
                 if needs_alignment {
                     let marker_const_index = self.get_const_index(LuaConst::Marker);
@@ -245,7 +333,10 @@ impl<'a, 'source> Compiler<'a, 'source> {
                 }
 
                 for name in names {
-                    let local_index = self.add_local(name.node.name.node.0);
+                    if empty_expressions {
+                        self.push_load_nil(Some(name.span));
+                    }
+                    let local_index = self.add_local(name.node.name.node.0, Some(name.span));
                     match name.node.attribute {
                         Some(TokenTree {
                             node: LocalAttribute::Const,
@@ -326,7 +417,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                             self.chunk
                                 .push_instruction(Instruction::SetTable, Some(span));
                             // SetTable keeps the table on the stack, so we need to pop it
-                            self.chunk.push_instruction(Instruction::Pop, None)
+                            self.chunk.push_instruction(Instruction::Pop, Some(span))
                         }
                         Variable::Field(target, name) => {
                             // Same story as above, but with a string key
@@ -340,7 +431,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                             self.chunk.push_instruction(2, None);
                             self.chunk
                                 .push_instruction(Instruction::SetTable, Some(span));
-                            self.chunk.push_instruction(Instruction::Pop, None)
+                            self.chunk.push_instruction(Instruction::Pop, Some(span))
                         }
                     }
                 }
@@ -449,12 +540,10 @@ impl<'a, 'source> Compiler<'a, 'source> {
                 self.chunk.push_instruction(Instruction::Jmp, Some(span));
                 let break_jump = self.chunk.push_addr_placeholder();
 
-                BlockResult {
-                    breaks: vec![BreakJump {
-                        addr: break_jump,
-                        locals,
-                    }],
-                }
+                BlockResult::new().with_breaks(vec![BreakJump {
+                    addr: break_jump,
+                    locals,
+                }])
             }
             Statement::Repeat { block, condition } => {
                 // Jump into the block
@@ -475,12 +564,15 @@ impl<'a, 'source> Compiler<'a, 'source> {
                         new_scope: false,
                     },
                 )?;
-                self.end_scope();
+
+                block_result.assert_no_new_locals()?;
 
                 self.compile_expression(condition, ExpressionResult::Single)?;
                 self.chunk.push_instruction(Instruction::JmpFalse, None);
                 self.chunk.push_addr(start_addr);
                 self.chunk.push_instruction(Instruction::Pop, None);
+
+                self.end_scope()?;
 
                 let jmps: Vec<_> = block_result
                     .breaks
@@ -521,7 +613,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                         new_scope: false,
                     },
                 )?;
-                self.end_scope();
+                self.end_scope()?;
 
                 self.chunk.push_instruction(Instruction::Jmp, None);
                 self.chunk.push_addr(start_addr);
@@ -570,18 +662,18 @@ impl<'a, 'source> Compiler<'a, 'source> {
 
                         // Define the initial value and variable
                         self.compile_expression(initial, ExpressionResult::Single)?;
-                        let identifier_local = self.add_local(name.node.0);
+                        let identifier_local = self.add_local(name.node.0, Some(name.span));
 
                         // Create fake variables to hold the limit and step. Note that we use
                         // variable names that are invalid in Lua to avoid conflicts with user
                         // variables.
                         self.compile_expression(limit, ExpressionResult::Single)?;
-                        let limit_local = self.add_local("#limit".to_string());
+                        let limit_local = self.add_local("#limit".to_string(), None);
 
                         let step_local = if let Some(step) = step {
                             let step_span = step.span;
                             self.compile_expression(step, ExpressionResult::Single)?;
-                            let step_local = self.add_local("#step".to_string());
+                            let step_local = self.add_local("#step".to_string(), None);
 
                             // Raise an error if the step value is equal to zero
                             self.chunk.push_instruction(Instruction::GetLocal, None);
@@ -602,7 +694,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                             step_local
                         } else {
                             self.compile_load_literal(Literal::Number(Number::Integer(1)), None);
-                            self.add_local("#step".to_string())
+                            self.add_local("#step".to_string(), None)
                         };
 
                         // Create a "variable" to remember whether this is a decreasing loop.
@@ -610,7 +702,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                         self.chunk.push_instruction(step_local, None);
                         self.compile_load_literal(Literal::Number(Number::Integer(0)), None);
                         self.chunk.push_instruction(Instruction::Lt, None);
-                        let decreasing_local = self.add_local("#decreasing".to_string());
+                        let decreasing_local = self.add_local("#decreasing".to_string(), None);
 
                         // Label to jump back to the start of the loop
                         let condition_addr = self.chunk.get_current_addr();
@@ -676,11 +768,12 @@ impl<'a, 'source> Compiler<'a, 'source> {
 
                         // Save the result as locals: the iterator function, the state, the initial
                         // value for the control variable (which is the first name).
-                        let iterator_local = self.add_local("#iterator".to_string());
-                        let state_local = self.add_local("#state".to_string());
+                        let iterator_local = self.add_local("#iterator".to_string(), None);
+                        let state_local = self.add_local("#state".to_string(), None);
                         // NOTE: The syntax ensures there is at least one name
-                        let control_local = self.add_local(names[0].node.0.clone());
-                        let closing_local = self.add_local("#closing".to_string());
+                        let control_local =
+                            self.add_local(names[0].node.0.clone(), Some(names[0].span));
+                        let closing_local = self.add_local("#closing".to_string(), None);
                         self.chunk.push_instruction(Instruction::SetLocalAttr, None);
                         self.chunk.push_instruction(closing_local, None);
                         self.chunk
@@ -688,8 +781,8 @@ impl<'a, 'source> Compiler<'a, 'source> {
 
                         // Initialize the other variables to nil
                         for name in &names[1..] {
-                            self.push_load_nil();
-                            self.add_local(name.node.0.clone());
+                            self.push_load_nil(Some(name.span));
+                            self.add_local(name.node.0.clone(), Some(name.span));
                         }
 
                         // Call the iterator function
@@ -759,7 +852,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                 self.chunk.patch_addr_placeholder(jmp_exit_loop_addr);
                 self.chunk.push_instruction(Instruction::Pop, None);
 
-                self.end_scope();
+                self.end_scope()?;
 
                 // Patch any break jumps
                 let jmps: Vec<_> = block_result
@@ -793,7 +886,124 @@ impl<'a, 'source> Compiler<'a, 'source> {
                     new_scope: true,
                 },
             )?,
-            _ => todo!("compile_statement {:#?}", statement),
+            Statement::Goto(name) => {
+                let frame = self.frames.last_mut().expect("frames is not empty");
+                let label = frame.labels.get(&name.node.0);
+                let locals = frame
+                    .locals
+                    .iter()
+                    .filter(|local| local.depth <= frame.scope_depth)
+                    .count();
+                match label {
+                    Some(label) => {
+                        // Pop all locals that were defined in between
+                        if locals > label.locals {
+                            let intermediate_locals = locals - label.locals;
+                            for _ in 0..intermediate_locals {
+                                self.chunk.push_instruction(Instruction::Pop, None);
+                            }
+                        }
+                        self.chunk.push_instruction(Instruction::Jmp, Some(span));
+                        self.chunk.push_addr(label.addr);
+                    }
+                    None => {
+                        // Add to frame to resolve the jump later
+                        self.chunk.push_instruction(Instruction::Jmp, Some(span));
+                        let addr = self.chunk.push_addr_placeholder();
+
+                        let scope_id = frame.scope_id();
+                        let goto = Goto {
+                            addr,
+                            locals,
+                            span,
+                            depth: frame.scope_depth,
+                            scope_id,
+                            to_end_of_scope: false,
+                        };
+                        frame.gotos.entry(name.node.0).or_default().push(goto);
+                    }
+                }
+
+                BlockResult::new()
+            }
+            Statement::Label(label) => {
+                let frame = self.frames.last_mut().expect("frames is not empty");
+                if frame.labels.contains_key(&label.node.0) {
+                    return Err(miette!(
+                        labels = vec![label.span.labeled("here")],
+                        "label '{}' already defined",
+                        label.node.0
+                    ));
+                }
+
+                let addr = self.chunk.get_current_addr();
+                let locals = frame
+                    .locals
+                    .iter()
+                    .filter(|local| local.depth <= frame.scope_depth)
+                    .count();
+
+                let scope_id = frame.scope_id();
+                let (any_new_locals, resolved_all_gotos) =
+                    if let Some(gotos) = frame.gotos.get_mut(&label.node.0) {
+                        let mut any_new_locals = None;
+                        for goto in gotos.iter_mut() {
+                            if goto.depth < frame.scope_depth {
+                                return Err(miette!(
+                                    labels = vec![
+                                        goto.span.labeled("this goto statement"),
+                                        label.span.labeled("this label")
+                                    ],
+                                    "cannot goto label '{}' in a narrower scope",
+                                    label.node.0
+                                ));
+                            }
+
+                            if goto.depth > frame.scope_depth || goto.scope_id == scope_id {
+                                if locals > goto.locals && any_new_locals.is_none() {
+                                    let first_new_local = frame
+                                        .locals
+                                        .iter()
+                                        .filter(|local| local.depth <= frame.scope_depth)
+                                        .nth(goto.locals)
+                                        .expect("local exists");
+                                    any_new_locals = Some(NewLocalsAfterGoto {
+                                        goto: (label.node.0.clone(), goto.span),
+                                        local: (first_new_local.name.clone(), first_new_local.span),
+                                    });
+
+                                    goto.to_end_of_scope = true;
+                                } else {
+                                    self.chunk.patch_addr_placeholder_with(goto.addr, addr);
+                                }
+                            }
+                        }
+
+                        gotos.retain(|goto| {
+                            (goto.depth <= frame.scope_depth && goto.scope_id != scope_id)
+                                || goto.to_end_of_scope
+                        });
+
+                        (any_new_locals, gotos.is_empty())
+                    } else {
+                        (None, false)
+                    };
+
+                if resolved_all_gotos {
+                    frame.gotos.remove(&label.node.0);
+                }
+
+                frame.labels.insert(
+                    label.node.0,
+                    Label {
+                        addr,
+                        locals,
+                        depth: frame.scope_depth,
+                    },
+                );
+
+                BlockResult::new().with_new_locals(any_new_locals)
+            }
         })
     }
 
@@ -876,11 +1086,12 @@ impl<'a, 'source> Compiler<'a, 'source> {
         // Define the function arguments
         let parameter_count = function_def.node.parameters.len();
         for parameter in function_def.node.parameters {
-            self.add_local(parameter.node.0);
+            self.add_local(parameter.node.0, Some(parameter.span));
         }
 
         if function_def.node.has_varargs {
-            self.add_local(VARARG_LOCAL_NAME.to_string());
+            // TODO: There actually should be a span for varargs, right?
+            self.add_local(VARARG_LOCAL_NAME.to_string(), None);
             self.chunk.push_instruction(Instruction::AlignVararg, None);
         } else {
             self.chunk.push_instruction(Instruction::Align, None);
@@ -901,11 +1112,11 @@ impl<'a, 'source> Compiler<'a, 'source> {
         // NOTE: We don't call `end_scope` here because we want to keep the locals around for the
         // return values. They're handled by the return statement, when the call frame is dropped.
         // self.end_scope();
-        let frame = self.end_frame();
+        let frame = self.end_frame()?;
 
         if !has_return {
             self.push_load_marker();
-            self.push_load_nil();
+            self.push_load_nil(None);
             self.chunk.push_instruction(Instruction::Return, None);
         }
 
@@ -1212,18 +1423,38 @@ impl<'a, 'source> Compiler<'a, 'source> {
         self.frames.push(Frame::new());
     }
 
-    fn end_frame(&mut self) -> Frame {
-        self.frames.pop().expect("frame exists")
+    fn end_frame(&mut self) -> miette::Result<Frame> {
+        let frame = self.frames.pop().expect("frame exists");
+
+        if let Some((name, goto)) = frame
+            .gotos
+            .iter()
+            .flat_map(|(name, jumps)| jumps.iter().map(move |jump| (name, jump)))
+            .next()
+        {
+            return Err(miette!(
+                labels = vec![goto.span.labeled("here")],
+                "label '{}' not found",
+                name
+            ));
+        }
+
+        Ok(frame)
     }
 
     fn begin_scope(&mut self) -> u8 {
         let current_frame = self.frames.last_mut().unwrap();
         current_frame.scope_depth += 1;
+        current_frame.scope_ids.push(current_frame.scope_id_counter);
+        current_frame.scope_id_counter += 1;
         current_frame.scope_depth
     }
 
-    fn end_scope(&mut self) {
+    fn end_scope(&mut self) -> miette::Result<()> {
         let current_frame = self.frames.last_mut().unwrap();
+        let scope_id = current_frame.scope_id();
+        current_frame.scope_ids.pop();
+        let parent_scope_id = current_frame.scope_id();
         current_frame.scope_depth -= 1;
 
         while !current_frame.locals.is_empty()
@@ -1236,13 +1467,95 @@ impl<'a, 'source> Compiler<'a, 'source> {
             current_frame.locals.pop();
             self.chunk.push_instruction(Instruction::Pop, None);
         }
+
+        // Remove any labels that are no longer in scope
+        let mut to_remove = Vec::new();
+        for (name, label) in current_frame.labels.iter() {
+            if label.depth > current_frame.scope_depth {
+                to_remove.push(name.clone());
+            }
+
+            // Patch gotos that go to this label
+            let all_jumps_resolved = if let Some(jumps) = current_frame.gotos.get_mut(name) {
+                for jump in jumps.iter() {
+                    if (jump.depth > label.depth || jump.scope_id == scope_id)
+                        && !jump.to_end_of_scope
+                    {
+                        if jump.depth < label.depth {
+                            return Err(miette!(
+                                labels = vec![jump.span.labeled("here")],
+                                "label '{}' not found",
+                                name
+                            ));
+                        }
+
+                        self.chunk
+                            .patch_addr_placeholder_with(jump.addr, label.addr);
+                    }
+                }
+
+                jumps.retain(|jump| {
+                    jump.depth < label.depth || jump.scope_id != scope_id || jump.to_end_of_scope
+                });
+                jumps.is_empty()
+            } else {
+                false
+            };
+            if all_jumps_resolved {
+                current_frame.gotos.remove(name);
+            }
+        }
+
+        for name in to_remove {
+            current_frame.labels.remove(&name);
+        }
+
+        // If we have any gotos still pending, they're going to jump out of this scope. So we need
+        // to make sure that they will correctly pop any locals that were in scope at the point of
+        // the goto.
+        for gotos in current_frame.gotos.values_mut() {
+            for goto in gotos.iter_mut() {
+                if goto.scope_id == scope_id || goto.to_end_of_scope {
+                    if goto.locals > 0 {
+                        self.chunk.push_instruction(Instruction::Jmp, None);
+                        let after_goto_pops = self.chunk.push_addr_placeholder();
+                        self.chunk.patch_addr_placeholder(goto.addr);
+                        let locals_to_pop = goto.locals - current_frame.locals.len();
+                        for _ in 0..locals_to_pop {
+                            self.chunk.push_instruction(Instruction::Pop, None);
+                        }
+                        if !goto.to_end_of_scope {
+                            self.chunk.push_instruction(Instruction::Jmp, None);
+                            goto.addr = self.chunk.push_addr_placeholder();
+                        }
+                        self.chunk.patch_addr_placeholder(after_goto_pops);
+                    } else if goto.to_end_of_scope {
+                        self.chunk.patch_addr_placeholder(goto.addr);
+                    }
+
+                    goto.scope_id = parent_scope_id;
+                    goto.locals = current_frame
+                        .locals
+                        .iter()
+                        .filter(|local| local.depth <= current_frame.scope_depth)
+                        .count();
+                }
+            }
+
+            gotos.retain(|goto| !goto.to_end_of_scope);
+        }
+
+        current_frame.gotos.retain(|_, gotos| !gotos.is_empty());
+
+        Ok(())
     }
 
-    fn add_local(&mut self, name: String) -> u8 {
+    fn add_local(&mut self, name: String, span: Option<Span>) -> u8 {
         let current_frame = self.frames.last_mut().unwrap();
         let local = Local {
             name: name.clone(),
             depth: current_frame.scope_depth,
+            span,
         };
 
         let index = current_frame.locals.len() as u8;

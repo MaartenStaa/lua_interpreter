@@ -1095,17 +1095,24 @@ impl<'source> Chunk<'source> {
         self.instructions.extend(index.to_be_bytes());
     }
 
-    pub fn push_addr_placeholder(&mut self) -> usize {
+    pub fn push_addr_placeholder(&mut self) -> JumpAddr {
         let index = self.instructions.len();
         self.instructions
             .extend_from_slice(&JumpAddr::MAX.to_be_bytes());
-        index
+        index as JumpAddr
     }
 
-    pub fn patch_addr_placeholder(&mut self, index: usize) {
+    pub fn patch_addr_placeholder(&mut self, index: JumpAddr) {
         let addr = self.instructions.len() as JumpAddr;
         let addr_bytes = addr.to_be_bytes();
-        self.instructions[index..index + size_of::<JumpAddr>()].copy_from_slice(&addr_bytes);
+        self.instructions[index as usize..index as usize + size_of::<JumpAddr>()]
+            .copy_from_slice(&addr_bytes);
+    }
+
+    pub fn patch_addr_placeholder_with(&mut self, index: JumpAddr, addr: JumpAddr) {
+        let addr_bytes = addr.to_be_bytes();
+        self.instructions[index as usize..index as usize + size_of::<JumpAddr>()]
+            .copy_from_slice(&addr_bytes);
     }
 
     pub fn get_instructions(&self) -> &[u8] {
