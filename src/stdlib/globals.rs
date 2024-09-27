@@ -140,11 +140,14 @@ pub(crate) fn load(vm: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaV
     };
 
     let compiler = Compiler::new(vm, None, name.clone(), source.into());
-    let Ok(chunk_index) = compiler.compile(None) else {
-        return Ok(vec![
-            LuaValue::Nil,
-            LuaValue::String("compilation error".into()),
-        ]);
+    let chunk_index = match compiler.compile(None) {
+        Ok(chunk_index) => chunk_index,
+        Err(e) => {
+            return Ok(vec![
+                LuaValue::Nil,
+                LuaValue::String(format!("{}", e).into_bytes()),
+            ]);
+        }
     };
 
     // Return a function that runs the chunk
