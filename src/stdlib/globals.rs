@@ -10,13 +10,17 @@ use std::{
 
 use crate::{
     compiler::Compiler,
+    macros::{assert_string, assert_table},
+    stdlib::package,
     value::{metatables::METATABLE_KEY, LuaClosure, LuaNumber, LuaObject, LuaValue},
     vm::VM,
 };
 
 use miette::miette;
 
-use super::{debug::DEBUG, math::MATH, string::STRING, table::TABLE};
+use super::{
+    debug::DEBUG, io::IO, math::MATH, os::OS, package::PACKAGE, string::STRING, table::TABLE,
+};
 
 pub const _VERSION: &str = "LuaRust 5.4";
 
@@ -215,8 +219,6 @@ pub(crate) fn print(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaV
 }
 
 pub(crate) fn require(vm: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
-    // TODO: Check if the module is already loaded
-
     let name = match input.first() {
         Some(LuaValue::String(s)) => s,
         Some(value) => {
@@ -232,10 +234,10 @@ pub(crate) fn require(vm: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<L
         }
     };
 
-    let name = String::from_utf8_lossy(name);
+    let name_str = String::from_utf8_lossy(name);
 
     // Allow loading stdlib modules via `require`
-    match name.as_ref() {
+    match name_str.as_ref() {
         "debug" => {
             return Ok(vec![DEBUG.clone()]);
         }
@@ -251,23 +253,89 @@ pub(crate) fn require(vm: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<L
         _ => {}
     }
 
-    // TODO: Use `package.path` to search for modules
-    let mut name_os = OsString::from(name.as_ref());
-    name_os.push(".lua");
+    let package = PACKAGE.clone();
+    let package_path = assert_string!(assert_table!(&package, package_table, {
+        package_table
+            .get(&"path".into())
+            .expect("package.path exists")
+            .clone()
+    }));
 
-    let path = Path::new(&name_os);
-    // TODO: Check how to handle `path` being a directory
-    if !path.exists() {
-        return Err(miette!("module '{name}' not found",));
+    // Loop through each package path option
+    let package_config = &package::CONFIG;
+    for mut option in package_path
+        .split(|c| *c == package_config.template_separator)
+        .map(|s| s.to_vec())
+    {
+        while let Some(index) = option
+            .iter()
+            .position(|c| *c == package_config.substitution_character)
+        {
+            let (prefix, suffix) = option.split_at(index);
+            option = prefix
+                .iter()
+                .chain(name.iter())
+                .chain(suffix.iter().skip(1))
+                .cloned()
+                .collect();
+        }
+
+        // TODO: Do we need to resolve this relative to the current file?
+        let path_str = String::from_utf8_lossy(&option);
+        // let path_os_str = OsString::from_(&option);
+        let path = Path::new(path_str.as_ref());
+        if !path.exists() {
+            continue;
+        }
+        if path.is_dir() {
+            return Err(
+                miette!(
+                    "error loading module '{name_str}' from file '{source}': cannot read '{dir_name}': is a directory",
+                    source = "<unknown>",
+                    dir_name = path.file_name().map(|s| s.to_string_lossy()).unwrap_or_else(|| "<unknown>".into())
+                )
+            );
+        }
+
+        // Check if it's already loaded
+        let path_value = LuaValue::String(path_str.as_bytes().to_vec());
+        assert_table!(&package, package_table, {
+            let loaded = package_table
+                .get(&"loaded".into())
+                .expect("package.loaded exists");
+            assert_table!(loaded, loaded_table, {
+                if let Some(value) = loaded_table.get(&path_value) {
+                    return Ok(vec![value.clone()]);
+                }
+            })
+        });
+
+        let source =
+            fs::read_to_string(path).map_err(|_| miette!("unable to read module {name_str}",))?;
+
+        let compiler = Compiler::new(
+            vm,
+            Some(path.to_owned()),
+            name_str.to_string(),
+            source.into(),
+        );
+        let chunk_index = compiler.compile(None)?;
+        let mut result = vm.run_chunk(chunk_index)?;
+        let result = result.swap_remove(0);
+
+        assert_table!(write, package, package_table, {
+            let loaded = package_table
+                .get_mut(&"loaded".into())
+                .expect("package.loaded exists");
+            assert_table!(write, loaded, loaded_table, {
+                loaded_table.insert(path_value.clone(), result.clone());
+            });
+        });
+
+        return Ok(vec![result, path_value]);
     }
 
-    let source = fs::read_to_string(path).map_err(|_| miette!("unable to read module {name}",))?;
-
-    let compiler = Compiler::new(vm, Some(path.to_owned()), name.to_string(), source.into());
-    let chunk_index = compiler.compile(None)?;
-    let mut result = vm.run_chunk(chunk_index)?;
-
-    Ok(vec![result.swap_remove(0), LuaValue::Nil])
+    Err(miette!("module '{name_str}' not found",))
 }
 
 pub(crate) fn select(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {

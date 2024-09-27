@@ -3,6 +3,7 @@ use crate::value::{LuaObject, LuaValue};
 mod debug;
 mod globals;
 mod math;
+mod package;
 mod string;
 mod table;
 
@@ -29,6 +30,7 @@ pub fn lookup_global(name: &str) -> Option<LuaValue> {
         // Namespaced modules
         "debug" => Some(debug::DEBUG.clone()),
         "math" => Some(math::MATH.clone()),
+        "package" => Some(package::PACKAGE.clone()),
         "string" => Some(string()),
         "table" => Some(table::TABLE.clone()),
 

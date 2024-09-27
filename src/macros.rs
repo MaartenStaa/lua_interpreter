@@ -35,8 +35,17 @@ macro_rules! assert_function_const(
     }
 );
 
+macro_rules! assert_string {
+    ($value:expr) => {
+        match $value {
+            LuaValue::String(s) => s,
+            _ => unreachable!("assert_string!() called on non-string value"),
+        }
+    };
+}
+
 macro_rules! assert_table(
-    ($value:expr, $table:ident, $tt:stmt) => {
+    (read, $value:expr, $table:ident, $tt:stmt) => {
         match $value {
             LuaValue::Object(o) => match &*o.read().unwrap() {
                 LuaObject::Table($table) => {
@@ -46,6 +55,20 @@ macro_rules! assert_table(
             },
             _ => unreachable!("assert_object!() called on non-object value"),
         }
+    };
+    (write, $value:expr, $table:ident, $tt:stmt) => {
+        match $value {
+            LuaValue::Object(o) => match &mut *o.write().unwrap() {
+                LuaObject::Table($table) => {
+                    $tt
+                },
+                _ => unreachable!("assert_object!() called on non-table object"),
+            },
+            _ => unreachable!("assert_object!() called on non-object value"),
+        }
+    };
+    ($value:expr, $table:ident, $tt:stmt) => {
+        assert_table!(read, $value, $table, $tt)
     }
 );
 
@@ -178,6 +201,6 @@ macro_rules! require_string {
 }
 
 pub(crate) use {
-    assert_closure, assert_function_const, assert_table, get_number, get_string, require_closure,
-    require_number, require_string,
+    assert_closure, assert_function_const, assert_string, assert_table, get_number, get_string,
+    require_closure, require_number, require_string,
 };

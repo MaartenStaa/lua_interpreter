@@ -1,4 +1,7 @@
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    ops::{Deref, DerefMut},
+};
 
 use super::{number::LuaNumber, LuaValue};
 
@@ -16,10 +19,6 @@ impl LuaTable {
             last_number_key: 0,
             is_sequence: true,
         }
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.fields.is_empty()
     }
 
     pub fn len(&self) -> usize {
@@ -82,17 +81,23 @@ impl LuaTable {
         );
     }
 
-    pub fn get(&self, key: &LuaValue) -> Option<&LuaValue> {
-        self.fields.get(key)
-    }
-
     pub fn mark_sequence_dangerous(&mut self, last_number_key: i64) {
         self.is_sequence = true;
         self.last_number_key = last_number_key;
     }
+}
 
-    pub fn remove(&mut self, key: &LuaValue) -> Option<LuaValue> {
-        self.fields.remove(key)
+impl Deref for LuaTable {
+    type Target = HashMap<LuaValue, LuaValue>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.fields
+    }
+}
+
+impl DerefMut for LuaTable {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.fields
     }
 }
 
