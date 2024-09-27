@@ -1576,7 +1576,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
     }
 
     fn resolve_upvalue_inner(&mut self, name: &str, frame_index: usize) -> Option<u8> {
-        if frame_index <= 1 {
+        if frame_index < 1 {
             return None;
         }
 
