@@ -1097,7 +1097,9 @@ impl<'path, 'source> Parser<'path, 'source> {
                         Some(expression) => (None, expression),
                         None => {
                             return Err(miette!(
-                                labels = vec![self.lexer.eof_label("expected table field")],
+                                labels = vec![self
+                                    .lexer
+                                    .label_at_current_position("expected table field")],
                                 "unexpected token"
                             ))
                         }
@@ -1170,7 +1172,7 @@ impl<'path, 'source> Parser<'path, 'source> {
         match self.parse_expression_within(min_bp, inside_vararg_function)? {
             Some(expression) => Ok(expression),
             None => Err(miette!(
-                labels = vec![self.lexer.eof_label("here")],
+                labels = vec![self.lexer.label_at_current_position("here")],
                 "expected an expression"
             )),
         }

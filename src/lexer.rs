@@ -22,9 +22,13 @@ impl<'path, 'source> Lexer<'path, 'source> {
         }
     }
 
-    pub fn eof_label(&self, message: &str) -> LabeledSpan {
-        let source_len = self.source.len();
-        LabeledSpan::at(source_len..source_len, message)
+    pub fn label_at_current_position(&self, message: &str) -> LabeledSpan {
+        let mut position = self.position;
+        if let Some(peeked) = &self.peeked {
+            position = peeked.span.start;
+        }
+
+        LabeledSpan::at(position..position, message)
     }
 
     pub fn with_source_code(&self, report: miette::Report) -> miette::Report {
