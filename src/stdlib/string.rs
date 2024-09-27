@@ -1,6 +1,7 @@
 use std::sync::LazyLock;
 
 use crate::{
+    macros::{get_string, require_string},
     value::{LuaNumber, LuaObject, LuaTable, LuaValue},
     vm::VM,
 };
@@ -21,31 +22,6 @@ pub static STRING: LazyLock<LuaValue> = LazyLock::new(|| {
     string.into()
 });
 
-macro_rules! require_string {
-    ($input:expr, $name:expr, $i:expr) => {
-        match $input.get($i) {
-            Some(LuaValue::String(s)) => s,
-            Some(v) => {
-                return Err(miette::miette!(
-                    "bad argument #{n} to '{name}' (string expected, got {type_name})",
-                    n = $i + 1,
-                    name = $name,
-                    type_name = v.type_name()
-                ));
-            }
-            None => {
-                return Err(miette::miette!(
-                    "bad argument #{n} to '{name}' (value expected)",
-                    n = $i + 1,
-                    name = $name
-                ));
-            }
-        }
-    };
-    ($input:expr, $name:expr) => {
-        require_string!($input, $name, 0)
-    };
-}
 
 fn format(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     let mut format_string = require_string!(input, "format").clone();

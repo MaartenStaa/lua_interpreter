@@ -95,6 +95,53 @@ macro_rules! require_number {
     };
 }
 
+macro_rules! get_string {
+    ($values:expr, $name:expr, $index:expr) => {
+        match $values.get($index) {
+            Some(LuaValue::String(s)) => Some(s),
+            Some(v) => {
+                return Err(::miette::miette!(
+                    "bad argument #{} to '{}', expected string, got {}",
+                    $index + 1,
+                    $name,
+                    v.type_name()
+                ))
+            }
+            _ => None,
+        }
+    };
+    ($values:expr, $name:expr) => {
+        get_string!($values, $name, 0)
+    };
+}
+
+macro_rules! require_string {
+    ($input:expr, $name:expr, $i:expr) => {
+        match $input.get($i) {
+            Some(LuaValue::String(s)) => s,
+            Some(v) => {
+                return Err(::miette::miette!(
+                    "bad argument #{n} to '{name}' (string expected, got {type_name})",
+                    n = $i + 1,
+                    name = $name,
+                    type_name = v.type_name()
+                ));
+            }
+            None => {
+                return Err(::miette::miette!(
+                    "bad argument #{n} to '{name}' (value expected)",
+                    n = $i + 1,
+                    name = $name
+                ));
+            }
+        }
+    };
+    ($input:expr, $name:expr) => {
+        require_string!($input, $name, 0)
+    };
+}
+
 pub(crate) use {
-    assert_closure, assert_function_const, assert_table, get_number, require_number,
+    assert_closure, assert_function_const, assert_table, get_number, get_string, require_number,
+    require_string,
 };
