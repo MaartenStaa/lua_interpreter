@@ -235,6 +235,10 @@ impl<'source> VM<'source> {
     fn capture_upvalue(&mut self, index: usize) -> Arc<RwLock<LuaValue>> {
         let frame = &self.call_stack[self.call_stack_index - 1];
         let value = self.stack[frame.frame_pointer + index].clone();
+        if let LuaValue::UpValue(upvalue) = &value {
+            return Arc::clone(upvalue);
+        }
+
         let upvalue = Arc::new(RwLock::new(value));
         self.stack[frame.frame_pointer + index] = LuaValue::UpValue(Arc::clone(&upvalue));
 
@@ -383,10 +387,9 @@ impl<'source> VM<'source> {
                             let is_local = self.chunks[chunk_index].instructions[upval_ip] == 1;
                             let index = self.chunks[chunk_index].instructions[upval_ip + 1];
                             if is_local {
-                                closure.upvalues[index as usize] =
-                                    Some(self.capture_upvalue(index as usize));
+                                closure.upvalues[i] = Some(self.capture_upvalue(index as usize));
                             } else {
-                                closure.upvalues[index as usize] = Some(
+                                closure.upvalues[i] = Some(
                                     self.call_stack[self.call_stack_index - 1].upvalues
                                         [index as usize]
                                         .as_ref()
