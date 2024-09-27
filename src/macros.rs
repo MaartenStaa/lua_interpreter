@@ -49,4 +49,52 @@ macro_rules! assert_table(
     }
 );
 
-pub(crate) use {assert_closure, assert_function_const, assert_table};
+macro_rules! get_number {
+    ($values:expr, $name:expr, $index:expr) => {
+        match $values.get($index) {
+            Some(LuaValue::Number(n)) => Some(n),
+            Some(v) => {
+                return Err(miette!(
+                    "bad argument #{} to '{}', expected number, got {}",
+                    $index + 1,
+                    $name,
+                    v.type_name()
+                ))
+            }
+            _ => None,
+        }
+    };
+    ($values:expr, $name:expr) => {
+        get_number!($values, $name, 0)
+    };
+}
+
+macro_rules! require_number {
+    ($values:expr, $name:expr, $index:expr) => {
+        match $values.get($index) {
+            Some(LuaValue::Number(n)) => n,
+            Some(v) => {
+                return Err(::miette::miette!(
+                    "bad argument #{} to '{}', expected number, got {}",
+                    $index + 1,
+                    $name,
+                    v.type_name()
+                ))
+            }
+            _ => {
+                return Err(::miette::miette!(
+                    "bad argument #{} to '{}', expected number, got no value",
+                    $index + 1,
+                    $name
+                ))
+            }
+        }
+    };
+    ($values:expr, $name:expr) => {
+        require_number!($values, $name, 0)
+    };
+}
+
+pub(crate) use {
+    assert_closure, assert_function_const, assert_table, get_number, require_number,
+};
