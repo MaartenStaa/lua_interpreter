@@ -873,22 +873,6 @@ impl<'a, 'source> Compiler<'a, 'source> {
         self.begin_scope();
         let func_addr = self.chunk.get_current_addr();
 
-        // Calling conventions:
-        // The stack will look like this when entering a function:
-        // [arg1]
-        // [arg2]
-        // ...
-        // [argN]
-        // [num_args]
-        // [return_addr]
-        // [frame_pointer]
-        //
-        // The function will push the return values onto the stack, followed by the number of
-        // return values. The caller will then pop the return values off the stack.
-
-        // Store the return address
-        // self.add_local("#return_addr".to_string());
-
         // Define the function arguments
         let parameter_count = function_def.node.parameters.len();
         for parameter in function_def.node.parameters {
