@@ -1,4 +1,4 @@
-use super::LuaNumber;
+use super::{LuaNumber, LuaTable};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct LuaFunctionDefinition {
@@ -16,4 +16,5 @@ pub enum LuaConst {
     Number(LuaNumber),
     String(Vec<u8>),
     Function(LuaFunctionDefinition),
+    Table(LuaTable),
 }

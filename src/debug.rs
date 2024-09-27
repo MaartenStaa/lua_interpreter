@@ -363,6 +363,7 @@ fn print_const(constant: &LuaConst) {
                 name = name.as_deref().unwrap_or("[anonymous]"),
             )
         }
+        LuaConst::Table(table) => print!("TABLE ({} fields)", table.keys().count()),
     }
 }
 

@@ -1,5 +1,7 @@
 use std::sync::{Arc, RwLock};
 
+use crate::ast;
+
 use super::{
     closure::LuaClosure,
     constant::{LuaConst, LuaFunctionDefinition},
@@ -9,6 +11,17 @@ use super::{
     LuaValue,
 };
 
+impl From<ast::Literal> for LuaValue {
+    fn from(literal: ast::Literal) -> Self {
+        match literal {
+            ast::Literal::Nil => LuaValue::Nil,
+            ast::Literal::Boolean(b) => LuaValue::Boolean(b),
+            ast::Literal::Number(n) => LuaValue::Number(n.into()),
+            ast::Literal::String(s) => LuaValue::String(s),
+        }
+    }
+}
+
 impl From<bool> for LuaValue {
     fn from(b: bool) -> Self {
         LuaValue::Boolean(b)
@@ -17,6 +30,12 @@ impl From<bool> for LuaValue {
 
 impl From<&str> for LuaValue {
     fn from(s: &str) -> Self {
+        LuaValue::String(s.as_bytes().to_vec())
+    }
+}
+
+impl From<String> for LuaValue {
+    fn from(s: String) -> Self {
         LuaValue::String(s.as_bytes().to_vec())
     }
 }
@@ -58,6 +77,7 @@ impl From<LuaConst> for LuaValue {
                 ip,
                 upvalues: vec![None; upvalues],
             })))),
+            LuaConst::Table(t) => LuaValue::Object(Arc::new(RwLock::new(LuaObject::Table(t)))),
         }
     }
 }
@@ -65,5 +85,14 @@ impl From<LuaConst> for LuaValue {
 impl From<LuaObject> for LuaValue {
     fn from(object: LuaObject) -> Self {
         LuaValue::Object(Arc::new(RwLock::new(object)))
+    }
+}
+
+impl From<ast::Number> for LuaNumber {
+    fn from(number: ast::Number) -> Self {
+        match number {
+            ast::Number::Integer(i) => LuaNumber::Integer(i),
+            ast::Number::Float(f) => LuaNumber::Float(f),
+        }
     }
 }

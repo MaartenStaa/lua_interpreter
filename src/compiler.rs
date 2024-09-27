@@ -1,5 +1,10 @@
 use miette::miette;
-use std::{borrow::Cow, collections::HashMap, path::PathBuf};
+use std::{
+    borrow::Cow,
+    collections::HashMap,
+    path::PathBuf,
+    sync::{Arc, RwLock},
+};
 
 use crate::{
     ast::{
@@ -11,7 +16,9 @@ use crate::{
     instruction::Instruction,
     parser::Parser,
     token::Span,
-    value::{LuaConst, LuaFunctionDefinition, LuaNumber, LuaVariableAttribute},
+    value::{
+        LuaConst, LuaFunctionDefinition, LuaNumber, LuaObject, LuaTable, LuaVariableAttribute,
+    },
     vm::{Chunk, ConstIndex, JumpAddr, VM},
 };
 
@@ -1268,12 +1275,70 @@ impl<'a, 'source> Compiler<'a, 'source> {
         &mut self,
         table: TokenTree<TableConstructor>,
     ) -> miette::Result<()> {
+        // Optimization: if all of the fields are literals, we can just create the table here and
+        // load it as a constant.
+        if table.node.fields.iter().all(|field| match &field.node {
+            Field::Named(_, value) => matches!(value.node, Expression::Literal(_)),
+            Field::Indexed(index, value) => {
+                matches!(index.node, Expression::Literal(_))
+                    && matches!(value.node, Expression::Literal(_))
+            }
+            Field::Value(value) => matches!(value.node, Expression::Literal(_)),
+        }) {
+            let mut new_table = LuaTable::new();
+            for fields in table.node.fields {
+                match fields.node {
+                    Field::Named(name, value) => {
+                        let value = match value.node {
+                            Expression::Literal(literal) => literal.node,
+                            _ => unreachable!("parser ensures that field value is a literal"),
+                        };
+                        new_table.insert(name.node.0.into(), value.into());
+                    }
+                    Field::Indexed(index, value) => {
+                        let index = match index.node {
+                            Expression::Literal(TokenTree {
+                                node: Literal::Number(Number::Integer(i)),
+                                ..
+                            }) => i,
+                            _ => unreachable!("parser ensures that field index is an integer"),
+                        };
+                        let value = match value.node {
+                            Expression::Literal(literal) => literal.node,
+                            _ => unreachable!("parser ensures that field value is a literal"),
+                        };
+                        new_table.insert(index.into(), value.into());
+                    }
+                    Field::Value(value) => {
+                        let value = match value.node {
+                            Expression::Literal(literal) => literal.node,
+                            _ => unreachable!("parser ensures that field value is a literal"),
+                        };
+                        new_table.append(value.into());
+                    }
+                }
+            }
+
+            let const_index = self.get_const_index(LuaConst::Table(new_table));
+            self.chunk
+                .push_instruction(Instruction::LoadConst, Some(table.span));
+            self.chunk.push_const_index(const_index);
+
+            return Ok(());
+        }
+
         self.chunk
             .push_instruction(Instruction::NewTable, Some(table.span));
 
-        let mut index = 1;
         let num_fields = table.node.fields.len();
+        let mut previous_was_value_field = false;
         for (i, field) in table.node.fields.into_iter().enumerate() {
+            if previous_was_value_field && !matches!(&field.node, Field::Value(_)) {
+                self.chunk
+                    .push_instruction(Instruction::AppendToTable, Some(field.span));
+                previous_was_value_field = false;
+            }
+
             match field.node {
                 Field::Named(name, value) => {
                     let const_index =
@@ -1282,36 +1347,37 @@ impl<'a, 'source> Compiler<'a, 'source> {
                         .push_instruction(Instruction::LoadConst, Some(field.span));
                     self.chunk.push_const_index(const_index);
                     self.compile_expression(value, ExpressionResult::Single)?;
+                    self.chunk
+                        .push_instruction(Instruction::SetTable, Some(field.span));
                 }
                 Field::Indexed(index_expression, value) => {
                     self.compile_expression(index_expression, ExpressionResult::Single)?;
                     self.compile_expression(value, ExpressionResult::Single)?;
+                    self.chunk
+                        .push_instruction(Instruction::SetTable, Some(field.span));
                 }
                 Field::Value(value) => {
-                    let is_last_field = i == num_fields - 1;
-                    if is_last_field {
-                        // Can allow multiple values for the last field
-                        let marker_const_index = self.get_const_index(LuaConst::Marker);
-                        self.chunk.push_instruction(Instruction::LoadConst, None);
-                        self.chunk.push_const_index(marker_const_index);
-                        self.compile_expression(value, ExpressionResult::Multiple)?;
-                        self.chunk
-                            .push_instruction(Instruction::AppendToTable, Some(field.span));
-                        break;
+                    if !previous_was_value_field {
+                        self.push_load_marker();
+                        previous_was_value_field = true;
                     }
 
-                    let index_const =
-                        self.get_const_index(LuaConst::Number(LuaNumber::Integer(index)));
-                    self.chunk.push_instruction(Instruction::LoadConst, None);
-                    self.chunk.push_const_index(index_const);
-                    self.compile_expression(value, ExpressionResult::Single)?;
-
-                    index += 1;
+                    let is_last_field = i == num_fields - 1;
+                    self.compile_expression(
+                        value,
+                        if is_last_field {
+                            ExpressionResult::Multiple
+                        } else {
+                            ExpressionResult::Single
+                        },
+                    )?;
                 }
             }
+        }
 
+        if previous_was_value_field {
             self.chunk
-                .push_instruction(Instruction::SetTable, Some(field.span));
+                .push_instruction(Instruction::AppendToTable, None);
         }
 
         Ok(())
