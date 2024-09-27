@@ -116,8 +116,42 @@ pub(crate) fn ipairs(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<Lua
 
 pub(crate) fn load(vm: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     let source = match input.first() {
-        Some(LuaValue::String(s)) => s,
-        // TODO: Support functions, returning chunks of code
+        Some(LuaValue::String(s)) => s.clone(),
+        Some(LuaValue::Object(o)) => match o.read().unwrap().clone() {
+            LuaObject::Closure(closure) => {
+                let mut result = Vec::new();
+                loop {
+                    let mut piece_result = vm.run_closure(closure.clone(), vec![])?;
+                    let piece_result = piece_result.swap_remove(0);
+                    match piece_result {
+                        LuaValue::String(s) => {
+                            result.extend(s);
+                        }
+                        LuaValue::Nil => {
+                            break;
+                        }
+                        _ => {
+                            return Err(miette!(
+                                    "unexpected return value from chunk loader (string or nil expected, got {})",
+                                    piece_result.type_name()
+                                ));
+                        }
+                    }
+                }
+
+                result
+            }
+            LuaObject::NativeFunction(_, f) => {
+                let result = f(vm, vec![])?;
+                return Ok(result);
+            }
+            _ => {
+                return Err(miette!(
+                    "bad argument #1 to 'load' (string or function expected, got {})",
+                    o.read().unwrap().type_name()
+                ));
+            }
+        },
         Some(value) => {
             return Err(miette!(
                 "bad argument #1 to 'load' (string expected, got {})",
@@ -131,16 +165,16 @@ pub(crate) fn load(vm: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaV
         }
     };
 
-    let source = String::from_utf8_lossy(source).to_string();
+    let source = String::from_utf8_lossy(&source).to_string();
     let name = match input.get(1) {
         Some(LuaValue::String(s)) => String::from_utf8_lossy(s).to_string(),
+        Some(LuaValue::Nil) | None => "chunk".to_string(),
         Some(value) => {
             return Err(miette!(
                 "bad argument #2 to 'load' (string expected, got {})",
                 value.type_name()
             ));
         }
-        None => "chunk".to_string(),
     };
 
     let compiler = Compiler::new(vm, None, name.clone(), source.into());
