@@ -17,6 +17,7 @@ use crate::{
     value::{
         metatables::{CALL_KEY, CLOSE_KEY},
         LuaClosure, LuaConst, LuaNumber, LuaObject, LuaTable, LuaValue, LuaVariableAttribute,
+        UpValue,
     },
 };
 
@@ -80,7 +81,7 @@ struct CallFrame {
     border_frame: bool,
     frame_pointer: usize,
     return_addr: usize,
-    upvalues: [Option<Arc<RwLock<LuaValue>>>; u8::MAX as usize],
+    upvalues: [Option<Arc<RwLock<UpValue>>>; u8::MAX as usize],
     allow_multi_return_values: bool,
 }
 
@@ -195,7 +196,7 @@ impl<'source> VM<'source> {
         border_frame: bool,
         frame_pointer: usize,
         return_addr: usize,
-        upvalues: Option<Vec<Option<Arc<RwLock<LuaValue>>>>>,
+        upvalues: Option<Vec<Option<Arc<RwLock<UpValue>>>>>,
         allow_multi_return_values: bool,
     ) {
         // Reuse the existing object to keep the `upvalues` vec
@@ -232,14 +233,14 @@ impl<'source> VM<'source> {
         popped_frame
     }
 
-    fn capture_upvalue(&mut self, index: usize) -> Arc<RwLock<LuaValue>> {
+    fn capture_upvalue(&mut self, index: usize) -> Arc<RwLock<UpValue>> {
         let frame = &self.call_stack[self.call_stack_index - 1];
         let value = self.stack[frame.frame_pointer + index].clone();
         if let LuaValue::UpValue(upvalue) = &value {
             return Arc::clone(upvalue);
         }
 
-        let upvalue = Arc::new(RwLock::new(value));
+        let upvalue = Arc::new(RwLock::new(UpValue(value)));
         self.stack[frame.frame_pointer + index] = LuaValue::UpValue(Arc::clone(&upvalue));
 
         upvalue
@@ -323,6 +324,8 @@ impl<'source> VM<'source> {
             self.push(arg);
         }
 
+        let old_ip = self.chunks[value.chunk].ip;
+        self.chunks[value.chunk].ip = value.ip as usize;
         self.push_call_frame(
             value.name.clone(),
             value.chunk,
@@ -334,7 +337,9 @@ impl<'source> VM<'source> {
             false,
         );
 
-        self.run_inner()
+        let result = self.run_inner();
+        self.chunks[value.chunk].ip = old_ip;
+        result
     }
 
     fn run_inner(&mut self) -> miette::Result<Vec<LuaValue>> {
@@ -720,7 +725,7 @@ impl<'source> VM<'source> {
                     let old_value = &self.stack[frame_pointer + local_index as usize];
                     if let LuaValue::UpValue(upval) = old_value {
                         let mut upval = upval.write().unwrap();
-                        *upval = value;
+                        *upval = value.into();
                     } else {
                         self.stack[frame_pointer + local_index as usize] = value;
                     }
@@ -757,7 +762,7 @@ impl<'source> VM<'source> {
                         .unwrap()
                         .write()
                         .unwrap();
-                    *upval = value;
+                    *upval = value.into();
 
                     2
                 }

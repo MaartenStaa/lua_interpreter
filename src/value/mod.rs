@@ -6,6 +6,7 @@ pub(crate) mod metatables;
 mod number;
 mod object;
 mod table;
+mod upvalue;
 
 pub use attribute::LuaVariableAttribute;
 pub use closure::LuaClosure;
@@ -13,6 +14,7 @@ pub use constant::{LuaConst, LuaFunctionDefinition};
 pub use number::LuaNumber;
 pub use object::LuaObject;
 pub use table::LuaTable;
+pub use upvalue::UpValue;
 
 use std::{
     fmt::{Debug, Display},
@@ -28,7 +30,7 @@ pub enum LuaValue {
     Number(number::LuaNumber),
     String(Vec<u8>),
     Object(Arc<RwLock<LuaObject>>),
-    UpValue(Arc<RwLock<LuaValue>>),
+    UpValue(Arc<RwLock<UpValue>>),
 }
 
 impl Debug for LuaValue {
@@ -39,14 +41,13 @@ impl Debug for LuaValue {
             LuaValue::Boolean(b) => write!(f, "{}", b),
             LuaValue::Number(n) => write!(f, "{}", n),
             LuaValue::String(s) => write!(f, "{:?}", String::from_utf8_lossy(s)),
-            LuaValue::Object(o) => write!(f, "{:?}", o),
+            LuaValue::Object(o) => {
+                let o = o.read().unwrap();
+                write!(f, "{:?}", o)
+            }
             LuaValue::UpValue(u) => {
-                write!(
-                    f,
-                    "upvalue<0x{:x}>: {:?}",
-                    u as *const _ as usize,
-                    u.read().unwrap()
-                )
+                let inner = u.read().unwrap();
+                write!(f, "upvalue<0x{:x}>: {:?}", u as *const _ as usize, inner)
             }
         }
     }
