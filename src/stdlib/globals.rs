@@ -16,7 +16,7 @@ use crate::{
 
 use miette::miette;
 
-use super::{math::MATH, string::STRING, table::TABLE};
+use super::{debug::DEBUG, math::MATH, string::STRING, table::TABLE};
 
 pub const _VERSION: &str = "LuaRust 5.4";
 
@@ -236,6 +236,9 @@ pub(crate) fn require(vm: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<L
 
     // Allow loading stdlib modules via `require`
     match name.as_ref() {
+        "debug" => {
+            return Ok(vec![DEBUG.clone()]);
+        }
         "math" => {
             return Ok(vec![MATH.clone()]);
         }

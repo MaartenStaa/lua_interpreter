@@ -49,6 +49,42 @@ macro_rules! assert_table(
     }
 );
 
+macro_rules! require_closure {
+    ($values:expr, $name:expr, $index:expr, $closure:ident, $tt:tt) => {
+        match $values.get($index) {
+            Some(LuaValue::Object(o)) => match &*o.read().unwrap() {
+                LuaObject::Closure($closure) => $tt,
+                _ => {
+                    return Err(::miette::miette!(
+                        "bad argument #{} to '{}', expected function, got {}",
+                        $index + 1,
+                        $name,
+                        o.read().unwrap().type_name()
+                    ))
+                }
+            },
+            Some(v) => {
+                return Err(::miette::miette!(
+                    "bad argument #{} to '{}', expected function, got {}",
+                    $index + 1,
+                    $name,
+                    v.type_name()
+                ))
+            }
+            _ => {
+                return Err(::miette::miette!(
+                    "bad argument #{} to '{}', expected function, got no value",
+                    $index + 1,
+                    $name
+                ))
+            }
+        }
+    };
+    ($values:expr, $name:expr, $closure:ident, $tt:tt) => {
+        require_closure!($values, $name, 0, $closure, $tt)
+    };
+}
+
 macro_rules! get_number {
     ($values:expr, $name:expr, $index:expr) => {
         match $values.get($index) {
@@ -142,6 +178,6 @@ macro_rules! require_string {
 }
 
 pub(crate) use {
-    assert_closure, assert_function_const, assert_table, get_number, get_string, require_number,
-    require_string,
+    assert_closure, assert_function_const, assert_table, get_number, get_string, require_closure,
+    require_number, require_string,
 };

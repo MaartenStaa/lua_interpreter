@@ -1,5 +1,6 @@
 use crate::value::{LuaObject, LuaValue};
 
+mod debug;
 mod globals;
 mod math;
 mod string;
@@ -26,6 +27,7 @@ pub fn lookup_global(name: &str) -> Option<LuaValue> {
         "warn" => Some(LuaObject::NativeFunction("warn", warn).into()),
 
         // Namespaced modules
+        "debug" => Some(debug::DEBUG.clone()),
         "math" => Some(math::MATH.clone()),
         "string" => Some(string()),
         "table" => Some(table::TABLE.clone()),
