@@ -182,12 +182,18 @@ enum ExpressionResult {
 impl<'a, 'source> Compiler<'a, 'source> {
     pub fn new(
         vm: &'a mut VM<'source>,
+        global_env: Option<Arc<RwLock<LuaObject>>>,
         filename: Option<PathBuf>,
         chunk_name: String,
         source: Cow<'source, str>,
     ) -> Self {
         Self {
-            chunk: Chunk::new(filename, chunk_name, source),
+            chunk: Chunk::new(
+                global_env.unwrap_or_else(|| vm.get_global_env()),
+                filename,
+                chunk_name,
+                source,
+            ),
             chunk_index: vm.get_next_chunk_index(),
             vm,
             // Start at the root of the file.

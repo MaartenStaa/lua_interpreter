@@ -11,7 +11,7 @@ use miette::{miette, IntoDiagnostic, NamedSource};
 use crate::{
     error::RuntimeError,
     instruction::Instruction,
-    macros::{assert_closure, assert_table},
+    macros::{assert_closure, assert_table, assert_table_object},
     stdlib,
     token::Span,
     value::{
@@ -28,6 +28,7 @@ pub type ConstIndex = u16;
 
 #[derive(Debug, Clone)]
 pub struct Chunk<'source> {
+    env: Arc<RwLock<LuaObject>>,
     index: usize,
     filename: Option<PathBuf>,
     chunk_name: String,
@@ -38,8 +39,14 @@ pub struct Chunk<'source> {
 }
 
 impl<'source> Chunk<'source> {
-    pub fn new(filename: Option<PathBuf>, chunk_name: String, source: Cow<'source, str>) -> Self {
+    pub fn new(
+        env: Arc<RwLock<LuaObject>>,
+        filename: Option<PathBuf>,
+        chunk_name: String,
+        source: Cow<'source, str>,
+    ) -> Self {
         Self {
+            env,
             // NOTE: This is set by the VM when the chunk is added
             index: 0,
             filename,
@@ -62,6 +69,7 @@ impl<'source> Chunk<'source> {
 
 #[derive(Debug)]
 pub struct VM<'source> {
+    global_env: Arc<RwLock<LuaObject>>,
     chunks: Vec<Chunk<'source>>,
     chunk_map: HashMap<PathBuf, usize>,
     consts: Vec<LuaConst>,
@@ -69,7 +77,6 @@ pub struct VM<'source> {
     stack: [LuaValue; MAX_STACK_SIZE],
     stack_attrs: [u8; MAX_STACK_SIZE],
     stack_index: usize,
-    globals: HashMap<ConstIndex, LuaValue>,
     call_stack: [CallFrame; MAX_STACK_SIZE],
     call_stack_index: usize,
 }
@@ -107,8 +114,9 @@ struct PoppedCallFrame {
 }
 
 impl<'source> VM<'source> {
-    pub fn new() -> Self {
+    pub fn new(global_env: Arc<RwLock<LuaObject>>) -> Self {
         Self {
+            global_env,
             chunks: vec![],
             chunk_map: HashMap::new(),
             consts: vec![],
@@ -116,10 +124,13 @@ impl<'source> VM<'source> {
             stack: [const { LuaValue::Nil }; MAX_STACK_SIZE],
             stack_attrs: [0; MAX_STACK_SIZE],
             stack_index: 0,
-            globals: HashMap::new(),
             call_stack: [const { CallFrame::default() }; MAX_STACK_SIZE],
             call_stack_index: 0,
         }
+    }
+
+    pub fn get_global_env(&self) -> Arc<RwLock<LuaObject>> {
+        Arc::clone(&self.global_env)
     }
 
     pub fn get_next_chunk_index(&self) -> usize {
@@ -689,25 +700,32 @@ impl<'source> VM<'source> {
                 Instruction::SetGlobal => {
                     let global_index = const_index!();
                     let value = self.pop();
-                    self.globals.insert(global_index, value);
+                    let key = self.consts[global_index as usize].clone().into();
+                    assert_table_object!(write, self.chunks[chunk_index].env, env, {
+                        env.insert(key, value);
+                    });
                     1 + size_of::<ConstIndex>()
                 }
                 Instruction::GetGlobal => {
                     let global_index = const_index!();
-                    let value = self
-                        .globals
-                        .get(&global_index)
-                        .cloned()
-                        .or_else(|| {
-                            // Maybe it's a global from the stdlib?
-                            let global_name = match &self.consts[global_index as usize] {
-                                LuaConst::String(s) => String::from_utf8_lossy(s),
-                                _ => return None,
-                            };
-                            stdlib::lookup_global(&global_name)
-                        })
-                        .unwrap_or_else(|| LuaValue::Nil);
-                    self.push(value);
+                    let key = self.consts[global_index as usize].clone();
+                    match &key {
+                        LuaConst::String(s) if s == b"_G" => {
+                            self.push(LuaValue::Object(Arc::clone(&self.global_env)));
+                        }
+                        LuaConst::String(s) if s == b"_ENV" => {
+                            self.push(LuaValue::Object(Arc::clone(&self.chunks[chunk_index].env)));
+                        }
+                        _ => {
+                            let value =
+                                assert_table_object!(read, self.chunks[chunk_index].env, env, {
+                                    env.get(&key.into())
+                                        .cloned()
+                                        .unwrap_or_else(|| LuaValue::Nil)
+                                });
+                            self.push(value);
+                        }
+                    }
                     1 + size_of::<ConstIndex>()
                 }
                 Instruction::SetLocal => {

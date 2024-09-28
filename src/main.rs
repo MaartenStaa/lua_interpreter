@@ -1,12 +1,13 @@
 use std::{
     borrow::Cow,
     path::{Path, PathBuf},
+    sync::{Arc, RwLock},
 };
 
 use clap::Parser;
 use lua_interpreter::{
-    compiler::Compiler, debug, lexer::Lexer, optimizer::optimize as optimize_ast, parser,
-    token::TokenKind, vm::VM,
+    compiler::Compiler, debug, env, lexer::Lexer, optimizer::optimize as optimize_ast, parser,
+    token::TokenKind, value::LuaObject, vm::VM,
 };
 use miette::{LabeledSpan, NamedSource};
 
@@ -75,9 +76,12 @@ fn main() {
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| "<file>".to_string());
 
-    let mut vm = VM::new();
+    let global_env = Arc::new(RwLock::new(LuaObject::Table(env::create_global_env())));
+
+    let mut vm = VM::new(Arc::clone(&global_env));
     if let Err(e) = Compiler::new(
         &mut vm,
+        Some(global_env),
         Some(filename),
         chunk_name.clone(),
         Cow::Borrowed(&source),

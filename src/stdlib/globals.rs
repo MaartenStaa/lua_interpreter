@@ -1,5 +1,4 @@
 use std::{
-    ffi::OsString,
     fs,
     path::Path,
     sync::{
@@ -177,7 +176,18 @@ pub(crate) fn load(vm: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaV
         }
     };
 
-    let compiler = Compiler::new(vm, None, name.clone(), source.into());
+    let env = match input.get(3) {
+        Some(LuaValue::Object(o)) => Some(o.clone()),
+        Some(LuaValue::Nil) | None => None,
+        Some(value) => {
+            return Err(miette!(
+                "bad argument #4 to 'load' (table expected, got {})",
+                value.type_name()
+            ));
+        }
+    };
+
+    let compiler = Compiler::new(vm, env, None, name.clone(), source.into());
     let chunk_index = match compiler.compile(None) {
         Ok(chunk_index) => chunk_index,
         Err(e) => {
@@ -349,6 +359,7 @@ pub(crate) fn require(vm: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<L
 
         let compiler = Compiler::new(
             vm,
+            None,
             Some(path.to_owned()),
             name_str.to_string(),
             source.into(),

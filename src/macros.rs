@@ -44,26 +44,38 @@ macro_rules! assert_string {
     };
 }
 
+macro_rules! assert_table_object(
+    (read, $value:expr, $table:ident, $tt:stmt) => {
+        match &*$value.read().unwrap() {
+            LuaObject::Table($table) => {
+                $tt
+            },
+            _ => unreachable!("assert_object!() called on non-table object"),
+        }
+    };
+    (write, $value:expr, $table:ident, $tt:stmt) => {
+        match &mut *$value.write().unwrap() {
+            LuaObject::Table($table) => {
+                $tt
+            },
+            _ => unreachable!("assert_object!() called on non-table object"),
+        }
+    };
+    ($value:expr, $table:ident, $tt:stmt) => {
+        assert_table!(read, $value, $table, $tt)
+    }
+);
+
 macro_rules! assert_table(
     (read, $value:expr, $table:ident, $tt:stmt) => {
         match $value {
-            LuaValue::Object(o) => match &*o.read().unwrap() {
-                LuaObject::Table($table) => {
-                    $tt
-                },
-                _ => unreachable!("assert_object!() called on non-table object"),
-            },
+            LuaValue::Object(o) => $crate::macros::assert_table_object!(read, o, $table, $tt),
             _ => unreachable!("assert_object!() called on non-object value"),
         }
     };
     (write, $value:expr, $table:ident, $tt:stmt) => {
         match $value {
-            LuaValue::Object(o) => match &mut *o.write().unwrap() {
-                LuaObject::Table($table) => {
-                    $tt
-                },
-                _ => unreachable!("assert_object!() called on non-table object"),
-            },
+            LuaValue::Object(o) => $crate::macros::assert_table_object!(write, o, $table, $tt),
             _ => unreachable!("assert_object!() called on non-object value"),
         }
     };
@@ -201,6 +213,6 @@ macro_rules! require_string {
 }
 
 pub(crate) use {
-    assert_closure, assert_function_const, assert_string, assert_table, get_number, get_string,
-    require_closure, require_number, require_string,
+    assert_closure, assert_function_const, assert_string, assert_table, assert_table_object,
+    get_number, get_string, require_closure, require_number, require_string,
 };
