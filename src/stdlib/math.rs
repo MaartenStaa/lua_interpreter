@@ -1,5 +1,5 @@
 use core::f64;
-use std::sync::LazyLock;
+use std::sync::{LazyLock, RwLock};
 
 use crate::{
     macros::{get_number, require_number},
@@ -7,6 +7,7 @@ use crate::{
     vm::VM,
 };
 use miette::miette;
+use rand::prelude::*;
 
 pub static MATH: LazyLock<LuaValue> = LazyLock::new(|| {
     let mut math = LuaTable::new();
@@ -298,17 +299,73 @@ fn rad(_: &mut VM, values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     }])
 }
 
-fn random(_: &mut VM, values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
-    let _start = get_number!(values, 0).unwrap_or(&LuaNumber::Float(0.0));
-    let _end = get_number!(values, 1).unwrap_or(&LuaNumber::Float(1.0));
+static RANDOM: LazyLock<RwLock<StdRng>> =
+    LazyLock::new(|| RwLock::new(StdRng::from_rng(thread_rng()).unwrap()));
 
-    todo!("implement random")
+fn random(_: &mut VM, values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+    if values.is_empty() {
+        return Ok(vec![LuaValue::Number(LuaNumber::Float(
+            RANDOM.write().unwrap().gen_range(0f64..1f64),
+        ))]);
+    }
+
+    let m = require_number!(values, "random", 0).integer_repr()?;
+    if values.len() == 1 {
+        return match m.partial_cmp(&0) {
+            Some(std::cmp::Ordering::Less) => {
+                Err(miette!("bad argument #1 to 'random' (interval is empty)"))
+            }
+            Some(std::cmp::Ordering::Equal) => Ok(vec![LuaValue::Number(LuaNumber::Integer(
+                RANDOM.write().unwrap().gen(),
+            ))]),
+            _ => Ok(vec![LuaValue::Number(LuaNumber::Integer(
+                RANDOM.write().unwrap().gen_range(1..m),
+            ))]),
+        };
+    }
+
+    let n = require_number!(values, "random", 1).integer_repr()?;
+    if n < m {
+        return Err(miette!("bad argument #2 to 'random' (interval is empty)"));
+    }
+    if m == n {
+        return Ok(vec![LuaValue::Number(LuaNumber::Integer(m))]);
+    }
+
+    Ok(vec![LuaValue::Number(LuaNumber::Integer(
+        RANDOM.write().unwrap().gen_range(m..n),
+    ))])
 }
 
 fn randomseed(_: &mut VM, values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
-    let _seed = require_number!(values, "randomseed");
+    let x = get_number!(values, "randomseed")
+        .cloned()
+        .unwrap_or_else(|| {
+            LuaNumber::Integer(i64::from_le_bytes(thread_rng().next_u64().to_le_bytes()))
+        });
+    let y = get_number!(values, "randomseed", 1)
+        .cloned()
+        .unwrap_or(LuaNumber::Integer(0));
 
-    todo!("implement randomseed")
+    macro_rules! bytes {
+        ($x:expr) => {
+            match $x {
+                LuaNumber::Integer(i) => i.to_le_bytes(),
+                LuaNumber::Float(f) => f.to_le_bytes(),
+            }
+        };
+    }
+
+    let mut seed = [0u8; size_of::<i64>() * 4];
+    let size_of = std::mem::size_of::<i64>();
+    seed[..size_of].copy_from_slice(&bytes!(x));
+    seed[size_of..size_of * 2].copy_from_slice(&bytes!(y));
+    seed[size_of * 2..size_of * 3].copy_from_slice(&bytes!(x));
+    seed[size_of * 3..].copy_from_slice(&bytes!(y));
+
+    *RANDOM.write().unwrap() = StdRng::from_seed(seed);
+
+    Ok(vec![LuaValue::Number(x), LuaValue::Number(y)])
 }
 
 fn sin(_: &mut VM, values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
