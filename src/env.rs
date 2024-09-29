@@ -65,6 +65,7 @@ pub fn create_global_env() -> LuaTable {
 
     // Namespaced modules
     env.insert("debug".into(), stdlib::debug::DEBUG.clone());
+    env.insert("io".into(), stdlib::io::IO.clone());
     env.insert("math".into(), stdlib::math::MATH.clone());
     env.insert("package".into(), stdlib::package::PACKAGE.clone());
     env.insert("string".into(), stdlib::string::STRING.clone());

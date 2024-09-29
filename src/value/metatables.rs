@@ -2,7 +2,7 @@ use std::sync::LazyLock;
 
 use crate::macros::assert_table;
 
-use super::{LuaObject, LuaTable, LuaValue};
+use super::{LuaObject, LuaTable, LuaValue, UserData};
 
 pub(crate) static GLOBAL_BOOLEAN_METATABLE: LazyLock<LuaValue> =
     LazyLock::new(|| LuaTable::new().into());
@@ -40,6 +40,7 @@ impl LuaObject {
     pub fn get_metatable(&self) -> Option<LuaValue> {
         match self {
             LuaObject::Table(t) => t.get(&METATABLE_KEY).cloned(),
+            LuaObject::UserData(UserData::Full { metatable, .. }) => metatable.clone(),
             _ => None,
         }
     }

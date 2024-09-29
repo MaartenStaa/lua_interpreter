@@ -8,7 +8,7 @@ use super::{
     number::LuaNumber,
     object::LuaObject,
     table::LuaTable,
-    LuaValue,
+    LuaValue, UserData,
 };
 
 impl From<ast::Literal> for LuaValue {
@@ -55,6 +55,12 @@ impl From<f64> for LuaValue {
 impl From<LuaTable> for LuaValue {
     fn from(table: LuaTable) -> Self {
         LuaValue::Object(Arc::new(RwLock::new(LuaObject::Table(table))))
+    }
+}
+
+impl From<UserData> for LuaValue {
+    fn from(user_data: UserData) -> Self {
+        LuaValue::Object(Arc::new(RwLock::new(LuaObject::UserData(user_data))))
     }
 }
 

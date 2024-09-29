@@ -212,7 +212,148 @@ macro_rules! require_string {
     };
 }
 
+macro_rules! require_userdata {
+    (read, $values:expr, $name:expr, $index:expr, $userdata:ident, $tt:stmt) => {
+        match $values.get($index) {
+            Some(LuaValue::Object(o)) => match &*o.read().unwrap() {
+                LuaObject::UserData($userdata) => {
+                   $tt
+                },
+                _ => {
+                    return Err(::miette::miette!(
+                        "bad argument #{n} to '{name}' ({type_name} expected, got {actual_type})",
+                        n = $index + 1,
+                        name = $name,
+                        type_name = stringify!($type),
+                        actual_type = o.read().unwrap().type_name()
+                    ));
+                }
+            },
+            Some(v) => {
+                return Err(::miette::miette!(
+                    "bad argument #{n} to '{name}' ({type_name} expected, got {actual_type})",
+                    n = $index + 1,
+                    name = $name,
+                    type_name = stringify!($type),
+                    actual_type = v.type_name()
+                ));
+            }
+            None => {
+                return Err(::miette::miette!(
+                    "bad argument #{n} to '{name}' ({type_name} expected, got no value)",
+                    n = $index + 1,
+                    name = $name,
+                    type_name = stringify!($type)
+                ));
+            }
+        }
+    };
+    (write, $values:expr, $name:expr, $index:expr, $userdata:ident, $tt:stmt) => {
+        match $values.get($index) {
+            Some(LuaValue::Object(o)) => match &*o.write().unwrap() {
+                LuaObject::UserData($userdata) => {
+                   $tt
+                },
+                _ => {
+                    return Err(::miette::miette!(
+                        "bad argument #{n} to '{name}' ({type_name} expected, got {actual_type})",
+                        n = $index + 1,
+                        name = $name,
+                        type_name = stringify!($type),
+                        actual_type = o.read().unwrap().type_name()
+                    ));
+                }
+            },
+            Some(v) => {
+                return Err(::miette::miette!(
+                    "bad argument #{n} to '{name}' ({type_name} expected, got {actual_type})",
+                    n = $index + 1,
+                    name = $name,
+                    type_name = stringify!($type),
+                    actual_type = v.type_name()
+                ));
+            }
+            None => {
+                return Err(::miette::miette!(
+                    "bad argument #{n} to '{name}' ({type_name} expected, got no value)",
+                    n = $index + 1,
+                    name = $name,
+                    type_name = stringify!($type)
+                ));
+            }
+        }
+    };
+    ($values:expr, $name:expr, $index:expr, $userdata:ident, $tt:stmt) => {
+        require_userdata!(read, $values, $name, $index, $userdata, $tt)
+    };
+}
+
+macro_rules! require_userdata_type {
+    (read, $userdata:ident, $name:expr, $index:expr, $type:ty, $value:ident, $metatable:ident, $tt:stmt) => {
+        match $userdata {
+            $crate::value::UserData::Full {
+                data: $value,
+                metatable: $metatable,
+                type_name,
+            } => {
+                if let Some($value) = $value.read().unwrap().downcast_ref::<$type>() {
+                    $tt
+                } else {
+                    return Err(::miette::miette!(
+                        "bad argument #{n} to '{name}' ({type_name} expected, got {actual_type})",
+                        n = $index + 1,
+                        name = $name,
+                        type_name = stringify!($type),
+                        actual_type = type_name
+                    ));
+                }
+            }
+            $crate::value::UserData::Light { .. } => {
+                return Err(::miette::miette!(
+                    "bad argument #{n} to '{name}' ({type_name} expected, got light userdata)",
+                    n = $index + 1,
+                    name = $name,
+                    type_name = stringify!($type)
+                ));
+            }
+        }
+    };
+    (write, $userdata:ident, $name:expr, $index:expr, $type:ty, $value:ident, $metatable:ident, $tt:stmt) => {
+        match $userdata {
+            $crate::value::UserData::Full {
+                data: $value,
+                metatable: $metatable,
+                type_name,
+            } => {
+                if let Some($value) = $value.write().unwrap().downcast_mut::<$type>() {
+                    $tt
+                } else {
+                    return Err(::miette::miette!(
+                        "bad argument #{n} to '{name}' ({type_name} expected, got {actual_type})",
+                        n = $index + 1,
+                        name = $name,
+                        type_name = stringify!($type),
+                        actual_type = type_name
+                    ));
+                }
+            }
+            $crate::value::UserData::Light { .. } => {
+                return Err(::miette::miette!(
+                    "bad argument #{n} to '{name}' ({type_name} expected, got light userdata)",
+                    n = $index + 1,
+                    name = $name,
+                    type_name = stringify!($type)
+                ));
+            }
+        }
+    };
+    ($userdata:ident, $name:expr, $index:expr, $type:ty, $value:ident, $metatable:ident, $tt:stmt) => {
+        require_userdata_type!(read, $userdata, $name, $index, $type, $value, $metatable, $tt)
+    };
+}
+
 pub(crate) use {
     assert_closure, assert_function_const, assert_string, assert_table, assert_table_object,
-    get_number, get_string, require_closure, require_number, require_string,
+    get_number, get_string, require_closure, require_number, require_string, require_userdata,
+    require_userdata_type,
 };

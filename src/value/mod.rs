@@ -7,6 +7,7 @@ mod number;
 mod object;
 mod table;
 mod upvalue;
+mod userdata;
 
 pub use attribute::LuaVariableAttribute;
 pub use closure::LuaClosure;
@@ -15,6 +16,7 @@ pub use number::LuaNumber;
 pub use object::LuaObject;
 pub use table::LuaTable;
 pub use upvalue::UpValue;
+pub use userdata::UserData;
 
 use std::{
     fmt::{Debug, Display},

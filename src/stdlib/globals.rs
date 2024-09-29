@@ -285,6 +285,9 @@ pub(crate) fn require(vm: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<L
         "debug" => {
             return Ok(vec![DEBUG.clone()]);
         }
+        "io" => {
+            return Ok(vec![IO.clone()]);
+        }
         "math" => {
             return Ok(vec![MATH.clone()]);
         }

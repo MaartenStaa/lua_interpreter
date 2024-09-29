@@ -1,9 +1,9 @@
 use crate::vm::VM;
 use std::{fmt::Display, hash::Hash};
 
-use super::{closure::LuaClosure, table::LuaTable, LuaValue};
+use super::{closure::LuaClosure, table::LuaTable, LuaValue, UserData};
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum LuaObject {
     Table(LuaTable),
     Closure(LuaClosure),
@@ -11,10 +11,10 @@ pub enum LuaObject {
         &'static str,
         fn(&mut VM, Vec<LuaValue>) -> miette::Result<Vec<LuaValue>>,
     ),
+    UserData(UserData),
 
-    // TODO: Implement these
+    // TODO: Implement this
     Thread,
-    UserData,
 }
 
 impl PartialEq for LuaObject {
@@ -26,7 +26,7 @@ impl PartialEq for LuaObject {
 
             // TODO: Implement these
             (LuaObject::Thread, LuaObject::Thread) => true,
-            (LuaObject::UserData, LuaObject::UserData) => true,
+            (LuaObject::UserData(_), LuaObject::UserData(_)) => todo!(),
 
             _ => false,
         }
@@ -45,7 +45,7 @@ impl LuaObject {
             LuaObject::Table(_) => "table",
             LuaObject::Closure(LuaClosure { .. }) => "function",
             LuaObject::NativeFunction(_, _) => "function",
-            LuaObject::UserData => "userdata",
+            LuaObject::UserData(_) => "userdata",
             LuaObject::Thread => "thread",
         }
     }
@@ -65,6 +65,9 @@ impl Display for LuaObject {
             }
             LuaObject::NativeFunction(name, func) => {
                 write!(f, "function: 0x{:x} ({name})", func as *const _ as usize)
+            }
+            LuaObject::UserData(u) => {
+                write!(f, "{}", u)
             }
             _ => todo!("formatting a {self:?}"),
         }
