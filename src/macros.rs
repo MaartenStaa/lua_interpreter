@@ -212,6 +212,72 @@ macro_rules! require_string {
     };
 }
 
+macro_rules! require_table {
+    (read, $values:expr, $name:expr, $index:expr, $table:ident, $tt:tt) => {
+        match $values.get($index) {
+            Some(LuaValue::Object(o)) => match &*o.read().unwrap() {
+                LuaObject::Table($table) => $tt,
+                _ => {
+                    return Err(::miette::miette!(
+                        "bad argument #{n} to '{name}' (table expected, got {actual_type})",
+                        n = $index + 1,
+                        name = $name,
+                        actual_type = o.read().unwrap().type_name()
+                    ));
+                }
+            },
+            Some(v) => {
+                return Err(::miette::miette!(
+                    "bad argument #{n} to '{name}' (table expected, got {actual_type})",
+                    n = $index + 1,
+                    name = $name,
+                    actual_type = v.type_name()
+                ));
+            }
+            None => {
+                return Err(::miette::miette!(
+                    "bad argument #{n} to '{name}' (table expected, got no value)",
+                    n = $index + 1,
+                    name = $name,
+                ));
+            }
+        }
+    };
+    (write, $values:expr, $name:expr, $index:expr, $table:ident, $tt:tt) => {
+        match $values.get($index) {
+            Some(LuaValue::Object(o)) => match &mut *o.write().unwrap() {
+                LuaObject::Table($table) => $tt,
+                _ => {
+                    return Err(::miette::miette!(
+                        "bad argument #{n} to '{name}' (table expected, got {actual_type})",
+                        n = $index + 1,
+                        name = $name,
+                        actual_type = o.read().unwrap().type_name()
+                    ));
+                }
+            },
+            Some(v) => {
+                return Err(::miette::miette!(
+                    "bad argument #{n} to '{name}' (table expected, got {actual_type})",
+                    n = $index + 1,
+                    name = $name,
+                    actual_type = v.type_name()
+                ));
+            }
+            None => {
+                return Err(::miette::miette!(
+                    "bad argument #{n} to '{name}' (table expected, got no value)",
+                    n = $index + 1,
+                    name = $name,
+                ));
+            }
+        }
+    };
+    ($values:expr, $name:expr, $index:expr, $userdata:ident, $tt:tt) => {
+        require_table!(read, $values, $name, $index, $userdata, $tt)
+    };
+}
+
 macro_rules! require_userdata {
     (read, $values:expr, $name:expr, $index:expr, $userdata:ident, $tt:stmt) => {
         match $values.get($index) {
@@ -354,6 +420,6 @@ macro_rules! require_userdata_type {
 
 pub(crate) use {
     assert_closure, assert_function_const, assert_string, assert_table, assert_table_object,
-    get_number, get_string, require_closure, require_number, require_string, require_userdata,
-    require_userdata_type,
+    get_number, get_string, require_closure, require_number, require_string, require_table,
+    require_userdata, require_userdata_type,
 };

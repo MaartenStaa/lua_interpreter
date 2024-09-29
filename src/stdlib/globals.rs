@@ -9,7 +9,7 @@ use std::{
 
 use crate::{
     compiler::Compiler,
-    macros::{assert_string, assert_table},
+    macros::{assert_string, assert_table, require_table},
     stdlib::package,
     value::{metatables::METATABLE_KEY, LuaClosure, LuaNumber, LuaObject, LuaValue},
     vm::VM,
@@ -260,6 +260,44 @@ pub(crate) fn print(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaV
     println!();
 
     Ok(vec![LuaValue::Nil])
+}
+
+pub(crate) fn rawget(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+    require_table!(input, "rawget", 0, table, {
+        let key = input
+            .get(1)
+            .ok_or_else(|| miette!("bad argument #2 to 'rawget' (value expected)"))?;
+        let value = table.get(key).cloned().unwrap_or(LuaValue::Nil);
+
+        Ok(vec![value])
+    })
+}
+
+pub(crate) fn rawset(_: &mut VM, mut input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+    let key = input
+        .get(1)
+        .cloned()
+        .ok_or_else(|| miette!("bad argument #2 to 'rawset' (value expected)"))?;
+    match key {
+        LuaValue::Nil => {
+            return Err(miette!("bad argument #2 to 'rawset' (value expected)"));
+        }
+        LuaValue::Number(LuaNumber::Float(f)) if f.is_nan() => {
+            return Err(miette!("bad argument #2 to 'rawset' (key cannot be NaN)"));
+        }
+        _ => {}
+    }
+
+    if input.len() < 3 {
+        return Err(miette!("bad argument #3 to 'rawset' (value expected)"));
+    }
+    let value = input.swap_remove(2);
+
+    require_table!(write, input, "rawset", 0, table, {
+        table.insert(key.clone(), value);
+    });
+
+    Ok(vec![input.swap_remove(0)])
 }
 
 pub(crate) fn require(vm: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
