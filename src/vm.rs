@@ -74,9 +74,8 @@ pub struct VM<'source> {
     chunk_map: HashMap<PathBuf, usize>,
     consts: Vec<LuaConst>,
     const_index: ConstIndex,
-    stack: [LuaValue; MAX_STACK_SIZE],
-    stack_attrs: [u8; MAX_STACK_SIZE],
-    stack_index: usize,
+    stack: Vec<LuaValue>,
+    stack_attrs: Vec<u8>,
     call_stack: [CallFrame; MAX_STACK_SIZE],
     call_stack_index: usize,
 }
@@ -121,9 +120,8 @@ impl<'source> VM<'source> {
             chunk_map: HashMap::new(),
             consts: vec![],
             const_index: 0,
-            stack: [const { LuaValue::Nil }; MAX_STACK_SIZE],
-            stack_attrs: [0; MAX_STACK_SIZE],
-            stack_index: 0,
+            stack: vec![],
+            stack_attrs: vec![],
             call_stack: [const { CallFrame::default() }; MAX_STACK_SIZE],
             call_stack_index: 0,
         }
@@ -169,19 +167,17 @@ impl<'source> VM<'source> {
     }
 
     fn push(&mut self, value: LuaValue) {
-        let index = self.stack_index;
-        self.stack[index] = value;
-        self.stack_index += 1;
+        self.stack.push(value);
+        self.stack_attrs.push(0);
     }
 
     fn pop(&mut self) -> LuaValue {
-        self.stack_index -= 1;
-        self.stack_attrs[self.stack_index] = 0;
-        std::mem::replace(&mut self.stack[self.stack_index], LuaValue::Nil)
+        self.stack_attrs.pop();
+        self.stack.pop().unwrap()
     }
 
     fn peek(&self) -> &LuaValue {
-        &self.stack[self.stack_index - 1]
+        &self.stack[self.stack.len() - 1]
     }
 
     fn shift_left(&mut self, amount: usize, offset: usize) {
@@ -190,8 +186,8 @@ impl<'source> VM<'source> {
         }
 
         // TODO: Find a more efficient way to do this
-        let start = self.stack_index - amount;
-        for index in start..self.stack_index {
+        let start = self.stack.len() - amount;
+        for index in start..self.stack.len() {
             self.stack.swap(index, index - offset);
         }
     }
@@ -304,7 +300,7 @@ impl<'source> VM<'source> {
             eprintln!("{:?}", err);
             std::process::exit(1);
         } else {
-            assert_eq!(self.stack_index, 0, "stack is not empty");
+            assert_eq!(self.stack.len(), 0, "stack is not empty: {:?}", &self.stack);
         }
     }
 
@@ -330,7 +326,7 @@ impl<'source> VM<'source> {
         value: LuaClosure,
         args: Vec<LuaValue>,
     ) -> miette::Result<Vec<LuaValue>> {
-        let frame_pointer = self.stack_index;
+        let frame_pointer = self.stack.len();
         for arg in args {
             self.push(arg);
         }
@@ -422,7 +418,7 @@ impl<'source> VM<'source> {
                     1 + size_of::<ConstIndex>() + upval_bytes
                 }
                 Instruction::Pop => {
-                    let attr = self.stack_attrs[self.stack_index - 1];
+                    let attr = self.stack_attrs[self.stack.len() - 1];
                     let value = self.pop();
                     // If this is a closing value, and it's not nil or false, close it
                     let to_be_closed = LuaVariableAttribute::ToBeClosed as u8;
@@ -452,8 +448,8 @@ impl<'source> VM<'source> {
                 }
                 Instruction::Swap => {
                     let swap_offset = instr_param!();
-                    let a = self.stack_index - 1;
-                    let b = self.stack_index - 1 - swap_offset as usize;
+                    let a = self.stack.len() - 1;
+                    let b = a - swap_offset as usize;
                     self.stack.swap(a, b);
                     2
                 }
@@ -461,20 +457,20 @@ impl<'source> VM<'source> {
                     let collect_varargs = matches!(instr, Instruction::AlignVararg);
                     let align_amount = instr_param!();
 
-                    assert!(self.stack_index > 0, "cannot align an empty stack");
+                    assert!(self.stack.len() > 0, "cannot align an empty stack");
 
                     // Find either the latest marker or the start of the stack
                     // from the current call frame
                     let frame_pointer = self.call_stack[self.call_stack_index - 1].frame_pointer;
-                    let marker_index = (frame_pointer..self.stack_index)
+                    let marker_index = (frame_pointer..self.stack.len())
                         .rev()
                         .find(|&i| self.stack[i] == LuaValue::Marker);
 
                     // Align the stack, so that there are <align_amount> values
                     // between the marker and the top of the stack
                     let num_values = marker_index
-                        .map(|i| self.stack_index - i - 1)
-                        .unwrap_or(self.stack_index - frame_pointer);
+                        .map(|i| self.stack.len() - i - 1)
+                        .unwrap_or(self.stack.len() - frame_pointer);
 
                     // Get rid of the marker
                     if marker_index.is_some() {
@@ -518,7 +514,8 @@ impl<'source> VM<'source> {
                     let offset = instr_param!();
                     assert!(offset > 0, "dup_from_marker offset must be greater than 0");
 
-                    let marker_index = self.stack[..self.stack_index]
+                    let marker_index = self
+                        .stack
                         .iter()
                         .rposition(|v| v == &LuaValue::Marker)
                         .expect("no marker found");
@@ -881,7 +878,7 @@ impl<'source> VM<'source> {
                                                                 None,
                                                                 closure.chunk,
                                                                 false,
-                                                                self.stack_index - 1,
+                                                                self.stack.len() - 1,
                                                                 self.chunks[chunk_index].ip + 2,
                                                                 Some(closure.upvalues),
                                                                 true,
@@ -899,7 +896,7 @@ impl<'source> VM<'source> {
                                                                 )),
                                                                 0,
                                                                 false,
-                                                                self.stack_index - 2,
+                                                                self.stack.len() - 2,
                                                                 self.chunks[chunk_index].ip + 2,
                                                                 None,
                                                                 true,
@@ -951,12 +948,13 @@ impl<'source> VM<'source> {
                 Instruction::AppendToTable => {
                     // Find the latest marker, and append each value after it to the table at the
                     // stack right before the marker
-                    let marker_index = self.stack[..self.stack_index]
+                    let marker_index = self
+                        .stack
                         .iter()
                         .rposition(|v| v == &LuaValue::Marker)
                         .expect("no marker found");
                     let table = &self.stack[marker_index - 1].clone();
-                    let num_values = self.stack_index - marker_index - 1;
+                    let num_values = self.stack.len() - marker_index - 1;
 
                     for _ in 0..num_values {
                         let value = self.pop();
@@ -1030,11 +1028,12 @@ impl<'source> VM<'source> {
 
                     // Look up the stack to find the marker, anything above that is
                     // arguments to the function
-                    let marker_position = self.stack[..self.stack_index]
+                    let marker_position = self
+                        .stack
                         .iter()
                         .rposition(|v| v == &LuaValue::Marker)
                         .expect("no function call args marker found");
-                    let mut num_args = self.stack_index - marker_position - 1;
+                    let mut num_args = self.stack.len() - marker_position - 1;
 
                     if let Some(self_parameter) = is_metamethod {
                         // We can reuse the marker index as self parameter value
@@ -1054,7 +1053,7 @@ impl<'source> VM<'source> {
                                 closure.name.clone(),
                                 closure.chunk,
                                 false,
-                                self.stack_index - num_args,
+                                self.stack.len() - num_args,
                                 self.chunks[chunk_index].ip + 2,
                                 Some(closure.upvalues),
                                 !is_single_return,
@@ -1069,7 +1068,7 @@ impl<'source> VM<'source> {
                                 Some(format!("native function '{}'", name)),
                                 0,
                                 false,
-                                self.stack_index - num_args,
+                                self.stack.len() - num_args,
                                 self.chunks[chunk_index].ip + 2,
                                 None,
                                 !is_single_return,
@@ -1097,13 +1096,14 @@ impl<'source> VM<'source> {
                     let frame = self.pop_call_frame();
 
                     // Find the marker indicating the start of the return values
-                    let marker_position = self.stack[..self.stack_index]
+                    let marker_position = self
+                        .stack
                         .iter()
                         .rposition(|v| v == &LuaValue::Marker)
                         .expect("no return values marker found");
 
                     // Collect the return values
-                    let mut return_values: Vec<_> = (marker_position + 1..self.stack_index)
+                    let mut return_values: Vec<_> = (marker_position + 1..self.stack.len())
                         .map(|_| self.pop())
                         .collect();
                     return_values.reverse();
@@ -1119,7 +1119,9 @@ impl<'source> VM<'source> {
                     let parent_call_frame = &self.call_stack[self.call_stack_index - 1];
                     self.chunks[parent_call_frame.chunk].ip = frame.return_addr;
                     // Discard any remaining values on the stack from the function call
-                    self.stack_index = frame.frame_pointer;
+                    for _ in 0..(self.stack.len() - frame.frame_pointer) {
+                        self.pop();
+                    }
 
                     // Put the return values back
                     for value in return_values {
