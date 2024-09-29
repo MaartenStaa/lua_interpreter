@@ -1051,7 +1051,10 @@ impl<'a, 'source> Compiler<'a, 'source> {
                 .push_instruction(Instruction::LoadConst, Some(function_call.span));
             self.chunk.push_const_index(method_name_const_index);
 
-            self.chunk.push_instruction(Instruction::GetTable, None);
+            self.chunk.push_instruction(
+                Instruction::GetTable,
+                Some(Span::new(function_call.span.start, method_name.span.end)),
+            );
         } else {
             self.compile_expression_list(function_call.node.args.node)?;
 
