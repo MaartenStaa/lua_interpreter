@@ -63,7 +63,7 @@ pub fn print_instructions(vm: &VM) {
                     let is_local_byte = instructions[ip];
                     let local_index = instructions[ip + 1];
                     println!(
-                        "{ip:04}        |             {:7} {}",
+                        "{ip:04}        |               {:7} {}",
                         if is_local_byte == 0 {
                             "upvalue"
                         } else {
