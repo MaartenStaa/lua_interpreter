@@ -420,7 +420,7 @@ impl<'source> VM<'source> {
                             }
                         }
 
-                        upvalues * size_of::<ConstIndex>()
+                        upvalues * 2
                     });
 
                     self.push(closure);
