@@ -128,7 +128,7 @@ pub(crate) fn ipairs(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<Lua
 pub(crate) fn load(vm: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     let source = match input.first() {
         Some(LuaValue::String(s)) => s.clone(),
-        Some(LuaValue::Object(o)) => match o.read().unwrap().clone() {
+        Some(LuaValue::Object(o)) => match &*o.read().unwrap() {
             LuaObject::Closure(closure) => {
                 let mut result = Vec::new();
                 loop {
@@ -239,8 +239,8 @@ pub(crate) fn pcall(vm: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<Lua
     };
 
     let args = input.collect();
-    let result = match function.read().unwrap().clone() {
-        LuaObject::Closure(closure) => vm.run_closure(closure, args),
+    let result = match &*function.read().unwrap() {
+        LuaObject::Closure(closure) => vm.run_closure(closure.clone(), args),
         LuaObject::NativeFunction(_, f) => f(vm, args),
         _ => {
             return Err(miette!(
