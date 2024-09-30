@@ -1306,11 +1306,8 @@ impl<'a, 'source> Compiler<'a, 'source> {
                     }
                     Field::Indexed(index, value) => {
                         let index = match index.node {
-                            Expression::Literal(TokenTree {
-                                node: Literal::Number(Number::Integer(i)),
-                                ..
-                            }) => i,
-                            _ => unreachable!("parser ensures that field index is an integer"),
+                            Expression::Literal(literal) => literal.node,
+                            _ => unreachable!("parser ensures that field index is a literal"),
                         };
                         let value = match value.node {
                             Expression::Literal(literal) => literal.node,
