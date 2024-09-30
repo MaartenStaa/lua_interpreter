@@ -636,7 +636,7 @@ impl<'path, 'source> Lexer<'path, 'source> {
                         self.position += equals as usize;
                     }
                 }
-                '\n' if long_form.is_none() => {
+                '\r' | '\n' if long_form.is_none() => {
                     return Err(self.with_source_code(miette!(
                         labels = vec![LabeledSpan::at(
                             self.position - 1..self.position,
