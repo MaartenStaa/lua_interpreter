@@ -1,4 +1,4 @@
-use std::sync::LazyLock;
+use std::{cmp::Ordering, sync::LazyLock};
 
 use crate::{
     macros::{get_string, require_number, require_string},
@@ -9,6 +9,10 @@ use crate::{
 pub static STRING: LazyLock<LuaValue> = LazyLock::new(|| {
     let mut string = LuaTable::new();
 
+    string.insert(
+        "find".into(),
+        LuaObject::NativeFunction("find", find).into(),
+    );
     string.insert(
         "format".into(),
         LuaObject::NativeFunction("format", format).into(),
@@ -23,6 +27,40 @@ pub static STRING: LazyLock<LuaValue> = LazyLock::new(|| {
     string.into()
 });
 
+fn find(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+    let s = require_string!(input, "find");
+    let pattern = require_string!(input, "find", 1);
+    let init = match input.get(2) {
+        Some(LuaValue::Number(LuaNumber::Integer(i))) => *i,
+        Some(LuaValue::Number(f @ LuaNumber::Float(_))) => f.integer_repr()?,
+        Some(v) => {
+            return Err(miette::miette!(
+                "bad argument #3 to 'find' (number expected, got {type_name})",
+                type_name = v.type_name()
+            ));
+        }
+        None => 1,
+    };
+
+    let s = match init.cmp(&0) {
+        Ordering::Less => &s[(s.len() as i64 + init) as usize..],
+        Ordering::Greater => &s[(init - 1) as usize..],
+        Ordering::Equal => s,
+    };
+
+    // TODO: Handle actual patterns
+
+    let start = s.windows(pattern.len()).position(|w| w == pattern);
+    Ok(match start {
+        Some(start) => {
+            vec![
+                LuaValue::Number(LuaNumber::Integer(start as i64 + 1)),
+                LuaValue::Number(LuaNumber::Integer(start as i64 + pattern.len() as i64)),
+            ]
+        }
+        None => vec![LuaValue::Nil],
+    })
+}
 
 fn format(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     let mut format_string = require_string!(input, "format").clone();
