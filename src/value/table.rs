@@ -55,6 +55,10 @@ impl LuaTable {
         }
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.fields.is_empty() || self.fields.values().all(|v| v == &LuaValue::Nil)
+    }
+
     pub fn insert(&mut self, key: LuaValue, value: LuaValue) {
         match &key {
             LuaValue::Number(LuaNumber::Integer(i)) => {
