@@ -329,6 +329,9 @@ pub(crate) fn require(vm: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<L
         "math" => {
             return Ok(vec![MATH.clone()]);
         }
+        "os" => {
+            return Ok(vec![OS.clone()]);
+        }
         "string" => {
             return Ok(vec![STRING.clone()]);
         }

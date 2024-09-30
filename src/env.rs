@@ -76,6 +76,7 @@ pub fn create_global_env() -> LuaTable {
     env.insert("io".into(), stdlib::io::IO.clone());
     env.insert("math".into(), stdlib::math::MATH.clone());
     env.insert("package".into(), stdlib::package::PACKAGE.clone());
+    env.insert("os".into(), stdlib::os::OS.clone());
     env.insert("string".into(), stdlib::string::STRING.clone());
     env.insert("table".into(), stdlib::table::TABLE.clone());
 
