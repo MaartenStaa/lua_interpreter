@@ -466,7 +466,7 @@ impl<'source> VM<'source> {
                     let collect_varargs = matches!(instr, Instruction::AlignVararg);
                     let align_amount = instr_param!();
 
-                    assert!(self.stack.len() > 0, "cannot align an empty stack");
+                    assert!(!self.stack.is_empty(), "cannot align an empty stack");
 
                     // Find either the latest marker or the start of the stack
                     // from the current call frame
