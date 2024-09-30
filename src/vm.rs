@@ -345,6 +345,15 @@ impl<'source> VM<'source> {
         );
 
         let result = self.run_inner();
+        if result.is_err() {
+            // In this case we wouldn't hit a `return` instruction, so we need to clean up the
+            // call stack manually
+            let popped_frame = self.pop_call_frame();
+            for _ in 0..self.stack.len() - popped_frame.frame_pointer {
+                self.pop();
+            }
+        }
+
         self.chunks[value.chunk].ip = old_ip;
         result
     }
@@ -1078,13 +1087,22 @@ impl<'source> VM<'source> {
                                 args.push(self.pop());
                             }
                             args.reverse();
-                            for value in f(self, args)? {
-                                self.push(value);
-                                if is_single_return {
-                                    break;
-                                }
-                            }
+
+                            let result = f(self, args);
                             self.pop_call_frame();
+
+                            match result {
+                                Ok(values) => {
+                                    for value in values {
+                                        self.push(value);
+                                        if is_single_return {
+                                            break;
+                                        }
+                                    }
+                                }
+                                Err(e) => return Err(e),
+                            }
+
                             2
                         }
                         _ => {
