@@ -400,6 +400,14 @@ impl<'path, 'source> Lexer<'path, 'source> {
         let mut string = Vec::with_capacity(possible_length);
 
         let mut chars = self.rest.chars().peekable();
+        // Long-form string: newline immediately after the starting character is ignored
+        if long_form.is_some() {
+            if let Some('\n') = chars.peek() {
+                chars.next();
+                self.position += 1;
+            }
+        }
+
         let mut escape = false;
         while let Some(c) = chars.next() {
             if escape {
@@ -636,6 +644,20 @@ impl<'path, 'source> Lexer<'path, 'source> {
                         )],
                         "unexpected newline in string"
                     )));
+                }
+                '\r' if long_form.is_some() => {
+                    if let Some('\n') = chars.peek() {
+                        chars.next();
+                        self.position += 1;
+                    }
+                    string.push(b'\n');
+                }
+                '\n' if long_form.is_some() => {
+                    if let Some('\r') = chars.peek() {
+                        chars.next();
+                        self.position += 1;
+                    }
+                    string.push(b'\n');
                 }
                 _ => string.push(c as u8),
             }
@@ -1002,6 +1024,28 @@ mod tests {
             let mut lexer = Lexer::new(Some(Path::new("test.lua")), &input);
             let token = lexer.next().unwrap().unwrap();
             assert_eq!(token.kind, TokenKind::Integer(3));
+        }
+    }
+
+    #[test]
+    fn longform_strings_newlines() {
+        let expected = b"foo\nbar";
+
+        for input in [
+            // carriage return is converted to newline
+            "[[foo\rbar]]",
+            // newline is preserved
+            "[[foo\nbar]]",
+            // carriage return + newline is converted to newline
+            "[[foo\r\nbar]]",
+            // newline + carriage return is converted to newline
+            "[[foo\n\rbar]]",
+            // newline immediately after opening delimiter is ignored
+            "[[\nfoo\nbar]]",
+        ] {
+            let mut lexer = Lexer::new(Some(Path::new("test.lua")), input);
+            let token = lexer.next().unwrap().unwrap();
+            assert_eq!(token.kind, TokenKind::String(expected.to_vec()));
         }
     }
 }
