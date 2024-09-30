@@ -316,7 +316,7 @@ macro_rules! require_userdata {
     };
     (write, $values:expr, $name:expr, $index:expr, $userdata:ident, $tt:stmt) => {
         match $values.get($index) {
-            Some(LuaValue::Object(o)) => match &*o.write().unwrap() {
+            Some(LuaValue::Object(o)) => match &mut *o.write().unwrap() {
                 LuaObject::UserData($userdata) => {
                    $tt
                 },
