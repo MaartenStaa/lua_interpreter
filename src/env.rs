@@ -12,6 +12,10 @@ pub fn create_global_env() -> LuaTable {
         LuaObject::NativeFunction("assert", stdlib::globals::assert).into(),
     );
     env.insert(
+        "error".into(),
+        LuaObject::NativeFunction("error", stdlib::globals::error).into(),
+    );
+    env.insert(
         "getmetatable".into(),
         LuaObject::NativeFunction("getmetatable", stdlib::globals::getmetatable).into(),
     );

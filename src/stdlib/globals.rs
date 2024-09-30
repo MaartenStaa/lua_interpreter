@@ -9,7 +9,7 @@ use std::{
 
 use crate::{
     compiler::Compiler,
-    macros::{assert_string, assert_table, require_table},
+    macros::{assert_string, assert_table, require_string, require_table},
     stdlib::package,
     value::{metatables::METATABLE_KEY, LuaClosure, LuaNumber, LuaObject, LuaValue},
     vm::VM,
@@ -40,6 +40,18 @@ pub(crate) fn assert(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<Lua
     }
 
     Ok(input)
+}
+
+pub(crate) fn error(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+    // TODO: You can call error with no arguments, in which case the error value is nil. How can we
+    // do that with miette?
+    let message = require_string!(input, "error");
+    if input.len() > 1 {
+        // TODO: Second argument is level, which specifies the offset in the call stack at which to
+        // raise the error.
+    }
+
+    Err(miette!("{}", String::from_utf8_lossy(message)))
 }
 
 pub(crate) fn getmetatable(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
