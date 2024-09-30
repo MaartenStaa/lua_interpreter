@@ -27,28 +27,44 @@ pub static STRING: LazyLock<LuaValue> = LazyLock::new(|| {
 fn format(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     let mut format_string = require_string!(input, "format").clone();
 
-    for (i, v) in input.iter().skip(1).enumerate() {
-        let Some((index, format)) = format_string.iter().enumerate().find_map(|(i, c)| {
-            if *c == b'%' {
-                match format_string.get(i + 1) {
-                    Some(b's') => Some((i, "s")),
-                    Some(b'%') => None,
-                    Some(f) => todo!("format specifier: {:?}", f),
-                    None => None,
-                }
-            } else {
-                None
-            }
-        }) else {
+    let mut format_from = 0;
+    for v in input.iter().skip(1) {
+        let Some((index, format)) =
+            format_string
+                .iter()
+                .enumerate()
+                .skip(format_from)
+                .find_map(|(i, c)| {
+                    if *c == b'%' {
+                        match format_string.get(i + 1) {
+                            Some(b'%') | None => None,
+                            Some(f) => Some((i, *f as char)),
+                        }
+                    } else {
+                        None
+                    }
+                })
+        else {
             break;
         };
 
         let formatted_value = match format {
-            "s" => v.to_string(),
-            _ => unreachable!(),
+            's' => v.to_string(),
+            'd' => match v {
+                LuaValue::Number(n) => n.to_string(),
+                _ => {
+                    return Err(miette::miette!(
+                        "bad argument #{} to 'format' (number expected, got {type_name})",
+                        input.iter().position(|x| x == v).unwrap() + 1,
+                        type_name = v.type_name()
+                    ));
+                }
+            },
+            other => return Err(miette::miette!("unsupported format specifier: {:?}", other)),
         };
 
         format_string.splice(index..index + 2, formatted_value.bytes());
+        format_from = index + formatted_value.len();
     }
 
     Ok(vec![LuaValue::String(format_string)])
