@@ -52,6 +52,12 @@ impl From<f64> for LuaValue {
     }
 }
 
+impl From<LuaNumber> for LuaValue {
+    fn from(number: LuaNumber) -> Self {
+        LuaValue::Number(number)
+    }
+}
+
 impl From<LuaTable> for LuaValue {
     fn from(table: LuaTable) -> Self {
         LuaValue::Object(Arc::new(RwLock::new(LuaObject::Table(table))))

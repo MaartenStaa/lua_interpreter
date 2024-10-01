@@ -202,132 +202,6 @@ impl PartialOrd for ast::Number {
     }
 }
 
-impl ops::Add for LuaValue {
-    type Output = miette::Result<Self>;
-
-    fn add(self, other: Self) -> miette::Result<Self> {
-        match (&self, &other) {
-            (LuaValue::Number(a), LuaValue::Number(b)) => Ok(LuaValue::Number(a + b)),
-            (LuaValue::String(_), _) | (_, LuaValue::String(_)) => {
-                let left_type = self.type_name();
-                let right_type = other.type_name();
-
-                Err(miette!(
-                    help = "did you mean to use '..' instead of '+'?",
-                    "cannot add a '{}' with a '{}'",
-                    left_type,
-                    right_type
-                ))
-            }
-            _ => {
-                let left_type = self.type_name();
-                let right_type = other.type_name();
-
-                Err(miette!(
-                    "cannot add a '{}' with a '{}'",
-                    left_type,
-                    right_type
-                ))
-            }
-        }
-    }
-}
-
-impl ops::Sub for LuaValue {
-    type Output = miette::Result<Self>;
-
-    fn sub(self, other: Self) -> miette::Result<Self> {
-        match (&self, &other) {
-            (LuaValue::Number(a), LuaValue::Number(b)) => Ok(LuaValue::Number(a - b)),
-            _ => {
-                let left_type = self.type_name();
-                let right_type = other.type_name();
-
-                Err(miette!(
-                    "cannot subtract a '{}' with a '{}'",
-                    left_type,
-                    right_type
-                ))
-            }
-        }
-    }
-}
-
-impl ops::Mul for LuaValue {
-    type Output = miette::Result<Self>;
-
-    fn mul(self, other: Self) -> miette::Result<Self> {
-        match (&self, &other) {
-            (LuaValue::Number(a), LuaValue::Number(b)) => Ok(LuaValue::Number(a * b)),
-            _ => {
-                let left_type = self.type_name();
-                let right_type = other.type_name();
-
-                Err(miette!(
-                    "cannot multiply a '{}' with a '{}'",
-                    left_type,
-                    right_type
-                ))
-            }
-        }
-    }
-}
-
-impl ops::Div for LuaValue {
-    type Output = miette::Result<Self>;
-
-    fn div(self, other: Self) -> miette::Result<Self> {
-        match (&self, &other) {
-            (LuaValue::Number(a), LuaValue::Number(b)) => Ok(LuaValue::Number(a / b)),
-            _ => {
-                let left_type = self.type_name();
-                let right_type = other.type_name();
-
-                Err(miette!(
-                    "cannot divide a '{}' with a '{}'",
-                    left_type,
-                    right_type
-                ))
-            }
-        }
-    }
-}
-
-impl ops::Rem for LuaValue {
-    type Output = miette::Result<Self>;
-
-    fn rem(self, other: Self) -> miette::Result<Self> {
-        match (&self, &other) {
-            (LuaValue::Number(a), LuaValue::Number(b)) => Ok(LuaValue::Number(a % b)),
-            _ => {
-                let left_type = self.type_name();
-                let right_type = other.type_name();
-
-                Err(miette!(
-                    "cannot modulo a '{}' with a '{}'",
-                    left_type,
-                    right_type
-                ))
-            }
-        }
-    }
-}
-
-impl ops::Neg for LuaValue {
-    type Output = miette::Result<Self>;
-
-    fn neg(self) -> miette::Result<Self> {
-        match &self {
-            LuaValue::Number(a) => Ok(LuaValue::Number(-a)),
-            _ => {
-                let type_name = self.type_name();
-
-                Err(miette!("cannot negate a '{}'", type_name))
-            }
-        }
-    }
-}
-
 impl ops::Not for LuaValue {
     type Output = bool;
 
@@ -659,6 +533,17 @@ impl ops::Div for &LuaNumber {
             (LuaNumber::Float(a), LuaNumber::Float(b)) => LuaNumber::Float(a / b),
             (LuaNumber::Integer(a), LuaNumber::Float(b)) => LuaNumber::Float(*a as f64 / b),
             (LuaNumber::Float(a), LuaNumber::Integer(b)) => LuaNumber::Float(a / *b as f64),
+        }
+    }
+}
+
+impl ops::Neg for LuaNumber {
+    type Output = LuaNumber;
+
+    fn neg(self) -> LuaNumber {
+        match self {
+            LuaNumber::Integer(a) => LuaNumber::Integer(-a),
+            LuaNumber::Float(a) => LuaNumber::Float(-a),
         }
     }
 }

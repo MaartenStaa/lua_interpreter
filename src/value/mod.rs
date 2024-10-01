@@ -5,6 +5,7 @@ mod conversions;
 pub(crate) mod metatables;
 mod number;
 mod object;
+mod string;
 mod table;
 mod upvalue;
 mod userdata;

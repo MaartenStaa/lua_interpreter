@@ -15,7 +15,7 @@ use crate::{
     stdlib,
     token::Span,
     value::{
-        metatables::{CALL_KEY, CLOSE_KEY},
+        metatables::{self, CALL_KEY, CLOSE_KEY},
         LuaClosure, LuaConst, LuaNumber, LuaObject, LuaTable, LuaValue, LuaVariableAttribute,
         UpValue,
     },
@@ -538,37 +538,79 @@ impl<'source> VM<'source> {
                 Instruction::Add => {
                     let b = self.pop();
                     let a = self.pop();
-                    self.push((a + b)?);
+                    let result = match (a, b) {
+                        (LuaValue::Number(a), LuaValue::Number(b)) => (a + b).into(),
+                        (a, b) => {
+                            metatables::handle(self, &metatables::ADD_KEY, "add", vec![a, b])?
+                                .remove(0)
+                        }
+                    };
+                    self.push(result);
                     1
                 }
                 Instruction::Sub => {
                     let b = self.pop();
                     let a = self.pop();
-                    self.push((a - b)?);
+                    let result = match (a, b) {
+                        (LuaValue::Number(a), LuaValue::Number(b)) => (a - b).into(),
+                        (a, b) => {
+                            metatables::handle(self, &metatables::SUB_KEY, "subtract", vec![a, b])?
+                                .remove(0)
+                        }
+                    };
+                    self.push(result);
                     1
                 }
                 Instruction::Mul => {
                     let b = self.pop();
                     let a = self.pop();
-                    self.push((a * b)?);
+                    let result = match (a, b) {
+                        (LuaValue::Number(a), LuaValue::Number(b)) => (a * b).into(),
+                        (a, b) => {
+                            metatables::handle(self, &metatables::MUL_KEY, "multiply", vec![a, b])?
+                                .remove(0)
+                        }
+                    };
+                    self.push(result);
                     1
                 }
                 Instruction::Div => {
                     let b = self.pop();
                     let a = self.pop();
-                    self.push((a / b)?);
+                    let result = match (a, b) {
+                        (LuaValue::Number(a), LuaValue::Number(b)) => (a / b).into(),
+                        (a, b) => {
+                            metatables::handle(self, &metatables::DIV_KEY, "divide", vec![a, b])?
+                                .remove(0)
+                        }
+                    };
+                    self.push(result);
                     1
                 }
                 Instruction::Mod => {
                     let b = self.pop();
                     let a = self.pop();
-                    self.push((a % b)?);
+                    let result = match (a, b) {
+                        (LuaValue::Number(a), LuaValue::Number(b)) => (a % b).into(),
+                        (a, b) => {
+                            metatables::handle(self, &metatables::MOD_KEY, "modulo", vec![a, b])?
+                                .remove(0)
+                        }
+                    };
+                    self.push(result);
                     1
                 }
                 Instruction::Pow => {
                     let b = self.pop();
                     let a = self.pop();
-                    self.push(a.pow(b)?);
+                    let result = match (a, b) {
+                        (LuaValue::Number(a), LuaValue::Number(b)) => (a.pow(&b)).into(),
+                        (a, b) => {
+                            metatables::handle(self, &metatables::POW_KEY, "power", vec![a, b])?
+                                .remove(0)
+                        }
+                    };
+                    self.push(result);
                     1
                 }
                 Instruction::IDiv => {
@@ -683,7 +725,12 @@ impl<'source> VM<'source> {
                 // Unary operations
                 Instruction::Neg => {
                     let a = self.pop();
-                    self.push((-a)?);
+                    let result = match a {
+                        LuaValue::Number(n) => (-n).into(),
+                        a => metatables::handle(self, &metatables::UNM_KEY, "negate", vec![a])?
+                            .remove(0),
+                    };
+                    self.push(result);
                     1
                 }
                 Instruction::Not => {
