@@ -23,6 +23,7 @@ pub static STRING: LazyLock<LuaValue> = LazyLock::new(|| {
         "reverse".into(),
         LuaObject::NativeFunction("reverse", reverse).into(),
     );
+    string.insert("sub".into(), LuaObject::NativeFunction("sub", sub).into());
 
     string.into()
 });
@@ -154,4 +155,38 @@ fn reverse(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     let mut reversed = input.clone();
     reversed.reverse();
     Ok(vec![LuaValue::String(reversed)])
+}
+
+fn sub(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+    let s = require_string!(input, "sub");
+    let i = require_number!(input, "sub", 1).integer_repr()?;
+    let j = match input.get(2) {
+        Some(LuaValue::Number(LuaNumber::Integer(i))) => *i,
+        Some(LuaValue::Number(f @ LuaNumber::Float(_))) => f.integer_repr()?,
+        Some(v) => {
+            return Err(miette::miette!(
+                "bad argument #3 to 'sub' (number expected, got {type_name})",
+                type_name = v.type_name()
+            ));
+        }
+        None => -1,
+    };
+
+    let i = match i.cmp(&0) {
+        Ordering::Less => (s.len() as i64 + i + 1) as usize,
+        Ordering::Greater => i as usize,
+        Ordering::Equal => 1,
+    };
+    let j = match j.cmp(&0) {
+        Ordering::Less => (s.len() as i64 + j + 1) as usize,
+        Ordering::Greater if j >= s.len() as i64 => s.len(),
+        Ordering::Greater => j as usize,
+        Ordering::Equal => return Ok(vec![LuaValue::String(vec![])]),
+    };
+
+    if i > j {
+        return Ok(vec![LuaValue::String(vec![])]);
+    }
+
+    Ok(vec![LuaValue::String(s[i - 1..=j - 1].to_vec())])
 }
