@@ -94,7 +94,7 @@ fn iter(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     };
 
     let i = i.integer_repr()?;
-    let i = (i + 1).into();
+    let i = (i.overflowing_add(1).0).into();
 
     let v = match a {
         LuaValue::Object(o) => match &*o.read().unwrap() {
