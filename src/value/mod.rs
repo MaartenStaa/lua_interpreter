@@ -64,7 +64,7 @@ impl PartialEq for LuaValue {
             (LuaValue::Boolean(a), LuaValue::Boolean(b)) => a == b,
             (LuaValue::Number(a), LuaValue::Number(b)) => a == b,
             (LuaValue::String(a), LuaValue::String(b)) => a == b,
-            (LuaValue::Object(a), LuaValue::Object(b)) => Arc::ptr_eq(a, b),
+            (LuaValue::Object(a), LuaValue::Object(b)) => *a.read().unwrap() == *b.read().unwrap(),
             (LuaValue::UpValue(a), LuaValue::UpValue(b)) => Arc::ptr_eq(a, b),
             _ => false,
         }
