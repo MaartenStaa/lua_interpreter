@@ -55,11 +55,27 @@ impl LuaTable {
         }
     }
 
+    pub fn get(&self, key: &LuaValue) -> Option<&LuaValue> {
+        if let LuaValue::Number(float @ LuaNumber::Float(_)) = key {
+            if let Ok(i) = float.integer_repr() {
+                return self.fields.get(&LuaValue::Number(LuaNumber::Integer(i)));
+            }
+        }
+
+        self.fields.get(key)
+    }
+
     pub fn is_empty(&self) -> bool {
         self.fields.is_empty() || self.fields.values().all(|v| v == &LuaValue::Nil)
     }
 
-    pub fn insert(&mut self, key: LuaValue, value: LuaValue) {
+    pub fn insert(&mut self, mut key: LuaValue, value: LuaValue) {
+        if let LuaValue::Number(float @ LuaNumber::Float(_)) = &key {
+            if let Ok(i) = float.integer_repr() {
+                key = LuaValue::Number(LuaNumber::Integer(i));
+            }
+        }
+
         match &key {
             LuaValue::Number(LuaNumber::Integer(i)) => {
                 if *i == self.last_number_key + 1 {
@@ -76,6 +92,27 @@ impl LuaTable {
         }
 
         self.fields.insert(key, value);
+    }
+
+    pub fn remove(&mut self, key: &LuaValue) {
+        if let LuaValue::Number(float @ LuaNumber::Float(_)) = key {
+            if let Ok(i) = float.integer_repr() {
+                if i == self.last_number_key {
+                    self.last_number_key -= 1;
+                }
+
+                self.remove(&LuaValue::Number(LuaNumber::Integer(i)));
+                return;
+            }
+        }
+
+        if let LuaValue::Number(LuaNumber::Integer(i)) = key {
+            if *i == self.last_number_key {
+                self.last_number_key -= 1;
+            }
+        }
+
+        self.fields.remove(key);
     }
 
     pub fn append(&mut self, value: LuaValue) {
