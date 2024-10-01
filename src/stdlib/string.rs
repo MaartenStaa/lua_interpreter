@@ -65,8 +65,10 @@ fn find(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     Ok(match start {
         Some(start) => {
             vec![
-                LuaValue::Number(LuaNumber::Integer(start as i64 + 1)),
-                LuaValue::Number(LuaNumber::Integer(start as i64 + pattern.len() as i64)),
+                LuaValue::Number(LuaNumber::Integer(start as i64 + init)),
+                LuaValue::Number(LuaNumber::Integer(
+                    start as i64 + init - 1 + pattern.len() as i64,
+                )),
             ]
         }
         None => vec![LuaValue::Nil],
