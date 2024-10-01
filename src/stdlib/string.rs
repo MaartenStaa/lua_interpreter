@@ -30,7 +30,7 @@ pub static STRING: LazyLock<LuaValue> = LazyLock::new(|| {
 fn find(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     let s = require_string!(input, "find");
     let pattern = require_string!(input, "find", 1);
-    let init = match input.get(2) {
+    let mut init = match input.get(2) {
         Some(LuaValue::Number(LuaNumber::Integer(i))) => *i,
         Some(LuaValue::Number(f @ LuaNumber::Float(_))) => f.integer_repr()?,
         Some(v) => {
@@ -42,10 +42,21 @@ fn find(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
         None => 1,
     };
 
+    if init == 0 {
+        init = 1;
+    }
+
+    if pattern.is_empty() {
+        return Ok(vec![
+            LuaValue::Number(LuaNumber::Integer(init)),
+            LuaValue::Number(LuaNumber::Integer(init - 1)),
+        ]);
+    }
+
     let s = match init.cmp(&0) {
         Ordering::Less => &s[(s.len() as i64 + init) as usize..],
         Ordering::Greater => &s[(init - 1) as usize..],
-        Ordering::Equal => s,
+        Ordering::Equal => unreachable!(),
     };
 
     // TODO: Handle actual patterns
