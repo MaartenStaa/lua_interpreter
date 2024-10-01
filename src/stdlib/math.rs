@@ -286,8 +286,33 @@ fn min(_: &mut VM, values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     ))])
 }
 
-fn modf(_: &mut VM, _: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
-    todo!("implement modf; has two return values")
+fn modf(_: &mut VM, values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+    let value = require_number!(values, "modf");
+
+    Ok(match value {
+        LuaNumber::Integer(i) => vec![
+            LuaValue::Number(LuaNumber::Integer(*i)),
+            LuaValue::Number(LuaNumber::Float(0.0)),
+        ],
+        LuaNumber::Float(f) => {
+            let i = f.trunc();
+            let f = f.fract();
+
+            vec![
+                // return an integer when the result fits in the range of an integer, or a float otherwise
+                if i >= i64::MIN as f64 && i <= i64::MAX as f64 {
+                    LuaValue::Number(LuaNumber::Integer(i as i64))
+                } else {
+                    LuaValue::Number(LuaNumber::Float(i))
+                },
+                LuaValue::Number(LuaNumber::Float(if f.is_nan() && !i.is_nan() {
+                    0.0
+                } else {
+                    f
+                })),
+            ]
+        }
+    })
 }
 
 fn rad(_: &mut VM, values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
