@@ -74,13 +74,11 @@ fn create_file(handle: FileHandle) -> LuaValue {
 fn file_index(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     require_userdata!(input, "file:__index", 0, userdata, {
         require_userdata_type!(userdata, "file:__index", 0, File, file, _metatable, {
-            let result = file
+            Ok(vec![file
                 .methods
                 .get(input.get(1).unwrap_or(&LuaValue::Nil))
                 .cloned()
-                .unwrap_or(LuaValue::Nil);
-            dbg!(&result);
-            Ok(vec![result])
+                .unwrap_or(LuaValue::Nil)])
         })
     })
 }
