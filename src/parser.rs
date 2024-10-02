@@ -7,12 +7,12 @@ use miette::{miette, Context, LabeledSpan};
 
 pub struct Parser<'path, 'source> {
     pub filename: Option<&'path Path>,
-    source: &'source str,
+    source: &'source [u8],
     lexer: Lexer<'path, 'source>,
 }
 
 impl<'path, 'source> Parser<'path, 'source> {
-    pub fn new(filename: Option<&'path Path>, source: &'source str) -> Self {
+    pub fn new(filename: Option<&'path Path>, source: &'source [u8]) -> Self {
         Self {
             filename,
             source,
@@ -41,13 +41,13 @@ impl<'path, 'source> Parser<'path, 'source> {
     }
 
     fn with_source_code(&self, report: miette::Report) -> miette::Report {
+        let source = self.source.to_vec();
         if let Some(filename) = self.filename {
             return report.with_source_code(
-                miette::NamedSource::new(filename.to_string_lossy(), self.source.to_string())
-                    .with_language("lua"),
+                miette::NamedSource::new(filename.to_string_lossy(), source).with_language("lua"),
             );
         } else {
-            report.with_source_code(self.source.to_string())
+            report.with_source_code(source)
         }
     }
 
@@ -343,7 +343,7 @@ impl<'path, 'source> Parser<'path, 'source> {
                                         ),
                                         Span::new(name_span.start, method_name_span.end),
                                     );
-                                    implicit_self_parameter = Some(Name("self".to_string()));
+                                    implicit_self_parameter = Some(Name(b"self".to_vec()));
                                     break;
                                 }
                                 _ => break,
@@ -433,7 +433,12 @@ impl<'path, 'source> Parser<'path, 'source> {
                 .wrap_err("in local function declaration")?;
             let function_def = self
                 .parse_function_body(start, None, Some(name.node.0.clone()))
-                .wrap_err_with(|| format!("in local {} function declaration", name.node.0))?;
+                .wrap_err_with(|| {
+                    format!(
+                        "in local {} function declaration",
+                        String::from_utf8_lossy(&name.node.0)
+                    )
+                })?;
 
             let name_span = name.span;
             let function_def_span = function_def.span;
@@ -484,8 +489,8 @@ impl<'path, 'source> Parser<'path, 'source> {
 
                         let attr = TokenTree::new(
                             match attr_str {
-                                "const" => LocalAttribute::Const,
-                                "close" => LocalAttribute::Close,
+                                b"const" => LocalAttribute::Const,
+                                b"close" => LocalAttribute::Close,
                                 _ => {
                                     return Err(miette!(
                                         labels = vec![attr_token
@@ -802,7 +807,7 @@ impl<'path, 'source> Parser<'path, 'source> {
                 kind: TokenKind::Identifier(ident),
                 span,
             }) => {
-                let name = Name(ident.to_string());
+                let name = Name(ident.to_vec());
                 TokenTree::new(
                     PrefixExpression::Variable(TokenTree::new(
                         Variable::Name(TokenTree::new(name, span)),
@@ -1461,7 +1466,7 @@ impl<'path, 'source> Parser<'path, 'source> {
         &mut self,
         start_position: usize,
         implicit_self_parameter: Option<Name>,
-        name: Option<String>,
+        name: Option<Vec<u8>>,
     ) -> miette::Result<TokenTree<FunctionDef>> {
         let open_paren = self.lexer.expect(|k| k == &TokenKind::OpenParen, "(")?;
 
@@ -1550,7 +1555,7 @@ impl<'path, 'source> Parser<'path, 'source> {
             _ => unreachable!(),
         };
 
-        Ok(TokenTree::new(Name(name.to_string()), token.span))
+        Ok(TokenTree::new(Name(name.to_vec()), token.span))
     }
 }
 

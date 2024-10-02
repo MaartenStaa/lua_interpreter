@@ -43,7 +43,7 @@ fn main() {
         print_bytecode,
     } = Input::parse();
 
-    let source = std::fs::read_to_string(&filename).expect("failed to read source code file");
+    let source = std::fs::read(&filename).expect("failed to read source code file");
 
     if debug_lexer {
         let lexer = Lexer::new(Some(&filename), &source);
@@ -99,7 +99,7 @@ fn main() {
     vm.run();
 }
 
-fn run_debug_lexer(lexer: Lexer, filename: &Path, source: &str) {
+fn run_debug_lexer(lexer: Lexer, filename: &Path, source: &[u8]) {
     let filename = filename
         .file_name()
         .map(|f| f.to_string_lossy().to_string())

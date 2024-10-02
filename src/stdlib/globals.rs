@@ -177,7 +177,6 @@ pub(crate) fn load(vm: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaV
         }
     };
 
-    let source = String::from_utf8_lossy(&source).to_string();
     let name = match input.get(1) {
         Some(LuaValue::String(s)) => String::from_utf8_lossy(s).to_string(),
         Some(LuaValue::Nil) | None => "chunk".to_string(),
@@ -214,7 +213,7 @@ pub(crate) fn load(vm: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaV
     // Return a function that runs the chunk
     Ok(vec![LuaValue::Object(Arc::new(RwLock::new(
         LuaObject::Closure(LuaClosure {
-            name: Some(name),
+            name: Some(name.into_bytes().to_vec()),
             chunk: chunk_index,
             ip: 0,
             upvalues: vec![],
@@ -414,8 +413,7 @@ pub(crate) fn require(vm: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<L
             })
         });
 
-        let source =
-            fs::read_to_string(path).map_err(|_| miette!("unable to read module {name_str}",))?;
+        let source = fs::read(path).map_err(|_| miette!("unable to read module {name_str}",))?;
 
         let compiler = Compiler::new(
             vm,

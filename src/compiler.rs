@@ -22,7 +22,7 @@ use crate::{
     vm::{Chunk, ConstIndex, JumpAddr, VM},
 };
 
-const VARARG_LOCAL_NAME: &str = "...";
+const VARARG_LOCAL_NAME: &[u8] = b"...";
 
 #[derive(Debug)]
 struct Goto {
@@ -43,7 +43,7 @@ struct Label {
 
 #[derive(Debug, Clone)]
 struct Local {
-    name: String,
+    name: Vec<u8>,
     depth: u8,
     span: Option<Span>,
 }
@@ -75,15 +75,15 @@ struct BlockResult {
 
 #[derive(Debug)]
 struct NewLocalsAfterGoto {
-    goto: (String, Span),
-    local: (String, Option<Span>),
+    goto: (Vec<u8>, Span),
+    local: (Vec<u8>, Option<Span>),
 }
 
 #[derive(Debug)]
 struct Frame {
     locals: Vec<Local>,
-    gotos: HashMap<String, Vec<Goto>>,
-    labels: HashMap<String, Label>,
+    gotos: HashMap<Vec<u8>, Vec<Goto>>,
+    labels: HashMap<Vec<u8>, Label>,
     upvalues: Vec<Upvalue>,
     scope_depth: u8,
     scope_id_counter: usize,
@@ -107,7 +107,7 @@ impl Frame {
         *self.scope_ids.last().expect("scope_ids is not empty")
     }
 
-    fn resolve_local(&self, name: &str) -> Option<u8> {
+    fn resolve_local(&self, name: &[u8]) -> Option<u8> {
         self.locals.iter().enumerate().rev().find_map(|(i, local)| {
             if local.name == name {
                 Some(i as u8)
@@ -160,8 +160,8 @@ impl BlockResult {
             return Err(miette!(
                 labels = labels,
                 "<goto {}> jumps into the scope of local '{}'",
-                new_local.goto.0,
-                new_local.local.0
+                String::from_utf8_lossy(&new_local.goto.0),
+                String::from_utf8_lossy(&new_local.local.0)
             ));
         }
         Ok(())
@@ -185,7 +185,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
         global_env: Option<Arc<RwLock<LuaObject>>>,
         filename: Option<PathBuf>,
         chunk_name: String,
-        source: Cow<'source, str>,
+        source: Cow<'source, [u8]>,
     ) -> Self {
         Self {
             chunk: Chunk::new(
@@ -434,8 +434,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                         }
                         Variable::Field(target, name) => {
                             // Same story as above, but with a string key
-                            let const_index =
-                                self.get_const_index(LuaConst::String(name.node.0.into_bytes()));
+                            let const_index = self.get_const_index(LuaConst::String(name.node.0));
                             self.chunk
                                 .push_instruction(Instruction::LoadConst, Some(span));
                             self.chunk.push_const_index(const_index);
@@ -681,12 +680,12 @@ impl<'a, 'source> Compiler<'a, 'source> {
                         // variable names that are invalid in Lua to avoid conflicts with user
                         // variables.
                         self.compile_expression(limit, ExpressionResult::Single)?;
-                        let limit_local = self.add_local("#limit".to_string(), None);
+                        let limit_local = self.add_local(b"#limit".to_vec(), None);
 
                         let step_local = if let Some(step) = step {
                             let step_span = step.span;
                             self.compile_expression(step, ExpressionResult::Single)?;
-                            let step_local = self.add_local("#step".to_string(), None);
+                            let step_local = self.add_local(b"#step".to_vec(), None);
 
                             // Raise an error if the step value is equal to zero
                             self.chunk.push_instruction(Instruction::GetLocal, None);
@@ -707,7 +706,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                             step_local
                         } else {
                             self.compile_load_literal(Literal::Number(Number::Integer(1)), None);
-                            self.add_local("#step".to_string(), None)
+                            self.add_local(b"#step".to_vec(), None)
                         };
 
                         // Create a "variable" to remember whether this is a decreasing loop.
@@ -715,7 +714,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                         self.chunk.push_instruction(step_local, None);
                         self.compile_load_literal(Literal::Number(Number::Integer(0)), None);
                         self.chunk.push_instruction(Instruction::Lt, None);
-                        let decreasing_local = self.add_local("#decreasing".to_string(), None);
+                        let decreasing_local = self.add_local(b"#decreasing".to_vec(), None);
 
                         // Label to jump back to the start of the loop
                         let condition_addr = self.chunk.get_current_addr();
@@ -781,12 +780,12 @@ impl<'a, 'source> Compiler<'a, 'source> {
 
                         // Save the result as locals: the iterator function, the state, the initial
                         // value for the control variable (which is the first name).
-                        let iterator_local = self.add_local("#iterator".to_string(), None);
-                        let state_local = self.add_local("#state".to_string(), None);
+                        let iterator_local = self.add_local(b"#iterator".to_vec(), None);
+                        let state_local = self.add_local(b"#state".to_vec(), None);
                         // NOTE: The syntax ensures there is at least one name
                         let control_local =
                             self.add_local(names[0].node.0.clone(), Some(names[0].span));
-                        let closing_local = self.add_local("#closing".to_string(), None);
+                        let closing_local = self.add_local(b"#closing".to_vec(), None);
                         self.chunk.push_instruction(Instruction::SetLocalAttr, None);
                         self.chunk.push_instruction(closing_local, None);
                         self.chunk
@@ -945,7 +944,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                     return Err(miette!(
                         labels = vec![label.span.labeled("here")],
                         "label '{}' already defined",
-                        label.node.0
+                        String::from_utf8_lossy(&label.node.0)
                     ));
                 }
 
@@ -968,7 +967,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                                         label.span.labeled("this label")
                                     ],
                                     "cannot goto label '{}' in a narrower scope",
-                                    label.node.0
+                                    String::from_utf8_lossy(&label.node.0)
                                 ));
                             }
 
@@ -1046,7 +1045,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
             self.chunk.push_instruction(1, None);
 
             let method_name_const_index =
-                self.get_const_index(LuaConst::String(method_name.node.0.into_bytes()));
+                self.get_const_index(LuaConst::String(method_name.node.0));
             self.chunk
                 .push_instruction(Instruction::LoadConst, Some(function_call.span));
             self.chunk.push_const_index(method_name_const_index);
@@ -1107,7 +1106,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
 
         if function_def.node.has_varargs {
             // TODO: There actually should be a span for varargs, right?
-            self.add_local(VARARG_LOCAL_NAME.to_string(), None);
+            self.add_local(VARARG_LOCAL_NAME.to_vec(), None);
             self.chunk.push_instruction(Instruction::AlignVararg, None);
         } else {
             self.chunk.push_instruction(Instruction::Align, None);
@@ -1266,8 +1265,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                 }
                 Variable::Field(prefix, name) => {
                     self.compile_prefix_expression(*prefix, ExpressionResult::Single)?;
-                    let const_index =
-                        self.get_const_index(LuaConst::String(name.node.0.into_bytes()));
+                    let const_index = self.get_const_index(LuaConst::String(name.node.0));
                     self.chunk
                         .push_instruction(Instruction::LoadConst, Some(prefix_expression.span));
                     self.chunk.push_const_index(const_index);
@@ -1347,8 +1345,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
 
             match field.node {
                 Field::Named(name, value) => {
-                    let const_index =
-                        self.get_const_index(LuaConst::String(name.node.0.into_bytes()));
+                    let const_index = self.get_const_index(LuaConst::String(name.node.0));
                     self.chunk
                         .push_instruction(Instruction::LoadConst, Some(field.span));
                     self.chunk.push_const_index(const_index);
@@ -1486,7 +1483,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                 },
                 Some(name.span),
             );
-            let const_index = self.get_global_name_index(name.node.0.into_bytes());
+            let const_index = self.get_global_name_index(name.node.0);
             self.chunk.push_const_index(const_index);
         }
     }
@@ -1507,7 +1504,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
             return Err(miette!(
                 labels = vec![goto.span.labeled("here")],
                 "label '{}' not found",
-                name
+                String::from_utf8_lossy(name)
             ));
         }
 
@@ -1557,7 +1554,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                             return Err(miette!(
                                 labels = vec![jump.span.labeled("here")],
                                 "label '{}' not found",
-                                name
+                                String::from_utf8_lossy(name)
                             ));
                         }
 
@@ -1622,7 +1619,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
         Ok(())
     }
 
-    fn add_local(&mut self, name: String, span: Option<Span>) -> u8 {
+    fn add_local(&mut self, name: Vec<u8>, span: Option<Span>) -> u8 {
         let current_frame = self.frames.last_mut().unwrap();
         let local = Local {
             name: name.clone(),
@@ -1636,18 +1633,18 @@ impl<'a, 'source> Compiler<'a, 'source> {
         index
     }
 
-    fn resolve_local(&mut self, name: &str) -> Option<u8> {
+    fn resolve_local(&mut self, name: &[u8]) -> Option<u8> {
         self.frames
             .last()
             .expect("there should always be at least one frame")
             .resolve_local(name)
     }
 
-    fn resolve_upvalue(&mut self, name: &str) -> Option<u8> {
+    fn resolve_upvalue(&mut self, name: &[u8]) -> Option<u8> {
         self.resolve_upvalue_inner(name, self.frames.len() - 1)
     }
 
-    fn resolve_upvalue_inner(&mut self, name: &str, frame_index: usize) -> Option<u8> {
+    fn resolve_upvalue_inner(&mut self, name: &[u8], frame_index: usize) -> Option<u8> {
         if frame_index < 1 {
             return None;
         }

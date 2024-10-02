@@ -32,7 +32,7 @@ pub struct Chunk<'source> {
     index: usize,
     filename: Option<PathBuf>,
     chunk_name: String,
-    source: Cow<'source, str>,
+    source: Cow<'source, [u8]>,
     instructions: Vec<u8>,
     instruction_spans: HashMap<usize, Span>,
     ip: usize,
@@ -43,7 +43,7 @@ impl<'source> Chunk<'source> {
         env: Arc<RwLock<LuaObject>>,
         filename: Option<PathBuf>,
         chunk_name: String,
-        source: Cow<'source, str>,
+        source: Cow<'source, [u8]>,
     ) -> Self {
         Self {
             env,
@@ -62,7 +62,7 @@ impl<'source> Chunk<'source> {
         self.filename.as_deref()
     }
 
-    pub fn get_source(&self) -> &str {
+    pub fn get_source(&self) -> &[u8] {
         &self.source
     }
 }
@@ -82,7 +82,7 @@ pub struct VM<'source> {
 
 #[derive(Debug)]
 struct CallFrame {
-    name: Option<String>,
+    name: Option<Vec<u8>>,
     chunk: usize,
     border_frame: bool,
     frame_pointer: usize,
@@ -198,7 +198,7 @@ impl<'source> VM<'source> {
 
     fn push_call_frame(
         &mut self,
-        name: Option<String>,
+        name: Option<Vec<u8>>,
         chunk: usize,
         border_frame: bool,
         frame_pointer: usize,
@@ -276,7 +276,7 @@ impl<'source> VM<'source> {
             {
                 err = err.wrap_err(format!(
                     "#{i} {}",
-                    frame.name.as_deref().unwrap_or("<anonymous>"),
+                    String::from_utf8_lossy(frame.name.as_deref().unwrap_or(b"<anonymous>")),
                 ));
             }
 
@@ -286,15 +286,14 @@ impl<'source> VM<'source> {
                 source,
                 ..
             } = &self.chunks[0];
+            let source = source.to_vec();
             if let Some(filename) = filename {
                 err = err.with_source_code(
-                    NamedSource::new(filename.to_string_lossy(), source.to_string())
-                        .with_language("lua"),
+                    NamedSource::new(filename.to_string_lossy(), source).with_language("lua"),
                 );
             } else {
-                err = err.with_source_code(
-                    NamedSource::new(chunk_name, source.to_string()).with_language("lua"),
-                );
+                err =
+                    err.with_source_code(NamedSource::new(chunk_name, source).with_language("lua"));
             }
 
             eprintln!("{:?}", err);
@@ -309,7 +308,12 @@ impl<'source> VM<'source> {
         initial_chunk_index: usize,
     ) -> miette::Result<Vec<LuaValue>> {
         self.push_call_frame(
-            Some(self.chunks[initial_chunk_index].chunk_name.clone()),
+            Some(
+                self.chunks[initial_chunk_index]
+                    .chunk_name
+                    .as_bytes()
+                    .to_vec(),
+            ),
             initial_chunk_index,
             true,
             0,
@@ -986,10 +990,14 @@ impl<'source> VM<'source> {
                                                         LuaObject::NativeFunction(name, f) => {
                                                             let args = vec![table.clone(), key];
                                                             self.push_call_frame(
-                                                                Some(format!(
-                                                                    "native function '{}'",
-                                                                    name
-                                                                )),
+                                                                Some(
+                                                                    format!(
+                                                                        "native function '{}'",
+                                                                        name
+                                                                    )
+                                                                    .into_bytes()
+                                                                    .to_vec(),
+                                                                ),
                                                                 0,
                                                                 false,
                                                                 self.stack.len() - 2,
@@ -1161,7 +1169,7 @@ impl<'source> VM<'source> {
                         Some(Callable::NativeFunction(name, f)) => {
                             // Push a call frame just for nicer stack traces
                             self.push_call_frame(
-                                Some(format!("native function '{}'", name)),
+                                Some(format!("native function '{}'", name).into_bytes().to_vec()),
                                 0,
                                 false,
                                 self.stack.len() - num_args,

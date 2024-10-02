@@ -40,6 +40,12 @@ impl From<String> for LuaValue {
     }
 }
 
+impl From<Vec<u8>> for LuaValue {
+    fn from(s: Vec<u8>) -> Self {
+        LuaValue::String(s)
+    }
+}
+
 impl From<i64> for LuaValue {
     fn from(i: i64) -> Self {
         LuaValue::Number(LuaNumber::Integer(i))

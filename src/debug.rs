@@ -360,7 +360,7 @@ fn print_const(constant: &LuaConst) {
         LuaConst::Function(LuaFunctionDefinition { name, ip, .. }) => {
             print!(
                 "FUNCTION<{name}:{ip:04}>",
-                name = name.as_deref().unwrap_or("[anonymous]"),
+                name = String::from_utf8_lossy(name.as_deref().unwrap_or(b"[anonymous]")),
             )
         }
         LuaConst::Table(table) => print!("TABLE ({} fields)", table.keys().count()),

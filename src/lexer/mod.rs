@@ -1,18 +1,25 @@
+mod compat;
+pub(crate) mod numbers;
+
 use std::path::Path;
 
-use crate::token::{Span, Token, TokenKind};
 use miette::{miette, Context, LabeledSpan};
+use numbers::{NumberParser, ParsedNumber};
+use subslice::SubsliceExt;
+
+use crate::token::{Span, Token, TokenKind};
+use compat::ByteCharExt;
 
 pub struct Lexer<'path, 'source> {
     filename: Option<&'path Path>,
-    source: &'source str,
-    rest: &'source str,
+    source: &'source [u8],
+    rest: &'source [u8],
     position: usize,
     peeked: Option<Token<'source>>,
 }
 
 impl<'path, 'source> Lexer<'path, 'source> {
-    pub fn new(filename: Option<&'path Path>, source: &'source str) -> Self {
+    pub fn new(filename: Option<&'path Path>, source: &'source [u8]) -> Self {
         Self {
             filename,
             source,
@@ -32,13 +39,13 @@ impl<'path, 'source> Lexer<'path, 'source> {
     }
 
     pub fn with_source_code(&self, report: miette::Report) -> miette::Report {
+        let source = self.source.to_vec();
         if let Some(filename) = self.filename {
             return report.with_source_code(
-                miette::NamedSource::new(filename.to_string_lossy(), self.source.to_string())
-                    .with_language("lua"),
+                miette::NamedSource::new(filename.to_string_lossy(), source).with_language("lua"),
             );
         } else {
-            report.with_source_code(self.source.to_string())
+            report.with_source_code(source)
         }
     }
 }
@@ -56,7 +63,7 @@ enum State<'source> {
 }
 
 struct MultiCharacterOperatorOption<'source> {
-    next: char,
+    next: u8,
     next_matches: TokenKind<'source>,
 }
 
@@ -85,27 +92,27 @@ impl<'path, 'source> Iterator for Lexer<'path, 'source> {
         }
 
         loop {
-            let mut chars = self.rest.chars();
-            let c = chars.next()?;
+            let mut chars = self.rest.iter();
+            let c = *chars.next()?;
             let c_start = self.position;
 
-            if c == '#' && c_start == 0 {
-                let line_break = self.rest.find('\n').unwrap_or(self.rest.len());
+            if c == b'#' && c_start == 0 {
+                let line_break = self.rest.find(b"\n").unwrap_or(self.rest.len());
                 self.position += line_break;
                 self.rest = &self.rest[line_break..];
                 continue;
             }
 
-            self.rest = chars.as_str();
-            self.position += c.len_utf8();
+            self.rest = chars.as_slice();
+            self.position += 1;
 
             let state = match c {
                 // Punctuation
                 // All single-character punctuation tokens
-                '+' => token!(Plus, c_start, self),
-                '-' => {
+                b'+' => token!(Plus, c_start, self),
+                b'-' => {
                     // Handle the special case of "--" comments
-                    if let Some('-') = self.rest.chars().next() {
+                    if let Some(b'-') = self.rest.iter().next() {
                         self.position += 1;
                         self.rest = &self.rest[1..];
 
@@ -115,28 +122,28 @@ impl<'path, 'source> Iterator for Lexer<'path, 'source> {
 
                     token!(Minus, c_start, self)
                 }
-                '*' => token!(Star, c_start, self),
-                '%' => token!(Percent, c_start, self),
-                '^' => token!(Caret, c_start, self),
-                '#' => token!(Hash, c_start, self),
-                '&' => token!(Ampersand, c_start, self),
-                '|' => token!(Pipe, c_start, self),
-                '(' => token!(OpenParen, c_start, self),
-                ')' => token!(CloseParen, c_start, self),
-                '{' => token!(OpenBrace, c_start, self),
-                '}' => token!(CloseBrace, c_start, self),
-                '[' => {
+                b'*' => token!(Star, c_start, self),
+                b'%' => token!(Percent, c_start, self),
+                b'^' => token!(Caret, c_start, self),
+                b'#' => token!(Hash, c_start, self),
+                b'&' => token!(Ampersand, c_start, self),
+                b'|' => token!(Pipe, c_start, self),
+                b'(' => token!(OpenParen, c_start, self),
+                b')' => token!(CloseParen, c_start, self),
+                b'{' => token!(OpenBrace, c_start, self),
+                b'}' => token!(CloseBrace, c_start, self),
+                b'[' => {
                     // This might be a long form string
-                    let mut chars = self.rest.chars().peekable();
+                    let mut chars = self.rest.iter().peekable();
                     match chars.peek() {
-                        Some('=') => {
+                        Some(b'=') => {
                             let mut equals = 0u8;
-                            while let Some('=') = chars.peek() {
+                            while let Some(b'=') = chars.peek() {
                                 chars.next();
                                 equals += 1;
                             }
 
-                            if let Some('[') = chars.next() {
+                            if let Some(b'[') = chars.next() {
                                 let advanced = equals as usize + 1;
                                 self.position += advanced;
                                 self.rest = &self.rest[advanced..];
@@ -144,7 +151,7 @@ impl<'path, 'source> Iterator for Lexer<'path, 'source> {
                                 return Some(self.parse_string(c, c_start, Some(equals)));
                             }
                         }
-                        Some('[') => {
+                        Some(b'[') => {
                             self.position += 1;
                             self.rest = &self.rest[1..];
 
@@ -155,60 +162,60 @@ impl<'path, 'source> Iterator for Lexer<'path, 'source> {
 
                     token!(OpenBracket, c_start, self)
                 }
-                ']' => token!(CloseBracket, c_start, self),
-                ';' => token!(Semicolon, c_start, self),
-                ',' => token!(Comma, c_start, self),
+                b']' => token!(CloseBracket, c_start, self),
+                b';' => token!(Semicolon, c_start, self),
+                b',' => token!(Comma, c_start, self),
 
                 // Ones that might be two characters
-                '/' => State::MaybeMultiCharacterOperator {
+                b'/' => State::MaybeMultiCharacterOperator {
                     option_a: MultiCharacterOperatorOption {
-                        next: '/',
+                        next: b'/',
                         next_matches: TokenKind::SlashSlash,
                     },
                     option_b: None,
                     next_does_not_match: TokenKind::Slash,
                 },
-                '~' => State::MaybeMultiCharacterOperator {
+                b'~' => State::MaybeMultiCharacterOperator {
                     option_a: MultiCharacterOperatorOption {
-                        next: '=',
+                        next: b'=',
                         next_matches: TokenKind::TildeEquals,
                     },
                     option_b: None,
                     next_does_not_match: TokenKind::Tilde,
                 },
-                '<' => State::MaybeMultiCharacterOperator {
+                b'<' => State::MaybeMultiCharacterOperator {
                     option_a: MultiCharacterOperatorOption {
-                        next: '=',
+                        next: b'=',
                         next_matches: TokenKind::LessEquals,
                     },
                     option_b: Some(MultiCharacterOperatorOption {
-                        next: '<',
+                        next: b'<',
                         next_matches: TokenKind::ShiftLeft,
                     }),
                     next_does_not_match: TokenKind::Less,
                 },
-                '>' => State::MaybeMultiCharacterOperator {
+                b'>' => State::MaybeMultiCharacterOperator {
                     option_a: MultiCharacterOperatorOption {
-                        next: '=',
+                        next: b'=',
                         next_matches: TokenKind::GreaterEquals,
                     },
                     option_b: Some(MultiCharacterOperatorOption {
-                        next: '>',
+                        next: b'>',
                         next_matches: TokenKind::ShiftRight,
                     }),
                     next_does_not_match: TokenKind::Greater,
                 },
-                '=' => State::MaybeMultiCharacterOperator {
+                b'=' => State::MaybeMultiCharacterOperator {
                     option_a: MultiCharacterOperatorOption {
-                        next: '=',
+                        next: b'=',
                         next_matches: TokenKind::EqualsEquals,
                     },
                     option_b: None,
                     next_does_not_match: TokenKind::Equals,
                 },
-                ':' => State::MaybeMultiCharacterOperator {
+                b':' => State::MaybeMultiCharacterOperator {
                     option_a: MultiCharacterOperatorOption {
-                        next: ':',
+                        next: b':',
                         next_matches: TokenKind::DoubleColon,
                     },
                     option_b: None,
@@ -216,16 +223,16 @@ impl<'path, 'source> Iterator for Lexer<'path, 'source> {
                 },
 
                 // Special cases (dot operator or number literal? maybe even "...")
-                '.' => State::Dot,
+                b'.' => State::Dot,
 
                 // Idents and keywords
-                'a'..='z' | 'A'..='Z' | '_' => State::Ident,
+                b'a'..=b'z' | b'A'..=b'Z' | b'_' => State::Ident,
 
                 // Literals
-                '"' | '\'' => State::String,
-                '0'..='9' => State::Number,
+                b'"' | b'\'' => State::String,
+                b'0'..=b'9' => State::Number,
 
-                c if c.is_whitespace() => continue,
+                c if c.is_ascii_whitespace() => continue,
 
                 _ => {
                     return Some(Err(self.with_source_code(miette!(
@@ -243,7 +250,7 @@ impl<'path, 'source> Iterator for Lexer<'path, 'source> {
                     .parse_string(c, c_start, None)
                     .wrap_err("when parsing string literal"),
                 State::Number => self
-                    .parse_number(c, c_start)
+                    .parse_number(c_start)
                     .wrap_err("when parsing number literal"),
                 State::Ident => self
                     .parse_ident(c_start)
@@ -300,22 +307,22 @@ impl<'path, 'source> Lexer<'path, 'source> {
 
     fn eat_comment(&mut self) {
         // First need to check if this is a long comment
-        let mut chars = self.rest.chars().peekable();
-        if let Some('[') = chars.peek() {
+        let mut chars = self.rest.iter().peekable();
+        if let Some(b'[') = chars.peek() {
             chars.next();
 
             let mut equals = 0;
-            while let Some('=') = chars.peek() {
+            while let Some(b'=') = chars.peek() {
                 chars.next();
                 equals += 1;
             }
 
-            if let Some('[') = chars.next() {
+            if let Some(b'[') = chars.next() {
                 // This is a long form comment, so we need to find the end
                 self.rest = &self.rest[equals + 2..];
                 self.position += equals + 2;
 
-                let end_pattern = format!("]{}]", "=".repeat(equals));
+                let end_pattern = format!("]{}]", "=".repeat(equals)).into_bytes();
                 let end = self.rest.find(&end_pattern).unwrap_or(self.rest.len());
                 self.position += end + end_pattern.len();
                 self.rest = &self.rest[end + end_pattern.len()..];
@@ -324,18 +331,17 @@ impl<'path, 'source> Lexer<'path, 'source> {
         }
 
         // Otherwise, this is a short comment
-        let line_break = self.rest.find('\n').unwrap_or(self.rest.len());
+        let line_break = self.rest.find(b"\n").unwrap_or(self.rest.len());
         self.position += line_break;
         self.rest = &self.rest[line_break..];
     }
 
     fn parse_ident(&mut self, start: usize) -> miette::Result<Token<'source>> {
-        let mut chars = self.rest.chars().peekable();
+        let mut chars = self.rest.iter().peekable();
         while let Some(c) = chars.peek() {
-            if matches!(c, 'a'..='z' | 'A'..='Z' | '0'..='9' | '_') {
-                let c = chars.next();
-                let width = c.expect("already matched on it").len_utf8();
-                self.position += width;
+            if matches!(c, b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_') {
+                chars.next();
+                self.position += 1;
             } else {
                 break;
             }
@@ -346,30 +352,30 @@ impl<'path, 'source> Lexer<'path, 'source> {
 
         let kind = match ident {
             // Keywords
-            "and" => TokenKind::And,
-            "break" => TokenKind::Break,
-            "do" => TokenKind::Do,
-            "else" => TokenKind::Else,
-            "elseif" => TokenKind::ElseIf,
-            "end" => TokenKind::End,
-            "for" => TokenKind::For,
-            "function" => TokenKind::Function,
-            "goto" => TokenKind::Goto,
-            "if" => TokenKind::If,
-            "in" => TokenKind::In,
-            "local" => TokenKind::Local,
-            "not" => TokenKind::Not,
-            "or" => TokenKind::Or,
-            "repeat" => TokenKind::Repeat,
-            "return" => TokenKind::Return,
-            "then" => TokenKind::Then,
-            "until" => TokenKind::Until,
-            "while" => TokenKind::While,
+            b"and" => TokenKind::And,
+            b"break" => TokenKind::Break,
+            b"do" => TokenKind::Do,
+            b"else" => TokenKind::Else,
+            b"elseif" => TokenKind::ElseIf,
+            b"end" => TokenKind::End,
+            b"for" => TokenKind::For,
+            b"function" => TokenKind::Function,
+            b"goto" => TokenKind::Goto,
+            b"if" => TokenKind::If,
+            b"in" => TokenKind::In,
+            b"local" => TokenKind::Local,
+            b"not" => TokenKind::Not,
+            b"or" => TokenKind::Or,
+            b"repeat" => TokenKind::Repeat,
+            b"return" => TokenKind::Return,
+            b"then" => TokenKind::Then,
+            b"until" => TokenKind::Until,
+            b"while" => TokenKind::While,
 
             // Literals
-            "true" => TokenKind::True,
-            "false" => TokenKind::False,
-            "nil" => TokenKind::Nil,
+            b"true" => TokenKind::True,
+            b"false" => TokenKind::False,
+            b"nil" => TokenKind::Nil,
 
             // Identifiers
             ident => TokenKind::Identifier(ident),
@@ -386,23 +392,27 @@ impl<'path, 'source> Lexer<'path, 'source> {
 
     fn parse_string(
         &mut self,
-        starting_character: char,
+        starting_character: u8,
         start: usize,
         long_form: Option<u8>,
     ) -> miette::Result<Token<'source>> {
         // Try to guess roughly how big our vector will be
         let ending_character = if long_form.is_some() {
-            ']'
+            b']'
         } else {
             starting_character
         };
-        let possible_length = self.rest.find(ending_character).unwrap_or(self.rest.len());
+        let possible_length = self
+            .rest
+            .iter()
+            .position(|&c| c == ending_character)
+            .unwrap_or(self.rest.len());
         let mut string = Vec::with_capacity(possible_length);
 
-        let mut chars = self.rest.chars().peekable();
+        let mut chars = self.rest.iter().peekable();
         // Long-form string: newline immediately after the starting character is ignored
         if long_form.is_some() {
-            if let Some('\n') = chars.peek() {
+            if let Some(b'\n') = chars.peek() {
                 chars.next();
                 self.position += 1;
             }
@@ -412,23 +422,23 @@ impl<'path, 'source> Lexer<'path, 'source> {
         while let Some(c) = chars.next() {
             if escape {
                 let escaped = match c {
-                    'a' => b'\x07',
-                    'b' => b'\x08',
-                    'f' => b'\x0C',
-                    'n' => b'\n',
-                    'r' => b'\r',
-                    't' => b'\t',
-                    'v' => b'\x0B',
-                    '\\' => b'\\',
-                    '"' => b'"',
-                    '\'' => b'\'',
-                    '\n' => b'\n',
-                    'z' => {
+                    b'a' => b'\x07',
+                    b'b' => b'\x08',
+                    b'f' => b'\x0C',
+                    b'n' => b'\n',
+                    b'r' => b'\r',
+                    b't' => b'\t',
+                    b'v' => b'\x0B',
+                    b'\\' => b'\\',
+                    b'"' => b'"',
+                    b'\'' => b'\'',
+                    b'\n' => b'\n',
+                    b'z' => {
                         // Skip whitespace
                         let mut skipped = 0;
                         while let Some(c) = chars.peek() {
-                            if c.is_whitespace() {
-                                skipped += c.len_utf8();
+                            if c.is_ascii_whitespace() {
+                                skipped += 1;
                                 chars.next();
                             } else {
                                 break;
@@ -441,10 +451,10 @@ impl<'path, 'source> Lexer<'path, 'source> {
                         escape = false;
                         continue;
                     }
-                    'x' => {
-                        let mut hex = ['0'; 2];
+                    b'x' => {
+                        let mut hex = [b'0'; 2];
                         (0..2).try_for_each(|i| -> miette::Result<()> {
-                            hex[i] = chars.next().ok_or_else(|| {
+                            hex[i] = chars.next().copied().ok_or_else(|| {
                                 self.with_source_code(miette!(
                                     labels = vec![LabeledSpan::at(
                                         self.position..self.position + 2,
@@ -470,13 +480,13 @@ impl<'path, 'source> Lexer<'path, 'source> {
                                         "invalid hex escape"
                                     ))
                                 })
-                                .map(|d| acc * 16 + d as u8)
+                                .map(|d| acc * 16 + d)
                         })?
                     }
-                    'u' => {
+                    b'u' => {
                         let escape_start = self.position - 1;
 
-                        if !matches!(chars.next(), Some('{')) {
+                        if !matches!(chars.next(), Some(b'{')) {
                             return Err(self.with_source_code(miette!(
                                 labels = vec![LabeledSpan::at(
                                     self.position - 1..self.position + 1,
@@ -487,11 +497,11 @@ impl<'path, 'source> Lexer<'path, 'source> {
                         }
 
                         // Lua allows any value up to 2^31 - 1, so account for up to 8 hex digits
-                        let mut hex = ['0'; 8];
+                        let mut hex = [b'0'; 8];
                         let mut n = 0;
                         let mut seen_close_brace = false;
-                        for c in chars.by_ref() {
-                            if c == '}' {
+                        for c in chars.by_ref().copied() {
+                            if c == b'}' {
                                 seen_close_brace = true;
                                 break;
                             }
@@ -540,7 +550,7 @@ impl<'path, 'source> Lexer<'path, 'source> {
 
                         self.position += n + 3;
 
-                        let value = parse_hex_number(hex[..n].iter().copied());
+                        let value = numbers::parse_hex_number(hex[..n].iter().copied());
                         string.extend(value.to_be_bytes().iter());
 
                         escape = false;
@@ -573,7 +583,7 @@ impl<'path, 'source> Lexer<'path, 'source> {
                                         "invalid decimal escape"
                                     ))
                                 })
-                                .map(|d| acc * 10u8 + d as u8)
+                                .map(|d| acc * 10u8 + d)
                         })?
                     }
                     _ => {
@@ -587,16 +597,16 @@ impl<'path, 'source> Lexer<'path, 'source> {
                     }
                 };
 
-                self.position += c.len_utf8();
+                self.position += 1;
                 string.push(escaped);
                 escape = false;
                 continue;
             }
 
             match c {
-                '\\' if long_form.is_none() => escape = true,
-                c if c == starting_character && long_form.is_none() => {
-                    self.position += c.len_utf8();
+                b'\\' if long_form.is_none() => escape = true,
+                c if *c == starting_character && long_form.is_none() => {
+                    self.position += 1;
                     self.rest = &self.rest[self.position - start - 1..];
 
                     return Ok(Token {
@@ -607,16 +617,16 @@ impl<'path, 'source> Lexer<'path, 'source> {
                         },
                     });
                 }
-                ']' if long_form.is_some() => {
+                b']' if long_form.is_some() => {
                     let expected_equals = long_form.unwrap();
                     let mut equals = 0u8;
-                    while let Some('=') = chars.peek() {
+                    while let Some(b'=') = chars.peek() {
                         equals += 1;
                         chars.next();
                     }
 
                     if equals == expected_equals {
-                        if let Some(']') = chars.peek() {
+                        if let Some(b']') = chars.peek() {
                             self.position += 2 + equals as usize;
                             self.rest =
                                 &self.rest[self.position - start - 2 - expected_equals as usize..];
@@ -630,13 +640,13 @@ impl<'path, 'source> Lexer<'path, 'source> {
                             });
                         }
                     } else {
-                        string.push(c as u8);
+                        string.push(*c);
                         string.extend(std::iter::repeat(b'=').take(equals as usize));
 
                         self.position += equals as usize;
                     }
                 }
-                '\r' | '\n' if long_form.is_none() => {
+                b'\r' | b'\n' if long_form.is_none() => {
                     return Err(self.with_source_code(miette!(
                         labels = vec![LabeledSpan::at(
                             self.position - 1..self.position,
@@ -645,24 +655,24 @@ impl<'path, 'source> Lexer<'path, 'source> {
                         "unexpected newline in string"
                     )));
                 }
-                '\r' if long_form.is_some() => {
-                    if let Some('\n') = chars.peek() {
+                b'\r' if long_form.is_some() => {
+                    if let Some(b'\n') = chars.peek() {
                         chars.next();
                         self.position += 1;
                     }
                     string.push(b'\n');
                 }
-                '\n' if long_form.is_some() => {
-                    if let Some('\r') = chars.peek() {
+                b'\n' if long_form.is_some() => {
+                    if let Some(b'\r') = chars.peek() {
                         chars.next();
                         self.position += 1;
                     }
                     string.push(b'\n');
                 }
-                _ => string.push(c as u8),
+                _ => string.push(*c),
             }
 
-            self.position += c.len_utf8();
+            self.position += 1;
         }
 
         Err(self.with_source_code(miette!(
@@ -678,156 +688,47 @@ impl<'path, 'source> Lexer<'path, 'source> {
         )))
     }
 
-    fn parse_number(
-        &mut self,
-        starting_character: char,
-        start: usize,
-    ) -> miette::Result<Token<'source>> {
-        let mut has_fraction = starting_character == '.';
-        let mut is_hex = false;
-        let mut has_exponent = false;
-        let mut just_started_exponent = false;
-        let mut chars = self.rest.chars().enumerate();
+    fn parse_number(&mut self, start: usize) -> miette::Result<Token<'source>> {
+        // next() already consumed the first character, correct for that using the whole source and
+        // the position
+        self.rest = &self.source[start..];
+        self.position = start;
 
-        // Find the end of the number
-        let end = chars.position(|(i, c)| {
-            let min_fraction_index = if is_hex { 1 } else { 0 };
+        let ParsedNumber { value, literal_len } = NumberParser::parse_number(self.rest.iter())
+            .map_err(|e| {
+                miette!(
+                    labels = vec![LabeledSpan::at(
+                        start + e.span.start..start + e.span.end,
+                        "this literal"
+                    )],
+                    "{e}",
+                )
+            })?;
 
-            if c == '.' && !has_fraction && i >= min_fraction_index {
-                has_fraction = true;
-                false
-            } else if (c == 'x' || c == 'X') && i == 0 && starting_character == '0' {
-                is_hex = true;
-                false
-            } else if (is_hex && !has_exponent && i > 1 && (c == 'p' || c == 'P'))
-                || (!is_hex && !has_exponent && (c == 'e' || c == 'E'))
-            {
-                has_exponent = true;
-                just_started_exponent = true;
-                false
-            } else if just_started_exponent && (c == '+' || c == '-') {
-                just_started_exponent = false;
-                false
-            } else if is_hex && !has_exponent {
-                just_started_exponent = false;
-                !c.is_ascii_hexdigit()
-            } else {
-                just_started_exponent = false;
-                !c.is_ascii_digit()
-            }
-        });
+        let end = self.position + literal_len;
 
-        // Only floats have exponents
-        let is_float = has_fraction || has_exponent;
-
-        let end = end.unwrap_or(self.rest.len());
-        self.position += end;
-        self.rest = &self.rest[end..];
-
-        // Let's check that the end here makes sense (e.g. no "0xfi" or "123a")
-        let next = self.rest.chars().next();
-        match next {
-            Some(c) if c.is_ascii_alphabetic() => {
-                return Err(self.with_source_code(miette!(
-                    labels = vec![LabeledSpan::at(start..self.position + 1, "this literal")],
-                    "invalid number literal"
-                )))
-            }
-            _ => {}
-        }
-
-        let literal = &self.source[start..self.position];
+        self.rest = &self.rest[literal_len..];
+        self.position += literal_len;
 
         Ok(Token {
-            kind: match (is_float, is_hex) {
-                // Integer
-                (false, false) => TokenKind::Integer(parse_decimal_number(literal.chars())),
-                // Hex integer
-                (false, true) => TokenKind::Integer(parse_hex_number(literal[2..].chars())),
-                // Float
-                (true, false) => TokenKind::Float(literal.parse().map_err(|e| {
-                    self.with_source_code(miette!(
-                        labels = vec![LabeledSpan::at(start..self.position, "this literal")],
-                        "failed to parse float literal: {e}"
-                    ))
-                })?),
-                // Hex float
-                (true, true) => {
-                    let exponent_start = if has_exponent {
-                        literal.find(['p', 'P']).expect("has exponent")
-                    } else {
-                        literal.len()
-                    };
-                    let fraction_start = if has_fraction {
-                        literal.find('.').expect("has fraction")
-                    } else {
-                        exponent_start
-                    };
-
-                    let base_str = &literal[2..fraction_start];
-                    let base = if base_str.is_empty() {
-                        0f64
-                    } else {
-                        i64::from_str_radix(base_str, 16).map_err(|e| {
-                            self.with_source_code(miette!(
-                                labels =
-                                    vec![LabeledSpan::at(start..self.position, "this literal")],
-                                "failed to parse hex float literal: {e}"
-                            ))
-                        })? as f64
-                    };
-                    let fraction = if has_fraction {
-                        let fraction_str = &literal[fraction_start + 1..exponent_start];
-                        let fraction = i64::from_str_radix(fraction_str, 16).map_err(|e| {
-                            self.with_source_code(miette!(
-                                labels =
-                                    vec![LabeledSpan::at(start..self.position, "this literal")],
-                                "failed to parse hex float literal fraction: {e}"
-                            ))
-                        })? as f64;
-                        let fraction_digits = fraction_str.len() as f64;
-                        fraction / 16f64.powf(fraction_digits)
-                    } else {
-                        0.0
-                    };
-
-                    let value = base + fraction;
-                    TokenKind::Float(if has_exponent {
-                        let exponent_str = &literal[exponent_start + 1..];
-                        let exponent = exponent_str.parse::<f64>().map_err(|e| {
-                            self.with_source_code(miette!(
-                                labels =
-                                    vec![LabeledSpan::at(start..self.position, "this literal")],
-                                "failed to parse hex float literal exponent: {e}"
-                            ))
-                        })?;
-
-                        value * 2f64.powf(exponent)
-                    } else {
-                        value
-                    })
-                }
-            },
-            span: Span {
-                start,
-                end: self.position,
-            },
+            kind: value,
+            span: Span { start, end },
         })
     }
 
     fn parse_dot(&mut self, start: usize) -> miette::Result<Token<'source>> {
-        let mut chars = self.rest.chars().peekable();
+        let mut chars = self.rest.iter().peekable();
         match chars.peek() {
-            Some('.') => {
-                let next = chars.next().expect("already peeked on it");
-                let width = next.len_utf8();
+            Some(b'.') => {
+                chars.next();
+                let width = 1;
                 self.position += width;
                 self.rest = &self.rest[width..];
 
                 match chars.peek() {
-                    Some('.') => {
-                        let next = chars.next().expect("already peeked on it");
-                        let width = next.len_utf8();
+                    Some(b'.') => {
+                        chars.next();
+                        let width = 1;
                         self.position += width;
                         self.rest = &self.rest[width..];
 
@@ -848,8 +749,8 @@ impl<'path, 'source> Lexer<'path, 'source> {
                     }),
                 }
             }
-            Some('0'..='9') => self
-                .parse_number('.', start)
+            Some(b'0'..=b'9') => self
+                .parse_number(start)
                 .wrap_err("when parsing number literal"),
             _ => Ok(Token {
                 kind: TokenKind::Dot,
@@ -868,11 +769,11 @@ impl<'path, 'source> Lexer<'path, 'source> {
         option_b: Option<MultiCharacterOperatorOption<'source>>,
         next_does_not_match: TokenKind<'source>,
     ) -> miette::Result<Token<'source>> {
-        let mut chars = self.rest.chars().peekable();
+        let mut chars = self.rest.iter().peekable();
         match (chars.peek(), option_b) {
-            (Some(&next), Some(option_b)) if next == option_b.next => {
-                let next = chars.next().expect("already peeked on it");
-                let width = next.len_utf8();
+            (Some(&next), Some(option_b)) if *next == option_b.next => {
+                chars.next();
+                let width = 1;
                 self.position += width;
                 self.rest = &self.rest[width..];
 
@@ -884,9 +785,9 @@ impl<'path, 'source> Lexer<'path, 'source> {
                     },
                 })
             }
-            (Some(&next), _) if next == option_a.next => {
-                let next = chars.next().expect("already peeked on it");
-                let width = next.len_utf8();
+            (Some(&next), _) if *next == option_a.next => {
+                chars.next();
+                let width = 1;
                 self.position += width;
                 self.rest = &self.rest[width..];
 
@@ -907,26 +808,6 @@ impl<'path, 'source> Lexer<'path, 'source> {
             }),
         }
     }
-}
-
-fn parse_decimal_number(literal: impl Iterator<Item = char>) -> i64 {
-    literal.fold(0i64, |acc, c| {
-        acc.wrapping_mul(10).wrapping_add(
-            c.to_digit(10)
-                .expect("expected only decimal numbers as input to parse_decimal_number")
-                as i64,
-        )
-    })
-}
-
-fn parse_hex_number(literal: impl Iterator<Item = char>) -> i64 {
-    literal.fold(0i64, |acc, c| {
-        acc.wrapping_mul(16).wrapping_add(
-            c.to_digit(16)
-                .expect("expected only hex numbers as input to parse_hex_number")
-                as i64,
-        )
-    })
 }
 
 #[cfg(test)]
@@ -963,16 +844,16 @@ mod tests {
             ("0X1.921FB54442D18P+1", TokenKind::Float(3.141592653589793)),
             ("0x.0p-3", TokenKind::Float(0.0)),
         ] {
-            let mut lexer = Lexer::new(Some(Path::new("test.lua")), input);
+            let mut lexer = Lexer::new(Some(Path::new("test.lua")), input.as_bytes());
             let token = lexer.next().unwrap().unwrap();
             assert_eq!(token.kind, expected, "when parsing '{input}'");
         }
 
         // Invalid numbers
         for input in &["0x5pf", "0xi"] {
-            let mut lexer = Lexer::new(Some(Path::new("test.lua")), input);
+            let mut lexer = Lexer::new(Some(Path::new("test.lua")), input.as_bytes());
             let token = lexer.next().unwrap();
-            assert!(token.is_err());
+            assert!(token.is_err(), "when parsing '{input}'");
         }
     }
 
@@ -986,7 +867,7 @@ mod tests {
             "[[alo\n123\"]]",
             "[==[alo\n123\"]==]",
         ] {
-            let mut lexer = Lexer::new(Some(Path::new("test.lua")), example);
+            let mut lexer = Lexer::new(Some(Path::new("test.lua")), example.as_bytes());
             let token = lexer.next().unwrap().unwrap();
             assert_eq!(
                 token.kind,
@@ -1003,7 +884,7 @@ mod tests {
                 vec![b' ', b' ', b'f', b'o', b'o', b' ', b'b', b'a', b'r'],
             ),
         ] {
-            let mut lexer = Lexer::new(Some(Path::new("test.lua")), input);
+            let mut lexer = Lexer::new(Some(Path::new("test.lua")), input.as_bytes());
             let token = lexer.next().unwrap().unwrap();
             assert_eq!(token.kind, TokenKind::String(expected));
         }
@@ -1015,13 +896,13 @@ mod tests {
             "-- this is a comment\n",
             "--[=[\n  example of a long [comment],\n  [[spanning several [lines]]]\n\n]=]",
         ] {
-            let mut lexer = Lexer::new(Some(Path::new("test.lua")), input);
+            let mut lexer = Lexer::new(Some(Path::new("test.lua")), input.as_bytes());
             let token = lexer.next();
             assert!(token.is_none(), "when parsing '{input}'");
 
             // Also check that we can find tokens after the comment
             let input = format!("{} 3", input);
-            let mut lexer = Lexer::new(Some(Path::new("test.lua")), &input);
+            let mut lexer = Lexer::new(Some(Path::new("test.lua")), input.as_bytes());
             let token = lexer.next().unwrap().unwrap();
             assert_eq!(token.kind, TokenKind::Integer(3));
         }
@@ -1043,7 +924,7 @@ mod tests {
             // newline immediately after opening delimiter is ignored
             "[[\nfoo\nbar]]",
         ] {
-            let mut lexer = Lexer::new(Some(Path::new("test.lua")), input);
+            let mut lexer = Lexer::new(Some(Path::new("test.lua")), input.as_bytes());
             let token = lexer.next().unwrap().unwrap();
             assert_eq!(token.kind, TokenKind::String(expected.to_vec()));
         }

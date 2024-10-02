@@ -53,7 +53,7 @@ pub enum Statement {
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub struct Name(pub String);
+pub struct Name(pub Vec<u8>);
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct AttributedName {
@@ -211,7 +211,7 @@ pub enum Field {
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct FunctionDef {
-    pub name: Option<String>,
+    pub name: Option<Vec<u8>>,
     pub parameters: Vec<TokenTree<Name>>,
     pub has_varargs: bool,
     pub block: TokenTree<Block>,

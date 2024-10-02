@@ -89,7 +89,7 @@ pub enum TokenKind<'source> {
     DotDotDot,
 
     // Identifiers
-    Identifier(&'source str),
+    Identifier(&'source [u8]),
 
     // Literals
     Nil,

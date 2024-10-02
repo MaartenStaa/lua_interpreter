@@ -58,7 +58,7 @@ impl Display for LuaObject {
             LuaObject::Closure(LuaClosure { name, .. }) => {
                 write!(f, "function: 0x{:x}", self as *const _ as usize)?;
                 if let Some(name) = name {
-                    write!(f, " ({name})")
+                    write!(f, " ({name})", name = String::from_utf8_lossy(name))
                 } else {
                     Ok(())
                 }

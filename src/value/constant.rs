@@ -2,7 +2,7 @@ use super::{LuaNumber, LuaTable};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct LuaFunctionDefinition {
-    pub name: Option<String>,
+    pub name: Option<Vec<u8>>,
     pub chunk: usize,
     pub ip: u16,
     pub upvalues: usize,
