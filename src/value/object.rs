@@ -21,12 +21,23 @@ impl PartialEq for LuaObject {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (LuaObject::Table(a), LuaObject::Table(b)) => a == b,
-            (LuaObject::Closure(LuaClosure { .. }), LuaObject::Closure(LuaClosure { .. })) => false,
+            (
+                LuaObject::Closure(LuaClosure {
+                    chunk: chunk_a,
+                    ip: ip_a,
+                    ..
+                }),
+                LuaObject::Closure(LuaClosure {
+                    chunk: chunk_b,
+                    ip: ip_b,
+                    ..
+                }),
+            ) => chunk_a == chunk_b && ip_a == ip_b,
             (LuaObject::NativeFunction(_, a), LuaObject::NativeFunction(_, b)) => a == b,
 
             // TODO: Implement these
             (LuaObject::Thread, LuaObject::Thread) => true,
-            (LuaObject::UserData(_), LuaObject::UserData(_)) => todo!(),
+            (LuaObject::UserData(a), LuaObject::UserData(b)) => a == b,
 
             _ => false,
         }

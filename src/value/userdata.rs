@@ -34,6 +34,16 @@ impl UserData {
     }
 }
 
+impl PartialEq for UserData {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (UserData::Light(a), UserData::Light(b)) => Arc::ptr_eq(a, b),
+            (UserData::Full { data: a, .. }, UserData::Full { data: b, .. }) => Arc::ptr_eq(a, b),
+            _ => false,
+        }
+    }
+}
+
 impl Display for UserData {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
