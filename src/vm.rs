@@ -495,6 +495,11 @@ impl<'source> VM<'source> {
                         for _ in 0..align_amount as usize - num_values {
                             self.push(LuaValue::Nil);
                         }
+
+                        // We didn't even get to the varargs yet, e.g. `f(a, ...)` called as `f()`
+                        if collect_varargs {
+                            self.push(LuaValue::Nil);
+                        }
                     } else if collect_varargs {
                         let num_varargs = num_values - align_amount as usize;
                         if num_varargs > 0 {
@@ -916,7 +921,6 @@ impl<'source> VM<'source> {
                             }
                         },
                         LuaValue::Nil => {
-                            self.push(LuaValue::Nil);
                         }
                         _ => {
                             unreachable!("vararg is not a table or nil");
