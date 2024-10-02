@@ -83,6 +83,7 @@ pub fn create_global_env() -> LuaTable {
     env.insert("os".into(), stdlib::os::OS.clone());
     env.insert("string".into(), stdlib::string::STRING.clone());
     env.insert("table".into(), stdlib::table::TABLE.clone());
+    env.insert("utf8".into(), stdlib::utf8::UTF8.clone());
 
     env
 }

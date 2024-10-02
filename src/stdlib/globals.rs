@@ -19,6 +19,7 @@ use miette::miette;
 
 use super::{
     debug::DEBUG, io::IO, math::MATH, os::OS, package::PACKAGE, string::STRING, table::TABLE,
+    utf8::UTF8,
 };
 
 pub const _VERSION: &str = "LuaRust 5.4";
@@ -349,6 +350,9 @@ pub(crate) fn require(vm: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<L
         }
         "table" => {
             return Ok(vec![TABLE.clone()]);
+        }
+        "utf8" => {
+            return Ok(vec![UTF8.clone()]);
         }
         _ => {}
     }
