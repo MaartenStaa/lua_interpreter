@@ -597,7 +597,11 @@ impl ops::Shl for &LuaNumber {
 
     fn shl(self, other: Self) -> miette::Result<LuaNumber> {
         match (self.integer_repr(), other.integer_repr()) {
-            (Ok(a), Ok(b)) => Ok(LuaNumber::Integer(a << b)),
+            (Ok(a), Ok(b)) => Ok(LuaNumber::Integer(if b >= 0 {
+                a.checked_shl(b as u32).unwrap_or(0)
+            } else {
+                a.checked_shr(-b as u32).unwrap_or(0)
+            })),
             (Err(e), _) | (_, Err(e)) => Err(e).wrap_err("during bitwise shift left"),
         }
     }
@@ -608,7 +612,11 @@ impl ops::Shr for &LuaNumber {
 
     fn shr(self, other: Self) -> miette::Result<LuaNumber> {
         match (self.integer_repr(), other.integer_repr()) {
-            (Ok(a), Ok(b)) => Ok(LuaNumber::Integer(a >> b)),
+            (Ok(a), Ok(b)) => Ok(LuaNumber::Integer(if b >= 0 {
+                a.checked_shr(b as u32).unwrap_or(0)
+            } else {
+                a.checked_shl(-b as u32).unwrap_or(0)
+            })),
             (Err(e), _) | (_, Err(e)) => Err(e).wrap_err("during bitwise shift right"),
         }
     }
