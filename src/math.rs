@@ -134,7 +134,7 @@ impl ops::Neg for ast::Number {
 
     fn neg(self) -> Self {
         match self {
-            ast::Number::Integer(a) => ast::Number::Integer(-a),
+            ast::Number::Integer(a) => ast::Number::Integer(a.wrapping_neg()),
             ast::Number::Float(a) => ast::Number::Float(-a),
         }
     }
