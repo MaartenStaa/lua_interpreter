@@ -226,66 +226,6 @@ impl ops::Not for &LuaValue {
     }
 }
 
-impl ops::BitAnd for LuaValue {
-    type Output = miette::Result<Self>;
-
-    fn bitand(self, other: Self) -> miette::Result<Self> {
-        match (&self, &other) {
-            (LuaValue::Number(a), LuaValue::Number(b)) => Ok(LuaValue::Number((a & b)?)),
-            _ => {
-                let left_type = self.type_name();
-                let right_type = other.type_name();
-
-                Err(miette!(
-                    "cannot bitwise and a '{}' with a '{}'",
-                    left_type,
-                    right_type
-                ))
-            }
-        }
-    }
-}
-
-impl ops::BitOr for LuaValue {
-    type Output = miette::Result<Self>;
-
-    fn bitor(self, other: Self) -> miette::Result<Self> {
-        match (&self, &other) {
-            (LuaValue::Number(a), LuaValue::Number(b)) => Ok(LuaValue::Number((a | b)?)),
-            _ => {
-                let left_type = self.type_name();
-                let right_type = other.type_name();
-
-                Err(miette!(
-                    "cannot bitwise or a '{}' with a '{}'",
-                    left_type,
-                    right_type
-                ))
-            }
-        }
-    }
-}
-
-impl ops::BitXor for LuaValue {
-    type Output = miette::Result<Self>;
-
-    fn bitxor(self, other: Self) -> miette::Result<Self> {
-        match (&self, &other) {
-            (LuaValue::Number(a), LuaValue::Number(b)) => Ok(LuaValue::Number((a ^ b)?)),
-            _ => {
-                let left_type = self.type_name();
-                let right_type = other.type_name();
-
-                Err(miette!(
-                    "cannot bitwise xor a '{}' with a '{}'",
-                    left_type,
-                    right_type
-                ))
-            }
-        }
-    }
-}
-
 impl ops::Shl for LuaValue {
     type Output = miette::Result<Self>;
 
@@ -381,22 +321,6 @@ impl LuaValue {
 
                 Err(miette!(
                     "cannot raise a '{}' to the power of a '{}'",
-                    left_type,
-                    right_type
-                ))
-            }
-        }
-    }
-
-    pub fn idiv(self, other: Self) -> miette::Result<Self> {
-        match (&self, &other) {
-            (LuaValue::Number(a), LuaValue::Number(b)) => Ok(LuaValue::Number((a / b).floor())),
-            _ => {
-                let left_type = self.type_name();
-                let right_type = other.type_name();
-
-                Err(miette!(
-                    "cannot integer divide a '{}' with a '{}'",
                     left_type,
                     right_type
                 ))
@@ -559,6 +483,17 @@ impl ops::Neg for &LuaNumber {
     }
 }
 
+impl ops::BitAnd for LuaNumber {
+    type Output = miette::Result<LuaNumber>;
+
+    fn bitand(self, other: Self) -> miette::Result<LuaNumber> {
+        match (self.integer_repr(), other.integer_repr()) {
+            (Ok(a), Ok(b)) => Ok(LuaNumber::Integer(a & b)),
+            (Err(e), _) | (_, Err(e)) => Err(e).wrap_err("during bitwise and"),
+        }
+    }
+}
+
 impl ops::BitAnd for &LuaNumber {
     type Output = miette::Result<LuaNumber>;
 
@@ -570,6 +505,17 @@ impl ops::BitAnd for &LuaNumber {
     }
 }
 
+impl ops::BitOr for LuaNumber {
+    type Output = miette::Result<LuaNumber>;
+
+    fn bitor(self, other: Self) -> miette::Result<LuaNumber> {
+        match (self.integer_repr(), other.integer_repr()) {
+            (Ok(a), Ok(b)) => Ok(LuaNumber::Integer(a | b)),
+            (Err(e), _) | (_, Err(e)) => Err(e).wrap_err("during bitwise or"),
+        }
+    }
+}
+
 impl ops::BitOr for &LuaNumber {
     type Output = miette::Result<LuaNumber>;
 
@@ -577,6 +523,17 @@ impl ops::BitOr for &LuaNumber {
         match (self.integer_repr(), other.integer_repr()) {
             (Ok(a), Ok(b)) => Ok(LuaNumber::Integer(a | b)),
             (Err(e), _) | (_, Err(e)) => Err(e).wrap_err("during bitwise or"),
+        }
+    }
+}
+
+impl ops::BitXor for LuaNumber {
+    type Output = miette::Result<LuaNumber>;
+
+    fn bitxor(self, other: Self) -> miette::Result<LuaNumber> {
+        match (self.integer_repr(), other.integer_repr()) {
+            (Ok(a), Ok(b)) => Ok(LuaNumber::Integer(a ^ b)),
+            (Err(e), _) | (_, Err(e)) => Err(e).wrap_err("during bitwise xor"),
         }
     }
 }
@@ -654,6 +611,10 @@ impl LuaNumber {
             (LuaNumber::Integer(a), LuaNumber::Float(b)) => LuaNumber::Float((*a as f64).powf(*b)),
             (LuaNumber::Float(a), LuaNumber::Integer(b)) => LuaNumber::Float(a.powi(*b as i32)),
         }
+    }
+
+    pub fn idiv(self, other: Self) -> Self {
+        (self / other).floor()
     }
 
     pub fn floor(self) -> Self {

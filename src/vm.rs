@@ -616,25 +616,65 @@ impl<'source> VM<'source> {
                 Instruction::IDiv => {
                     let b = self.pop();
                     let a = self.pop();
-                    self.push(a.idiv(b)?);
+                    let result = match (a, b) {
+                        (LuaValue::Number(a), LuaValue::Number(b)) => (a.idiv(b)).into(),
+                        (a, b) => metatables::handle(
+                            self,
+                            &metatables::IDIV_KEY,
+                            "integer divide",
+                            vec![a, b],
+                        )?
+                        .remove(0),
+                    };
+                    self.push(result);
                     1
                 }
                 Instruction::Band => {
                     let b = self.pop();
                     let a = self.pop();
-                    self.push((a & b)?);
+                    let result = match (a, b) {
+                        (LuaValue::Number(a), LuaValue::Number(b)) => (a & b)?.into(),
+                        (a, b) => metatables::handle(
+                            self,
+                            &metatables::BAND_KEY,
+                            "bitwise and",
+                            vec![a, b],
+                        )?
+                        .remove(0),
+                    };
+                    self.push(result);
                     1
                 }
                 Instruction::Bor => {
                     let b = self.pop();
                     let a = self.pop();
-                    self.push((a | b)?);
+                    let result = match (a, b) {
+                        (LuaValue::Number(a), LuaValue::Number(b)) => (a | b)?.into(),
+                        (a, b) => metatables::handle(
+                            self,
+                            &metatables::BOR_KEY,
+                            "bitwise or",
+                            vec![a, b],
+                        )?
+                        .remove(0),
+                    };
+                    self.push(result);
                     1
                 }
                 Instruction::Bxor => {
                     let b = self.pop();
                     let a = self.pop();
-                    self.push((a ^ b)?);
+                    let result = match (a, b) {
+                        (LuaValue::Number(a), LuaValue::Number(b)) => (a ^ b)?.into(),
+                        (a, b) => metatables::handle(
+                            self,
+                            &metatables::BXOR_KEY,
+                            "bitwise xor",
+                            vec![a, b],
+                        )?
+                        .remove(0),
+                    };
+                    self.push(result);
                     1
                 }
                 Instruction::Shl => {

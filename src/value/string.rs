@@ -34,6 +34,22 @@ pub(crate) fn get_string_metatable() -> LuaTable {
         metatables::UNM_KEY.clone(),
         LuaObject::NativeFunction("unm", unm).into(),
     );
+    metatable.insert(
+        metatables::IDIV_KEY.clone(),
+        LuaObject::NativeFunction("idiv", idiv).into(),
+    );
+    metatable.insert(
+        metatables::BAND_KEY.clone(),
+        LuaObject::NativeFunction("band", band).into(),
+    );
+    metatable.insert(
+        metatables::BOR_KEY.clone(),
+        LuaObject::NativeFunction("bor", bor).into(),
+    );
+    metatable.insert(
+        metatables::BXOR_KEY.clone(),
+        LuaObject::NativeFunction("bxor", bxor).into(),
+    );
 
     metatable
 }
@@ -50,11 +66,11 @@ pub(crate) fn coerce_number(value: LuaValue) -> miette::Result<LuaNumber> {
                 Ok(n) => Ok(LuaNumber::Integer(n)),
                 Err(_) => match s.trim().parse::<f64>() {
                     Ok(n) => Ok(LuaNumber::Float(n)),
-                    Err(_) => Err(miette::bail!("expected number")),
+                    Err(_) => Err(miette!("expected number")),
                 },
             }
         }
-        _ => Err(miette::bail!("expected number")),
+        _ => Err(miette!("expected number")),
     }
 }
 
@@ -116,4 +132,28 @@ fn unm(_: &mut VM, mut values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     let a = coerce_number(values.remove(0))?;
 
     Ok(vec![LuaValue::Number(-a)])
+}
+
+fn idiv(_: &mut VM, values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+    let (a, b) = value_numbers(values)?;
+
+    Ok(vec![LuaValue::Number(a.idiv(b))])
+}
+
+fn band(_: &mut VM, values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+    let (a, b) = value_numbers(values)?;
+
+    Ok(vec![LuaValue::Number((a & b)?)])
+}
+
+fn bor(_: &mut VM, values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+    let (a, b) = value_numbers(values)?;
+
+    Ok(vec![LuaValue::Number((a | b)?)])
+}
+
+fn bxor(_: &mut VM, values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+    let (a, b) = value_numbers(values)?;
+
+    Ok(vec![LuaValue::Number((a ^ b)?)])
 }
