@@ -1064,20 +1064,21 @@ impl<'source> VM<'source> {
                     let table = &self.stack[marker_index - 1].clone();
                     let num_values = self.stack.len() - marker_index - 1;
 
-                    for _ in 0..num_values {
-                        let value = self.pop();
-                        match table {
-                            LuaValue::Object(o) => match &mut *o.write().unwrap() {
-                                LuaObject::Table(t) => {
-                                    t.append(value);
+                    match table {
+                        LuaValue::Object(o) => match &mut *o.write().unwrap() {
+                            LuaObject::Table(t) => {
+                                for i in 0..num_values {
+                                    let value = self.pop();
+                                    let index = (num_values - i) as i64;
+                                    t.insert(index.into(), value);
                                 }
-                                _ => {
-                                    return Err(miette!("attempt to index a non-table"));
-                                }
-                            },
+                            }
                             _ => {
                                 return Err(miette!("attempt to index a non-table"));
                             }
+                        },
+                        _ => {
+                            return Err(miette!("attempt to index a non-table"));
                         }
                     }
 
