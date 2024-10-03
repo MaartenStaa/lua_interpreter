@@ -202,11 +202,10 @@ impl<'a, 'source> Compiler<'a, 'source> {
     }
 
     pub fn compile(mut self, ast: Option<TokenTree<Block>>) -> miette::Result<usize> {
-        let ast = ast.unwrap_or_else(|| {
-            Parser::new(self.chunk.get_filename(), self.chunk.get_source())
-                .parse()
-                .expect("failed to parse")
-        });
+        let ast = match ast {
+            Some(ast) => Ok(ast),
+            None => Parser::new(self.chunk.get_filename(), self.chunk.get_source()).parse(),
+        }?;
 
         let has_return = ast.node.return_statement.is_some();
 
