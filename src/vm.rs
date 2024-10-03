@@ -923,6 +923,9 @@ impl<'source> VM<'source> {
                             }
                         },
                         LuaValue::Nil => {
+                            if is_single_vararg {
+                                self.push(LuaValue::Nil);
+                            }
                         }
                         _ => {
                             unreachable!("vararg is not a table or nil");
