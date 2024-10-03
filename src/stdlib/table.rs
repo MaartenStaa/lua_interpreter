@@ -2,7 +2,8 @@ use miette::miette;
 use std::sync::LazyLock;
 
 use crate::{
-    value::{LuaObject, LuaTable, LuaValue},
+    macros::{get_number, require_table},
+    value::{LuaNumber, LuaObject, LuaTable, LuaValue},
     vm::VM,
 };
 
@@ -16,6 +17,10 @@ pub static TABLE: LazyLock<LuaValue> = LazyLock::new(|| {
     table.insert(
         "pack".into(),
         LuaObject::NativeFunction("pack", pack).into(),
+    );
+    table.insert(
+        "unpack".into(),
+        LuaObject::NativeFunction("unpack", unpack).into(),
     );
 
     table.into()
@@ -112,4 +117,22 @@ fn pack(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     result.insert("n".into(), (len as i64).into());
 
     Ok(vec![result.into()])
+}
+
+fn unpack(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+    require_table!(read, input, "unpack", 0, table, {
+        let i = get_number!(input, "unpack", 1)
+            .unwrap_or(&LuaNumber::Integer(1))
+            .integer_repr()?;
+        let j = get_number!(input, "unpack", 2)
+            .unwrap_or(&LuaNumber::Integer(table.len() as i64))
+            .integer_repr()?;
+
+        let mut result = Vec::new();
+        for k in i..=j {
+            result.push(table.get(&k.into()).unwrap_or(&LuaValue::Nil).clone());
+        }
+
+        Ok(result)
+    })
 }

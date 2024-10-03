@@ -124,6 +124,7 @@ macro_rules! get_number {
     ($values:expr, $name:expr, $index:expr) => {
         match $values.get($index) {
             Some(LuaValue::Number(n)) => Some(n),
+            Some(LuaValue::Nil) | None => None,
             Some(v) => {
                 return Err(miette!(
                     "bad argument #{} to '{}', expected number, got {}",
@@ -132,7 +133,6 @@ macro_rules! get_number {
                     v.type_name()
                 ))
             }
-            _ => None,
         }
     };
     ($values:expr, $name:expr) => {
