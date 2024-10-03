@@ -110,6 +110,7 @@ struct PoppedCallFrame {
     border_frame: bool,
     frame_pointer: usize,
     return_addr: usize,
+    allow_multi_return_values: bool,
 }
 
 impl<'source> VM<'source> {
@@ -233,6 +234,7 @@ impl<'source> VM<'source> {
             border_frame: frame.border_frame,
             frame_pointer: frame.frame_pointer,
             return_addr: frame.return_addr,
+            allow_multi_return_values: frame.allow_multi_return_values,
         };
 
         frame.upvalues.fill(None);
@@ -1244,6 +1246,9 @@ impl<'source> VM<'source> {
                     // Put the return values back
                     for value in return_values {
                         self.push(value);
+                        if !frame.allow_multi_return_values {
+                            break;
+                        }
                     }
 
                     continue;
