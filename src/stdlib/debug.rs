@@ -18,8 +18,8 @@ pub static DEBUG: LazyLock<LuaValue> = LazyLock::new(|| {
 });
 
 fn upvalueid(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
-    require_closure!(input, "upvalueid", closure, {
-        let n = require_number!(input, "upvalueid", 1).integer_repr()? - 1;
+    require_closure!(input, "debug.upvalueid", closure, {
+        let n = require_number!(input, "debug.upvalueid", 1).integer_repr()? - 1;
         if n < 0 || n as usize >= closure.upvalues.len() {
             return Ok(vec![LuaValue::Nil]);
         }

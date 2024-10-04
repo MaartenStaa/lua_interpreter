@@ -169,8 +169,8 @@ fn pattern_to_regex(pattern: &[u8]) -> miette::Result<LuaPattern> {
 }
 
 fn find(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
-    let s = require_string!(input, "find");
-    let pattern = require_string!(input, "find", 1);
+    let s = require_string!(input, "string.find");
+    let pattern = require_string!(input, "string.find", 1);
     let mut init = match input.get(2) {
         Some(LuaValue::Number(LuaNumber::Integer(i))) => *i,
         Some(LuaValue::Number(f @ LuaNumber::Float(_))) => f.integer_repr()?,
@@ -220,7 +220,7 @@ fn find(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
 }
 
 fn format(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
-    let mut format_string = require_string!(input, "format").clone();
+    let mut format_string = require_string!(input, "string.format").clone();
 
     let mut format_from = 0;
     for v in input.iter().skip(1) {
@@ -266,7 +266,7 @@ fn format(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
 }
 
 fn len(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
-    let input = require_string!(input, "len");
+    let input = require_string!(input, "string.len");
 
     Ok(vec![LuaValue::Number(LuaNumber::Integer(
         input.len() as i64
@@ -274,8 +274,8 @@ fn len(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
 }
 
 fn r#match(_: &mut VM, mut input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
-    let s = require_string!(input, "match");
-    let pattern = require_string!(input, "match", 1);
+    let s = require_string!(input, "string.match");
+    let pattern = require_string!(input, "string.match", 1);
     // TODO: init parameter
 
     let pattern = pattern_to_regex(pattern)?;
@@ -304,9 +304,9 @@ fn r#match(_: &mut VM, mut input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>
 }
 
 fn rep(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
-    let s = require_string!(input, "rep");
-    let n = require_number!(input, "rep", 1).integer_repr()?;
-    let sep = get_string!(input, "rep", 2)
+    let s = require_string!(input, "string.rep");
+    let n = require_number!(input, "string.rep", 1).integer_repr()?;
+    let sep = get_string!(input, "string.rep", 2)
         .map(|s| s.as_slice())
         .unwrap_or_else(|| b"");
     if n < 1 {
@@ -323,7 +323,7 @@ fn rep(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
 }
 
 fn reverse(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
-    let input = require_string!(input, "reverse");
+    let input = require_string!(input, "string.reverse");
 
     let mut reversed = input.clone();
     reversed.reverse();
@@ -331,14 +331,14 @@ fn reverse(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
 }
 
 fn sub(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
-    let s = require_string!(input, "sub");
-    let i = require_number!(input, "sub", 1).integer_repr()?;
+    let s = require_string!(input, "string.sub");
+    let i = require_number!(input, "string.sub", 1).integer_repr()?;
     let j = match input.get(2) {
         Some(LuaValue::Number(LuaNumber::Integer(i))) => *i,
         Some(LuaValue::Number(f @ LuaNumber::Float(_))) => f.integer_repr()?,
         Some(v) => {
             return Err(miette::miette!(
-                "bad argument #3 to 'sub' (number expected, got {type_name})",
+                "bad argument #3 to 'string.sub' (number expected, got {type_name})",
                 type_name = v.type_name()
             ));
         }

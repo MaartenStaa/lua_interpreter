@@ -34,7 +34,7 @@ fn clock(_: &mut VM, _: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
 }
 
 fn getenv(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
-    let name = require_string!(input, "getenv");
+    let name = require_string!(input, "os.getenv");
     let name_os_str = OsString::from(String::from_utf8_lossy(name.as_slice()).to_string());
 
     match std::env::var(name_os_str) {

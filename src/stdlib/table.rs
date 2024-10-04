@@ -39,17 +39,21 @@ fn concat(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
         Some(LuaValue::Nil) => None,
         Some(v) => {
             return Err(miette!(
-                "bad argument #1 to 'concat' (string expected, got {type_name})",
+                "bad argument #1 to 'table.concat' (string expected, got {type_name})",
                 type_name = v.type_name()
             ))
         }
-        None => return Err(miette!("bad argument #1 to 'concat' (value expected)")),
+        None => {
+            return Err(miette!(
+                "bad argument #1 to 'table.concat' (value expected)"
+            ))
+        }
     };
     let i = match input.get(2) {
         Some(LuaValue::Number(n)) => n.integer_repr()?,
         Some(v) => {
             return Err(miette!(
-                "bad argument #2 to 'concat' (number expected, got {type_name})",
+                "bad argument #2 to 'table.concat' (number expected, got {type_name})",
                 type_name = v.type_name()
             ))
         }
@@ -59,7 +63,7 @@ fn concat(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
         Some(LuaValue::Number(n)) => Some(n.integer_repr()?),
         Some(v) => {
             return Err(miette!(
-                "bad argument #3 to 'concat' (number expected, got {type_name})",
+                "bad argument #3 to 'table.concat' (number expected, got {type_name})",
                 type_name = v.type_name()
             ))
         }
@@ -84,7 +88,7 @@ fn concat(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
                         LuaValue::Number(n) => result.extend(n.to_string().as_bytes()),
                         v => {
                             return Err(miette!(
-                            "invalid value ({type_name}) at index {index} in table for 'concat'",
+                            "invalid value ({type_name}) at index {index} in table for 'table.concat'",
                             type_name = v.type_name(),
                             index = k
                         ))
@@ -92,15 +96,23 @@ fn concat(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
                     }
                 }
             }
-            _ => return Err(miette!("bad argument #1 to 'concat' (table expected)")),
+            _ => {
+                return Err(miette!(
+                    "bad argument #1 to 'table.concat' (table expected)"
+                ))
+            }
         },
         Some(v) => {
             return Err(miette!(
-                "bad argument #1 to 'concat' (table expected, got {type_name})",
+                "bad argument #1 to 'table.concat' (table expected, got {type_name})",
                 type_name = v.type_name()
             ))
         }
-        None => return Err(miette!("bad argument #1 to 'concat' (value expected)")),
+        None => {
+            return Err(miette!(
+                "bad argument #1 to 'table.concat' (value expected)"
+            ))
+        }
     }
 
     Ok(vec![LuaValue::String(result)])
@@ -120,11 +132,11 @@ fn pack(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
 }
 
 fn unpack(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
-    require_table!(read, input, "unpack", 0, table, {
-        let i = get_number!(input, "unpack", 1)
+    require_table!(read, input, "table.unpack", 0, table, {
+        let i = get_number!(input, "table.unpack", 1)
             .unwrap_or(&LuaNumber::Integer(1))
             .integer_repr()?;
-        let j = get_number!(input, "unpack", 2)
+        let j = get_number!(input, "table.unpack", 2)
             .unwrap_or(&LuaNumber::Integer(table.len() as i64))
             .integer_repr()?;
 
