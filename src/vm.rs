@@ -338,6 +338,7 @@ impl<'source> VM<'source> {
         value: LuaClosure,
         args: Vec<LuaValue>,
     ) -> miette::Result<Vec<LuaValue>> {
+        let call_frame_offset = self.call_stack_index;
         let frame_pointer = self.stack.len();
         for arg in args {
             self.push(arg);
@@ -360,7 +361,9 @@ impl<'source> VM<'source> {
         if result.is_err() {
             // In this case we wouldn't hit a `return` instruction, so we need to clean up the
             // call stack manually
-            self.pop_call_frame();
+            for _ in 0..self.call_stack_index - call_frame_offset {
+                self.pop_call_frame();
+            }
         }
 
         // Clean up the stack
