@@ -171,7 +171,7 @@ fn pattern_to_regex(pattern: &[u8]) -> miette::Result<LuaPattern> {
 fn find(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     let s = require_string!(input, "string.find");
     let pattern = require_string!(input, "string.find", 1);
-    let mut init = match input.get(2) {
+    let init = match input.get(2) {
         Some(LuaValue::Number(LuaNumber::Integer(i))) => *i,
         Some(LuaValue::Number(f @ LuaNumber::Float(_))) => f.integer_repr()?,
         Some(v) => {
@@ -183,8 +183,14 @@ fn find(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
         None => 1,
     };
 
-    if init == 0 {
-        init = 1;
+    let init = match init.cmp(&0) {
+        Ordering::Less => s.len() as i64 + init + 1,
+        Ordering::Greater => init,
+        Ordering::Equal => 1,
+    };
+
+    if init > s.len() as i64 + 1 {
+        return Ok(vec![LuaValue::Nil]);
     }
 
     if pattern.is_empty() {
@@ -194,13 +200,14 @@ fn find(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
         ]);
     }
 
-    let s = match init.cmp(&0) {
-        Ordering::Less => &s[(s.len() as i64 + init) as usize..],
-        Ordering::Greater => &s[(init - 1) as usize..],
-        Ordering::Equal => unreachable!(),
-    };
+    let s = &s[(init - 1) as usize..];
 
-    let pattern = pattern_to_regex(pattern)?;
+    let plain = input.get(3).map_or(false, |v| v.as_boolean());
+    let pattern = if plain {
+        LuaPattern::Plain(pattern.clone())
+    } else {
+        pattern_to_regex(pattern)?
+    };
     let start_end = match &pattern {
         LuaPattern::Plain(pattern) => s
             .find(pattern)
@@ -346,20 +353,28 @@ fn sub(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     };
 
     let i = match i.cmp(&0) {
-        Ordering::Less => (s.len() as i64 + i + 1) as usize,
-        Ordering::Greater => i as usize,
+        Ordering::Less => s.len() as i64 + i + 1,
+        Ordering::Greater => i,
         Ordering::Equal => 1,
     };
+    let i = if i < 1 { 1 } else { i };
     let j = match j.cmp(&0) {
-        Ordering::Less => (s.len() as i64 + j + 1) as usize,
-        Ordering::Greater if j >= s.len() as i64 => s.len(),
-        Ordering::Greater => j as usize,
+        Ordering::Less => s.len() as i64 + j + 1,
+        Ordering::Greater if j >= s.len() as i64 => s.len() as i64,
+        Ordering::Greater => j,
         Ordering::Equal => return Ok(vec![LuaValue::String(vec![])]),
+    };
+    let j = if j > s.len() as i64 {
+        s.len() as i64
+    } else {
+        j
     };
 
     if i > j {
         return Ok(vec![LuaValue::String(vec![])]);
     }
 
-    Ok(vec![LuaValue::String(s[i - 1..=j - 1].to_vec())])
+    Ok(vec![LuaValue::String(
+        s[(i - 1) as usize..=(j - 1) as usize].to_vec(),
+    )])
 }
