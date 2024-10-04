@@ -628,7 +628,12 @@ pub(crate) fn tostring(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<L
 }
 
 pub(crate) fn r#type(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
-    let value = input.first().unwrap_or(&LuaValue::Nil);
+    let Some(value) = input.first() else {
+        return Err(miette::miette!(
+            "bad argument #1 to 'type' (value expected)"
+        ));
+    };
+
     Ok(vec![LuaValue::String(value.type_name().bytes().collect())])
 }
 
