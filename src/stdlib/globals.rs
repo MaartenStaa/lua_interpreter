@@ -11,7 +11,7 @@ use crate::{
     compiler::Compiler,
     macros::{assert_string, assert_table, require_string, require_table},
     stdlib::package,
-    value::{metatables::METATABLE_KEY, LuaClosure, LuaNumber, LuaObject, LuaValue},
+    value::{metatables, LuaClosure, LuaNumber, LuaObject, LuaValue},
     vm::VM,
 };
 
@@ -253,6 +253,37 @@ pub(crate) fn next(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaVa
             None => Ok(vec![LuaValue::Nil]),
         }
     })
+}
+
+pub(crate) fn pairs(vm: &mut VM, mut input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+    if input.is_empty() {
+        return Err(miette!("bad argument #1 to 'pairs' (value expected)"));
+    }
+
+    let t = input.swap_remove(0);
+    if let Some(LuaValue::Object(o)) = t.get_metavalue(&metatables::PAIRS_KEY) {
+        match &*o.read().unwrap() {
+            LuaObject::Closure(c) => {
+                let mut result = vm.run_closure(c.clone(), vec![t.clone()])?;
+                result.resize(3, LuaValue::Nil);
+
+                return Ok(result);
+            }
+            LuaObject::NativeFunction(_, f) => {
+                let mut result = f(vm, vec![t.clone()])?;
+                result.resize(3, LuaValue::Nil);
+
+                return Ok(result);
+            }
+            _ => {}
+        }
+    }
+
+    Ok(vec![
+        LuaObject::NativeFunction("next", next).into(),
+        t,
+        LuaValue::Nil,
+    ])
 }
 
 pub(crate) fn pcall(vm: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {

@@ -32,6 +32,10 @@ pub fn create_global_env() -> LuaTable {
         LuaObject::NativeFunction("next", stdlib::globals::next).into(),
     );
     env.insert(
+        "pairs".into(),
+        LuaObject::NativeFunction("pairs", stdlib::globals::pairs).into(),
+    );
+    env.insert(
         "pcall".into(),
         LuaObject::NativeFunction("pcall", stdlib::globals::pcall).into(),
     );
