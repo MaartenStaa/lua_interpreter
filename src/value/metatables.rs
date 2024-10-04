@@ -85,16 +85,28 @@ pub fn handle(
     key: &LuaValue,
     op_name: &'static str,
     input: Vec<LuaValue>,
-) -> miette::Result<Vec<LuaValue>> {
+) -> miette::Result<LuaValue> {
     assert!(!input.is_empty());
 
     for value in input.iter() {
         if let Some(LuaValue::Object(o)) = value.get_metavalue(key) {
             match &*o.read().unwrap() {
                 LuaObject::Closure(c) => {
-                    return vm.run_closure(c.clone(), input);
+                    let mut result = vm.run_closure(c.clone(), input)?;
+                    return Ok(if result.is_empty() {
+                        LuaValue::Nil
+                    } else {
+                        result.swap_remove(0)
+                    });
                 }
-                LuaObject::NativeFunction(_, f) => return f(vm, input),
+                LuaObject::NativeFunction(_, f) => {
+                    let mut result = f(vm, input)?;
+                    return Ok(if result.is_empty() {
+                        LuaValue::Nil
+                    } else {
+                        result.swap_remove(0)
+                    });
+                }
                 _ => {}
             }
         }

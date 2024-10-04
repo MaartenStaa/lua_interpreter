@@ -221,7 +221,6 @@ impl<'a, 'source> Compiler<'a, 'source> {
         if !has_return {
             // Add implicit final return
             self.push_load_marker();
-            self.push_load_nil(None);
             self.chunk.push_instruction(Instruction::Return, None);
         }
 
@@ -1130,7 +1129,6 @@ impl<'a, 'source> Compiler<'a, 'source> {
 
         if !has_return {
             self.push_load_marker();
-            self.push_load_nil(None);
             self.chunk.push_instruction(Instruction::Return, None);
         }
 

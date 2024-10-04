@@ -354,10 +354,12 @@ impl<'source> VM<'source> {
         if result.is_err() {
             // In this case we wouldn't hit a `return` instruction, so we need to clean up the
             // call stack manually
-            let popped_frame = self.pop_call_frame();
-            for _ in 0..self.stack.len() - popped_frame.frame_pointer {
-                self.pop();
-            }
+            self.pop_call_frame();
+        }
+
+        // Clean up the stack
+        for _ in 0..self.stack.len() - frame_pointer {
+            self.pop();
         }
 
         self.chunks[value.chunk].ip = old_ip;
@@ -553,7 +555,6 @@ impl<'source> VM<'source> {
                         (LuaValue::Number(a), LuaValue::Number(b)) => (a + b).into(),
                         (a, b) => {
                             metatables::handle(self, &metatables::ADD_KEY, "add", vec![a, b])?
-                                .remove(0)
                         }
                     };
                     self.push(result);
@@ -566,7 +567,6 @@ impl<'source> VM<'source> {
                         (LuaValue::Number(a), LuaValue::Number(b)) => (a - b).into(),
                         (a, b) => {
                             metatables::handle(self, &metatables::SUB_KEY, "subtract", vec![a, b])?
-                                .remove(0)
                         }
                     };
                     self.push(result);
@@ -579,7 +579,6 @@ impl<'source> VM<'source> {
                         (LuaValue::Number(a), LuaValue::Number(b)) => (a * b).into(),
                         (a, b) => {
                             metatables::handle(self, &metatables::MUL_KEY, "multiply", vec![a, b])?
-                                .remove(0)
                         }
                     };
                     self.push(result);
@@ -592,7 +591,6 @@ impl<'source> VM<'source> {
                         (LuaValue::Number(a), LuaValue::Number(b)) => (a / b).into(),
                         (a, b) => {
                             metatables::handle(self, &metatables::DIV_KEY, "divide", vec![a, b])?
-                                .remove(0)
                         }
                     };
                     self.push(result);
@@ -605,7 +603,6 @@ impl<'source> VM<'source> {
                         (LuaValue::Number(a), LuaValue::Number(b)) => (a % b).into(),
                         (a, b) => {
                             metatables::handle(self, &metatables::MOD_KEY, "modulo", vec![a, b])?
-                                .remove(0)
                         }
                     };
                     self.push(result);
@@ -618,7 +615,6 @@ impl<'source> VM<'source> {
                         (LuaValue::Number(a), LuaValue::Number(b)) => (a.pow(&b)).into(),
                         (a, b) => {
                             metatables::handle(self, &metatables::POW_KEY, "power", vec![a, b])?
-                                .remove(0)
                         }
                     };
                     self.push(result);
@@ -634,8 +630,7 @@ impl<'source> VM<'source> {
                             &metatables::IDIV_KEY,
                             "integer divide",
                             vec![a, b],
-                        )?
-                        .remove(0),
+                        )?,
                     };
                     self.push(result);
                     1
@@ -650,8 +645,7 @@ impl<'source> VM<'source> {
                             &metatables::BAND_KEY,
                             "bitwise and",
                             vec![a, b],
-                        )?
-                        .remove(0),
+                        )?,
                     };
                     self.push(result);
                     1
@@ -666,8 +660,7 @@ impl<'source> VM<'source> {
                             &metatables::BOR_KEY,
                             "bitwise or",
                             vec![a, b],
-                        )?
-                        .remove(0),
+                        )?,
                     };
                     self.push(result);
                     1
@@ -682,8 +675,7 @@ impl<'source> VM<'source> {
                             &metatables::BXOR_KEY,
                             "bitwise xor",
                             vec![a, b],
-                        )?
-                        .remove(0),
+                        )?,
                     };
                     self.push(result);
                     1
@@ -778,8 +770,7 @@ impl<'source> VM<'source> {
                     let a = self.pop();
                     let result = match a {
                         LuaValue::Number(n) => (-n).into(),
-                        a => metatables::handle(self, &metatables::UNM_KEY, "negate", vec![a])?
-                            .remove(0),
+                        a => metatables::handle(self, &metatables::UNM_KEY, "negate", vec![a])?,
                     };
                     self.push(result);
                     1
@@ -1198,10 +1189,14 @@ impl<'source> VM<'source> {
 
                             match result {
                                 Ok(values) => {
-                                    for value in values {
-                                        self.push(value);
-                                        if is_single_return {
-                                            break;
+                                    if values.is_empty() && is_single_return {
+                                        self.push(LuaValue::Nil);
+                                    } else {
+                                        for value in values {
+                                            self.push(value);
+                                            if is_single_return {
+                                                break;
+                                            }
                                         }
                                     }
                                 }
@@ -1247,10 +1242,14 @@ impl<'source> VM<'source> {
                     }
 
                     // Put the return values back
-                    for value in return_values {
-                        self.push(value);
-                        if !frame.allow_multi_return_values {
-                            break;
+                    if return_values.is_empty() && !frame.allow_multi_return_values {
+                        self.push(LuaValue::Nil);
+                    } else {
+                        for value in return_values {
+                            self.push(value);
+                            if !frame.allow_multi_return_values {
+                                break;
+                            }
                         }
                     }
 

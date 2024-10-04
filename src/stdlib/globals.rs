@@ -134,6 +134,10 @@ pub(crate) fn load(vm: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaV
                 let mut result = Vec::new();
                 loop {
                     let mut piece_result = vm.run_closure(closure.clone(), vec![])?;
+                    if piece_result.is_empty() {
+                        break;
+                    }
+
                     let piece_result = piece_result.swap_remove(0);
                     match piece_result {
                         LuaValue::String(s) => {
