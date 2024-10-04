@@ -375,6 +375,20 @@ impl<'a, 'source> Compiler<'a, 'source> {
 
                 BlockResult::new()
             }
+            Statement::LocalFunctionDeclaration(name, function_def) => {
+                // The statement `local function f () body end` translates to `local f; f =
+                // function () body end`, not to `local f = function () body end` (This only makes
+                // a difference when the body of the function contains references to f.)
+                self.push_load_nil(Some(name.span));
+                let local_index = self.add_local(name.node.0, Some(name.span));
+
+                self.compile_function_def(function_def)?;
+                self.chunk
+                    .push_instruction(Instruction::SetLocal, Some(span));
+                self.chunk.push_instruction(local_index, None);
+
+                BlockResult::new()
+            }
             Statement::Assignment { varlist, explist } => {
                 let needs_alignment = varlist.len() != explist.len()
                     || explist.iter().any(|e| {

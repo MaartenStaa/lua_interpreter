@@ -50,6 +50,7 @@ pub enum Statement {
     Break,
     FunctionCall(TokenTree<FunctionCall>),
     LocalDeclaraction(Vec<TokenTree<AttributedName>>, Vec<TokenTree<Expression>>),
+    LocalFunctionDeclaration(TokenTree<Name>, TokenTree<FunctionDef>),
 }
 
 #[derive(Debug, PartialEq, Clone)]

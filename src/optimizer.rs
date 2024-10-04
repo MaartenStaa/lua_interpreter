@@ -60,6 +60,9 @@ fn optimize_statement(statement: TokenTree<Statement>) -> TokenTree<Statement> {
                 names,
                 expressions.into_iter().map(optimize_expression).collect(),
             ),
+            Statement::LocalFunctionDeclaration(name, func) => {
+                Statement::LocalFunctionDeclaration(name, optimize_function_def(func))
+            }
 
             // No optimization to be done
             Statement::Goto(label) => Statement::Goto(label),

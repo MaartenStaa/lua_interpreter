@@ -440,22 +440,9 @@ impl<'path, 'source> Parser<'path, 'source> {
                     )
                 })?;
 
-            let name_span = name.span;
             let function_def_span = function_def.span;
             Ok(TokenTree::new(
-                Statement::LocalDeclaraction(
-                    vec![TokenTree::new(
-                        AttributedName {
-                            name,
-                            attribute: None,
-                        },
-                        name_span,
-                    )],
-                    vec![TokenTree::new(
-                        Expression::FunctionDef(function_def),
-                        function_def_span,
-                    )],
-                ),
+                Statement::LocalFunctionDeclaration(name, function_def),
                 Span::new(start, function_def_span.end),
             ))
         } else {
