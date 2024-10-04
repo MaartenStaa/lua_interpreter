@@ -218,6 +218,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
 
         self.compile_block(
             ast,
+            true,
             BlockOptions {
                 is_loop: false,
                 loop_scope_depth: 0,
@@ -272,6 +273,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
     fn compile_block(
         &mut self,
         ast: TokenTree<Block>,
+        block_is_final_statement: bool,
         options: BlockOptions,
     ) -> miette::Result<BlockResult> {
         if options.new_scope {
@@ -288,7 +290,8 @@ impl<'a, 'source> Compiler<'a, 'source> {
                 block_result.assert_no_new_locals()?;
             }
 
-            let is_final_statement = i == num_statements - 1 && !has_return;
+            let is_final_statement =
+                block_is_final_statement && i == num_statements - 1 && !has_return;
             block_result.extend(self.compile_statement(statement, &options, is_final_statement)?);
         }
 
@@ -508,8 +511,10 @@ impl<'a, 'source> Compiler<'a, 'source> {
                 // Pop the condition value
                 self.chunk.push_instruction(Instruction::Pop, None);
                 // Compile the block
+                let block_has_return = block.node.return_statement.is_some();
                 block_result.extend(self.compile_block(
                     block,
+                    is_final_statement,
                     BlockOptions {
                         is_loop: options.is_loop,
                         loop_scope_depth: options.loop_scope_depth,
@@ -517,8 +522,11 @@ impl<'a, 'source> Compiler<'a, 'source> {
                     },
                 )?);
                 // Jump to the end of the if statement
-                self.chunk.push_instruction(Instruction::Jmp, None);
-                let mut jmp_end_addrs = vec![self.chunk.push_addr_placeholder()];
+                let mut jmp_end_addrs = vec![];
+                if !block_has_return {
+                    self.chunk.push_instruction(Instruction::Jmp, None);
+                    jmp_end_addrs.push(self.chunk.push_addr_placeholder());
+                }
                 // Right before the else/elseifs, go here if the condition was false
                 self.chunk.patch_addr_placeholder(jmp_false_addr);
                 for else_if in else_ifs {
@@ -532,8 +540,10 @@ impl<'a, 'source> Compiler<'a, 'source> {
                     // Pop the condition value
                     self.chunk.push_instruction(Instruction::Pop, None);
                     // Compile the block
+                    let block_has_return = else_if.node.block.node.return_statement.is_some();
                     block_result.extend(self.compile_block(
                         else_if.node.block,
+                        is_final_statement,
                         BlockOptions {
                             is_loop: options.is_loop,
                             loop_scope_depth: options.loop_scope_depth,
@@ -541,24 +551,32 @@ impl<'a, 'source> Compiler<'a, 'source> {
                         },
                     )?);
                     // Jump to the end of the if statement
-                    self.chunk.push_instruction(Instruction::Jmp, None);
-                    jmp_end_addrs.push(self.chunk.push_addr_placeholder());
+                    if !block_has_return {
+                        self.chunk.push_instruction(Instruction::Jmp, None);
+                        jmp_end_addrs.push(self.chunk.push_addr_placeholder());
+                    }
                     // Right before the else/elseifs, go here if the condition was false
                     self.chunk.patch_addr_placeholder(jmp_false_addr);
                 }
                 let else_jump_addr = if let Some(else_block) = else_block {
                     // Pop the initial condition
                     self.chunk.push_instruction(Instruction::Pop, None);
+                    let block_has_return = else_block.node.return_statement.is_some();
                     block_result.extend(self.compile_block(
                         else_block,
+                        is_final_statement,
                         BlockOptions {
                             is_loop: options.is_loop,
                             loop_scope_depth: options.loop_scope_depth,
                             new_scope: true,
                         },
                     )?);
-                    self.chunk.push_instruction(Instruction::Jmp, None);
-                    Some(self.chunk.push_addr_placeholder())
+                    if !block_has_return {
+                        self.chunk.push_instruction(Instruction::Jmp, None);
+                        Some(self.chunk.push_addr_placeholder())
+                    } else {
+                        None
+                    }
                 } else {
                     None
                 };
@@ -613,6 +631,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                 let loop_scope_depth = self.begin_scope();
                 let block_result = self.compile_block(
                     block,
+                    is_final_statement,
                     BlockOptions {
                         is_loop: true,
                         loop_scope_depth,
@@ -662,6 +681,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                 let loop_scope_depth = self.begin_scope();
                 let block_result = self.compile_block(
                     block,
+                    is_final_statement,
                     BlockOptions {
                         is_loop: true,
                         loop_scope_depth,
@@ -892,6 +912,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
 
                 let block_result = self.compile_block(
                     block,
+                    is_final_statement,
                     BlockOptions {
                         is_loop: true,
                         loop_scope_depth,
@@ -935,6 +956,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
             }
             Statement::Block(block) => self.compile_block(
                 block,
+                is_final_statement,
                 BlockOptions {
                     is_loop: options.is_loop,
                     loop_scope_depth: options.loop_scope_depth,
@@ -1239,6 +1261,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
         let has_return = function_def.node.block.node.return_statement.is_some();
         self.compile_block(
             function_def.node.block,
+            true,
             BlockOptions {
                 is_loop: false,
                 loop_scope_depth: 0,
