@@ -3,7 +3,7 @@ use std::{cmp::Ordering, sync::LazyLock};
 use subslice::SubsliceExt;
 
 use crate::{
-    macros::{get_string, require_number, require_string},
+    macros::{get_number, get_string, require_number, require_string},
     value::{LuaNumber, LuaObject, LuaTable, LuaValue},
     vm::VM,
 };
@@ -11,6 +11,14 @@ use crate::{
 pub static STRING: LazyLock<LuaValue> = LazyLock::new(|| {
     let mut string = LuaTable::new();
 
+    string.insert(
+        "byte".into(),
+        LuaObject::NativeFunction("byte", byte).into(),
+    );
+    string.insert(
+        "char".into(),
+        LuaObject::NativeFunction("char", char).into(),
+    );
     string.insert(
         "find".into(),
         LuaObject::NativeFunction("find", find).into(),
@@ -166,6 +174,60 @@ fn pattern_to_regex(pattern: &[u8]) -> miette::Result<LuaPattern> {
     } else {
         Ok(LuaPattern::Plain(pattern.to_vec()))
     }
+}
+
+fn byte(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+    let s = require_string!(input, "string.byte");
+    let i = get_number!(input, "string.byte", 1)
+        .unwrap_or(&LuaNumber::Integer(1))
+        .integer_repr()?;
+    let j = get_number!(input, "string.byte", 2)
+        .unwrap_or(&LuaNumber::Integer(i))
+        .integer_repr()?;
+
+    let i = match i.cmp(&0) {
+        Ordering::Less => s.len() as i64 + i + 1,
+        Ordering::Greater => i,
+        Ordering::Equal => 1,
+    };
+    let i = if i < 1 { 1 } else { i };
+    let j = match j.cmp(&0) {
+        Ordering::Less => s.len() as i64 + j + 1,
+        Ordering::Greater if j >= s.len() as i64 => s.len() as i64,
+        Ordering::Greater => j,
+        Ordering::Equal => return Ok(vec![]),
+    };
+    let j = if j > s.len() as i64 {
+        s.len() as i64
+    } else {
+        j
+    };
+
+    let result: Vec<_> = (i..=j)
+        .map(|i| s[i as usize - 1])
+        .map(|v| (v as i64).into())
+        .collect();
+    Ok(if result.is_empty() {
+        vec![LuaValue::Nil]
+    } else {
+        result
+    })
+}
+
+fn char(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+    let mut str = Vec::with_capacity(input.len());
+    for (i, _) in input.iter().enumerate() {
+        let i = require_number!(input, "string.char", i).integer_repr()?;
+        if i < u8::MIN as i64 || i > u8::MAX as i64 {
+            return Err(miette::miette!(
+                "bad argument #{i} to 'string.char' (value out of range)",
+            ));
+        }
+
+        str.push(i as u8);
+    }
+
+    Ok(vec![LuaValue::String(str)])
 }
 
 fn find(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {

@@ -126,7 +126,7 @@ macro_rules! get_number {
             Some(LuaValue::Number(n)) => Some(n),
             Some(LuaValue::Nil) | None => None,
             Some(v) => {
-                return Err(miette!(
+                return Err(::miette::miette!(
                     "bad argument #{} to '{}', expected number, got {}",
                     $index + 1,
                     $name,
