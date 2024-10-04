@@ -871,8 +871,7 @@ impl<'path, 'source> Parser<'path, 'source> {
                         PrefixExpression::FunctionCall(TokenTree::new(
                             FunctionCall {
                                 function: Box::new(prefix),
-                                as_method: true,
-                                name: Some(name),
+                                method_name: Some(name),
                                 args,
                             },
                             span,
@@ -892,8 +891,7 @@ impl<'path, 'source> Parser<'path, 'source> {
                         PrefixExpression::FunctionCall(TokenTree::new(
                             FunctionCall {
                                 function: Box::new(prefix),
-                                as_method: false,
-                                name: None,
+                                method_name: None,
                                 args,
                             },
                             span,
@@ -1410,8 +1408,7 @@ impl<'path, 'source> Parser<'path, 'source> {
                             PrefixExpression::FunctionCall(TokenTree::new(
                                 FunctionCall {
                                     function: Box::new(prefix),
-                                    as_method: true,
-                                    name: Some(name),
+                                    method_name: Some(name),
                                     args,
                                 },
                                 span,

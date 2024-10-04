@@ -1040,15 +1040,13 @@ impl<'a, 'source> Compiler<'a, 'source> {
         self.push_load_marker();
 
         // If this is a method call, we need to push the object as the first argument
-        if function_call.node.as_method {
+        if let Some(method_name) = function_call.node.method_name {
             self.compile_prefix_expression(*function_call.node.function, ExpressionResult::Single)?;
 
             // It's unfortunate to duplicate the argument loop here with the else below, but this
             // avoids the borrow checker complaining, and having to `clone()` the function call
             // node above.
             self.compile_expression_list(function_call.node.args.node)?;
-
-            let method_name = function_call.node.name.expect("method call without name");
 
             // We'll look up the target object as the first item after the marker
             // on the stack, and then retrieve the method as a field on that object.

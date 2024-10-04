@@ -123,8 +123,7 @@ pub enum PrefixExpression {
 #[derive(Debug, PartialEq, Clone)]
 pub struct FunctionCall {
     pub function: Box<TokenTree<PrefixExpression>>,
-    pub as_method: bool,
-    pub name: Option<TokenTree<Name>>,
+    pub method_name: Option<TokenTree<Name>>,
     pub args: TokenTree<Vec<TokenTree<Expression>>>,
 }
 

@@ -114,8 +114,7 @@ fn optimize_function_call(function_call: TokenTree<FunctionCall>) -> TokenTree<F
     TokenTree::new(
         FunctionCall {
             function: Box::new(optimize_prefix_expression(*function_call.node.function)),
-            as_method: function_call.node.as_method,
-            name: function_call.node.name,
+            method_name: function_call.node.method_name,
             args: TokenTree::new(
                 function_call
                     .node
