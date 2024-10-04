@@ -206,7 +206,11 @@ impl<'source> VM<'source> {
         return_addr: usize,
         upvalues: Option<Vec<Option<Arc<RwLock<UpValue>>>>>,
         allow_multi_return_values: bool,
-    ) {
+    ) -> miette::Result<()> {
+        if self.call_stack_index >= MAX_STACK_SIZE {
+            return Err(miette!("stack overflow"));
+        }
+
         // Reuse the existing object to keep the `upvalues` vec
         self.call_stack[self.call_stack_index].name = name;
         self.call_stack[self.call_stack_index].chunk = chunk;
@@ -224,6 +228,8 @@ impl<'source> VM<'source> {
         }
 
         self.call_stack_index += 1;
+
+        Ok(())
     }
 
     fn pop_call_frame(&mut self) -> PoppedCallFrame {
@@ -322,7 +328,7 @@ impl<'source> VM<'source> {
             0,
             None,
             false,
-        );
+        )?;
 
         self.run_inner()
     }
@@ -348,7 +354,7 @@ impl<'source> VM<'source> {
             0,
             Some(value.upvalues),
             false,
-        );
+        )?;
 
         let result = self.run_inner();
         if result.is_err() {
@@ -982,7 +988,7 @@ impl<'source> VM<'source> {
                                                                 self.chunks[chunk_index].ip + 2,
                                                                 Some(closure.upvalues),
                                                                 true,
-                                                            );
+                                                            )?;
                                                             self.chunks[closure.chunk].ip =
                                                                 closure.ip as usize;
                                                             continue;
@@ -1004,7 +1010,7 @@ impl<'source> VM<'source> {
                                                                 self.chunks[chunk_index].ip + 2,
                                                                 None,
                                                                 true,
-                                                            );
+                                                            )?;
                                                             for value in f(self, args)? {
                                                                 self.push(value);
                                                             }
@@ -1162,7 +1168,7 @@ impl<'source> VM<'source> {
                                 self.chunks[chunk_index].ip + 2,
                                 Some(closure.upvalues),
                                 !is_single_return,
-                            );
+                            )?;
                             self.chunks[closure.chunk].ip = closure.ip as usize;
 
                             continue;
@@ -1177,7 +1183,7 @@ impl<'source> VM<'source> {
                                 self.chunks[chunk_index].ip + 2,
                                 None,
                                 !is_single_return,
-                            );
+                            )?;
                             let mut args = Vec::with_capacity(num_args);
                             for _ in 0..num_args {
                                 args.push(self.pop());
