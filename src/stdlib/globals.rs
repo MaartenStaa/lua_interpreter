@@ -225,6 +225,36 @@ pub(crate) fn load(vm: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaV
     )))])
 }
 
+pub(crate) fn next(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+    require_table!(read, input, "next", 0, table, {
+        let kv = match input.get(1) {
+            None | Some(LuaValue::Nil) => table.iter().next(),
+            Some(key) => {
+                // Find the key-value _after_ the given key
+                let iter = table.iter();
+                let mut key_found = false;
+                let mut kv = None;
+                for (k, v) in iter {
+                    if key_found {
+                        kv = Some((k, v));
+                        break;
+                    }
+                    if k == key {
+                        key_found = true;
+                    }
+                }
+
+                kv
+            }
+        };
+
+        match kv {
+            Some((k, v)) => Ok(vec![k.clone(), v.clone()]),
+            None => Ok(vec![LuaValue::Nil]),
+        }
+    })
+}
+
 pub(crate) fn pcall(vm: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     let mut input = input.into_iter();
     let function = match input.next() {
