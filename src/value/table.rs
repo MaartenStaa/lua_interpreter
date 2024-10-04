@@ -8,6 +8,7 @@ use super::{number::LuaNumber, LuaValue};
 #[derive(Debug, Clone, PartialEq)]
 pub struct LuaTable {
     fields: HashMap<LuaValue, LuaValue>,
+    metatable: Option<LuaValue>,
     last_number_key: i64,
     is_sequence: bool,
 }
@@ -16,6 +17,7 @@ impl LuaTable {
     pub fn new() -> Self {
         Self {
             fields: HashMap::new(),
+            metatable: None,
             last_number_key: 0,
             is_sequence: true,
         }
@@ -125,6 +127,14 @@ impl LuaTable {
     pub fn mark_sequence_dangerous(&mut self, last_number_key: i64) {
         self.is_sequence = true;
         self.last_number_key = last_number_key;
+    }
+
+    pub fn set_metatable(&mut self, metatable: Option<LuaValue>) {
+        self.metatable = metatable;
+    }
+
+    pub fn metatable(&self) -> Option<&LuaValue> {
+        self.metatable.as_ref()
     }
 }
 

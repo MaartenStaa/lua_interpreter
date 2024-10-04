@@ -68,7 +68,7 @@ impl LuaValue {
 impl LuaObject {
     pub fn get_metatable(&self) -> Option<LuaValue> {
         match self {
-            LuaObject::Table(t) => t.get(&METATABLE_KEY).cloned(),
+            LuaObject::Table(t) => t.metatable().cloned(),
             LuaObject::UserData(UserData::Full { metatable, .. }) => metatable.clone(),
             _ => None,
         }
