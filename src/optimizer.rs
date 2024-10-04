@@ -213,6 +213,7 @@ fn optimize_function_def(func: TokenTree<FunctionDef>) -> TokenTree<FunctionDef>
     TokenTree::new(
         FunctionDef {
             name: func.node.name,
+            method_name: func.node.method_name,
             parameters: func.node.parameters,
             has_varargs: func.node.has_varargs,
             block: optimize(func.node.block),

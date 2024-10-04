@@ -44,6 +44,7 @@ struct Label {
 #[derive(Debug, Clone)]
 struct Local {
     name: Vec<u8>,
+    is_parameter: bool,
     depth: u8,
     span: Option<Span>,
 }
@@ -81,6 +82,9 @@ struct NewLocalsAfterGoto {
 
 #[derive(Debug)]
 struct Frame {
+    ip: JumpAddr,
+    name: Option<Vec<u8>>,
+    method_name: Option<Vec<u8>>,
     locals: Vec<Local>,
     gotos: HashMap<Vec<u8>, Vec<Goto>>,
     labels: HashMap<Vec<u8>, Label>,
@@ -91,8 +95,11 @@ struct Frame {
 }
 
 impl Frame {
-    fn new() -> Self {
+    fn new(ip: JumpAddr, name: Option<Vec<u8>>, method_name: Option<Vec<u8>>) -> Self {
         Self {
+            ip,
+            name,
+            method_name,
             locals: vec![],
             gotos: HashMap::new(),
             labels: HashMap::new(),
@@ -197,7 +204,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
             chunk_index: vm.get_next_chunk_index(),
             vm,
             // Start at the root of the file.
-            frames: vec![Frame::new()],
+            frames: vec![Frame::new(0, None, None)],
         }
     }
 
@@ -271,24 +278,43 @@ impl<'a, 'source> Compiler<'a, 'source> {
             self.begin_scope();
         }
 
+        let has_return = ast.node.return_statement.is_some();
+        let num_statements = ast.node.statements.len();
+
         let mut block_result = BlockResult::new();
 
-        for statement in ast.node.statements {
+        for (i, statement) in ast.node.statements.into_iter().enumerate() {
             if !matches!(&statement.node, Statement::Label(_)) {
                 block_result.assert_no_new_locals()?;
             }
 
-            block_result.extend(self.compile_statement(statement, &options)?);
+            let is_final_statement = i == num_statements - 1 && !has_return;
+            block_result.extend(self.compile_statement(statement, &options, is_final_statement)?);
         }
 
         if let Some(return_statement) = ast.node.return_statement {
-            self.push_load_marker();
-            if return_statement.is_empty() {
-                self.push_load_nil(None);
-            } else {
-                self.compile_expression_list(return_statement)?;
+            let mut handled_as_tail_call = false;
+            if return_statement.len() == 1 {
+                if let Expression::PrefixExpression(TokenTree {
+                    node: PrefixExpression::FunctionCall(function_call),
+                    ..
+                }) = &return_statement[0].node
+                {
+                    if self.compile_tail_call(function_call.clone())? {
+                        handled_as_tail_call = true;
+                    }
+                }
             }
-            self.chunk.push_instruction(Instruction::Return, None);
+
+            if !handled_as_tail_call {
+                self.push_load_marker();
+                if return_statement.is_empty() {
+                    self.push_load_nil(None);
+                } else {
+                    self.compile_expression_list(return_statement)?;
+                }
+                self.chunk.push_instruction(Instruction::Return, None);
+            }
         }
 
         if options.new_scope {
@@ -303,10 +329,15 @@ impl<'a, 'source> Compiler<'a, 'source> {
         &mut self,
         statement: TokenTree<Statement>,
         options: &BlockOptions,
+        is_final_statement: bool,
     ) -> miette::Result<BlockResult> {
         let span = statement.span;
         Ok(match statement.node {
             Statement::FunctionCall(function_call) => {
+                if is_final_statement && self.compile_tail_call(function_call.clone())? {
+                    return Ok(BlockResult::new());
+                }
+
                 // Marker for the return values
                 self.push_load_marker();
                 self.compile_function_call(function_call, ExpressionResult::Multiple)?;
@@ -1098,25 +1129,107 @@ impl<'a, 'source> Compiler<'a, 'source> {
         Ok(())
     }
 
+    fn compile_tail_call(
+        &mut self,
+        function_call: TokenTree<FunctionCall>,
+    ) -> miette::Result<bool> {
+        // Check if this function call refers to the current function
+        let frame = self.frames.last().expect("frames is not empty");
+        let is_tail_call = match &function_call.node.function.node {
+            PrefixExpression::Variable(TokenTree {
+                node: Variable::Name(name),
+                ..
+            }) => {
+                (Some(&name.node.0) == frame.name.as_ref()
+                    && function_call.node.method_name.is_none())
+                    || (&name.node.0 == b"self"
+                        && function_call.node.method_name.map(|n| n.node.0) == frame.method_name)
+            }
+            _ => false,
+        };
+
+        if !is_tail_call {
+            return Ok(false);
+        }
+
+        let is_method = frame.method_name.is_some();
+        let parameter_offset = if is_method { 1 } else { 0 };
+        let num_parameters = frame
+            .locals
+            .iter()
+            .filter(|local| local.is_parameter)
+            .count()
+            - parameter_offset;
+        let function_has_varargs = frame
+            .locals
+            .iter()
+            .any(|local| local.is_parameter && local.name == VARARG_LOCAL_NAME);
+        let num_locals = frame.locals.len();
+        let frame_ip = frame.ip;
+
+        self.push_load_marker();
+        self.compile_expression_list(function_call.node.args.node)?;
+
+        if function_has_varargs {
+            self.chunk.push_instruction(Instruction::AlignVararg, None);
+        } else {
+            self.chunk.push_instruction(Instruction::Align, None);
+        }
+        self.chunk.push_instruction(num_parameters as u8, None);
+
+        // Now we just need to overwrite the current frame's local parameters with the new
+        // values, and then jump back to the start of the function.
+        if function_has_varargs {
+            self.chunk.push_instruction(Instruction::SetLocal, None);
+            self.chunk
+                .push_instruction((num_parameters + parameter_offset) as u8, None);
+        }
+        for i in 0..num_parameters {
+            self.chunk.push_instruction(Instruction::SetLocal, None);
+            self.chunk
+                .push_instruction((num_parameters - i - 1 + parameter_offset) as u8, None);
+        }
+
+        // Pop off the rest of the stack
+        let extraneous_locals = num_locals
+            - num_parameters
+            - if function_has_varargs { 1 } else { 0 }
+            - parameter_offset;
+        for _ in 0..extraneous_locals {
+            self.chunk.push_instruction(Instruction::Pop, None);
+        }
+
+        self.chunk.push_instruction(Instruction::Jmp, None);
+        // We don't have to do the alignment, since we already ensured the correct number of
+        // arguments above.
+        self.chunk.push_addr(frame_ip + 2);
+
+        Ok(true)
+    }
+
     fn compile_function_def(&mut self, function_def: TokenTree<FunctionDef>) -> miette::Result<()> {
         // We'll issue the bytecode inline here, but jump over it at runtime
         self.chunk.push_instruction(Instruction::Jmp, None);
         let jmp_over_func_addr = self.chunk.push_addr_placeholder();
 
         // Compile the function
-        self.begin_frame();
-        self.begin_scope();
         let func_addr = self.chunk.get_current_addr();
+        self.begin_frame(
+            self.chunk.get_current_addr(),
+            function_def.node.name.clone(),
+            function_def.node.method_name,
+        );
+        self.begin_scope();
 
         // Define the function arguments
         let parameter_count = function_def.node.parameters.len();
         for parameter in function_def.node.parameters {
-            self.add_local(parameter.node.0, Some(parameter.span));
+            self.add_parameter(parameter.node.0, Some(parameter.span));
         }
 
         if function_def.node.has_varargs {
             // TODO: There actually should be a span for varargs, right?
-            self.add_local(VARARG_LOCAL_NAME.to_vec(), None);
+            self.add_parameter(VARARG_LOCAL_NAME.to_vec(), None);
             self.chunk.push_instruction(Instruction::AlignVararg, None);
         } else {
             self.chunk.push_instruction(Instruction::Align, None);
@@ -1497,8 +1610,8 @@ impl<'a, 'source> Compiler<'a, 'source> {
         }
     }
 
-    fn begin_frame(&mut self) {
-        self.frames.push(Frame::new());
+    fn begin_frame(&mut self, ip: JumpAddr, name: Option<Vec<u8>>, method_name: Option<Vec<u8>>) {
+        self.frames.push(Frame::new(ip, name, method_name));
     }
 
     fn end_frame(&mut self) -> miette::Result<Frame> {
@@ -1628,10 +1741,19 @@ impl<'a, 'source> Compiler<'a, 'source> {
         Ok(())
     }
 
+    fn add_parameter(&mut self, name: Vec<u8>, span: Option<Span>) -> u8 {
+        self.add_local_inner(name, true, span)
+    }
+
     fn add_local(&mut self, name: Vec<u8>, span: Option<Span>) -> u8 {
+        self.add_local_inner(name, false, span)
+    }
+
+    fn add_local_inner(&mut self, name: Vec<u8>, is_parameter: bool, span: Option<Span>) -> u8 {
         let current_frame = self.frames.last_mut().unwrap();
         let local = Local {
             name: name.clone(),
+            is_parameter,
             depth: current_frame.scope_depth,
             span,
         };

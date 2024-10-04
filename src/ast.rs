@@ -212,6 +212,7 @@ pub enum Field {
 #[derive(Debug, PartialEq, Clone)]
 pub struct FunctionDef {
     pub name: Option<Vec<u8>>,
+    pub method_name: Option<Vec<u8>>,
     pub parameters: Vec<TokenTree<Name>>,
     pub has_varargs: bool,
     pub block: TokenTree<Block>,

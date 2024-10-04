@@ -296,11 +296,11 @@ impl<'path, 'source> Parser<'path, 'source> {
                 }) => {
                     let start = span.start;
                     self.lexer.next();
-                    let (name, implicit_self_parameter) = {
+                    let (name, method_name) = {
                         let name = self.parse_name().wrap_err("in function declaration")?;
                         let mut name_span = name.span;
                         let mut name = TokenTree::new(Variable::Name(name), name_span);
-                        let mut implicit_self_parameter = None;
+                        let mut method_name = None;
 
                         loop {
                             match self.lexer.peek()? {
@@ -330,33 +330,33 @@ impl<'path, 'source> Parser<'path, 'source> {
                                     ..
                                 }) => {
                                     self.lexer.next();
-                                    let method_name =
+                                    let method_name_ =
                                         self.parse_name().wrap_err("in function declaration")?;
-                                    let method_name_span = method_name.span;
+                                    method_name = Some(method_name_.node.0.clone());
+                                    let method_name_span = method_name_.span;
                                     name = TokenTree::new(
                                         Variable::Field(
                                             Box::new(TokenTree::new(
                                                 PrefixExpression::Variable(name),
                                                 name_span,
                                             )),
-                                            method_name,
+                                            method_name_,
                                         ),
                                         Span::new(name_span.start, method_name_span.end),
                                     );
-                                    implicit_self_parameter = Some(Name(b"self".to_vec()));
                                     break;
                                 }
                                 _ => break,
                             }
                         }
 
-                        (name, implicit_self_parameter)
+                        (name, method_name)
                     };
 
                     let function_def = self
                         .parse_function_body(
                             start,
-                            implicit_self_parameter,
+                            method_name,
                             match &name.node {
                                 Variable::Name(name) => Some(name.node.0.clone()),
                                 _ => None,
@@ -1449,15 +1449,15 @@ impl<'path, 'source> Parser<'path, 'source> {
     fn parse_function_body(
         &mut self,
         start_position: usize,
-        implicit_self_parameter: Option<Name>,
+        method_name: Option<Vec<u8>>,
         name: Option<Vec<u8>>,
     ) -> miette::Result<TokenTree<FunctionDef>> {
         let open_paren = self.lexer.expect(|k| k == &TokenKind::OpenParen, "(")?;
 
         let mut parameters = Vec::new();
-        if let Some(name) = implicit_self_parameter {
+        if method_name.is_some() {
             parameters.push(TokenTree::new(
-                name,
+                Name(b"self".to_vec()),
                 Span::new(open_paren.span.end, open_paren.span.end),
             ));
         }
@@ -1522,6 +1522,7 @@ impl<'path, 'source> Parser<'path, 'source> {
         Ok(TokenTree::new(
             FunctionDef {
                 name,
+                method_name,
                 parameters,
                 has_varargs,
                 block,
