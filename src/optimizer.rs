@@ -181,6 +181,10 @@ fn optimize_prefix_expression(prefix: TokenTree<PrefixExpression>) -> TokenTree<
         match prefix.node {
             PrefixExpression::Variable(var) => PrefixExpression::Variable(optimize_variable(var)),
             PrefixExpression::Parenthesized(expr) => {
+                if let Expression::PrefixExpression(expr) = expr.node {
+                    return optimize_prefix_expression(expr);
+                }
+
                 PrefixExpression::Parenthesized(Box::new(optimize_expression(*expr)))
             }
             PrefixExpression::FunctionCall(func) => {
