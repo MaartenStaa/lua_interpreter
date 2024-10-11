@@ -3,7 +3,7 @@ use crate::value::metatables;
 use super::LuaValue;
 use std::{
     fmt::{self, Debug, Display, Formatter},
-    ops::Deref,
+    ops::{Deref, DerefMut},
 };
 
 pub struct UpValue(pub(crate) LuaValue);
@@ -24,6 +24,12 @@ impl Deref for UpValue {
 
     fn deref(&self) -> &Self::Target {
         &self.0
+    }
+}
+
+impl DerefMut for UpValue {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
     }
 }
 

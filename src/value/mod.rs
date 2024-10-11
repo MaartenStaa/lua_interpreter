@@ -1,4 +1,5 @@
 mod attribute;
+pub(crate) mod callable;
 mod closure;
 mod constant;
 mod conversions;

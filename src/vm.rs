@@ -12,10 +12,10 @@ use crate::{
     error::RuntimeError,
     instruction::Instruction,
     macros::{assert_closure, assert_table, assert_table_object},
-    stdlib,
     token::Span,
     value::{
-        metatables::{self, CALL_KEY, CLOSE_KEY},
+        callable::{Callable, Method},
+        metatables::{self, CLOSE_KEY, INDEX_KEY, NEWINDEX_KEY},
         LuaClosure, LuaConst, LuaNumber, LuaObject, LuaTable, LuaValue, LuaVariableAttribute,
         UpValue,
     },
@@ -376,7 +376,7 @@ impl<'source> VM<'source> {
     }
 
     fn run_inner(&mut self) -> miette::Result<Vec<LuaValue>> {
-        loop {
+        'main: loop {
             let chunk_index = self.call_stack[self.call_stack_index - 1].chunk;
             let instruction = self.chunks[chunk_index].instructions[self.chunks[chunk_index].ip];
 
@@ -450,12 +450,25 @@ impl<'source> VM<'source> {
                     let to_be_closed = LuaVariableAttribute::ToBeClosed as u8;
                     if attr & to_be_closed == to_be_closed && value.as_boolean() {
                         if let Some(__close) = value.get_metavalue(&CLOSE_KEY) {
-                            let close = assert_closure!(read, __close, close, close.clone());
+                            let close: Callable = (&__close).try_into().map_err(|_| {
+                                miette!("__close metamethod must be a callable value")
+                            })?;
                             // TODO: Second value refers to "the error object that caused the exit
                             // (if any)", but we don't have that yet. Sound like we'll need to
                             // unwind the stack for that.
-                            let args = vec![value, LuaValue::Nil];
-                            self.run_closure(close, args)?;
+                            let args = if close.is_metamethod {
+                                vec![__close, value, LuaValue::Nil]
+                            } else {
+                                vec![value, LuaValue::Nil]
+                            };
+                            match close.method {
+                                Method::Closure(closure) => {
+                                    self.run_closure(closure, args)?;
+                                }
+                                Method::NativeFunction(_, func) => {
+                                    func(self, args)?;
+                                }
+                            }
                         } else {
                             return Err(miette!(
                                 "variable marked for closing has a non-closeable value"
@@ -944,118 +957,156 @@ impl<'source> VM<'source> {
                     let value = self.pop();
                     let key = self.pop();
                     let table = self.peek().clone();
-                    match table {
-                        LuaValue::Object(o) => match &mut *o.write().unwrap() {
-                            LuaObject::Table(t) => {
-                                t.insert(key, value);
-                            }
-                            o => {
-                                if let Some(metatable) = o.get_metatable() {
-                                    todo!();
+
+                    let mut target = table.clone();
+                    let mut handled = false;
+                    loop {
+                        let mut is_table_with_missing_key = false;
+                        if let LuaValue::Object(o) = &target {
+                            if let LuaObject::Table(t) = &mut *o.write().unwrap() {
+                                if t.contains_key(&key) {
+                                    t.insert(key, value);
+                                    handled = true;
+                                    break;
+                                } else {
+                                    is_table_with_missing_key = true;
                                 }
-                                return Err(miette!("attempt to index a non-table"));
                             }
-                        },
-                        _ => {
-                            return Err(miette!("attempt to index a non-table"));
+                        }
+
+                        if let Some(__newindex) = target.get_metavalue(&NEWINDEX_KEY) {
+                            let __newindex_callable: Result<Callable, _> = (&__newindex).try_into();
+                            if let Ok(__newindex) = __newindex_callable {
+                                match __newindex.method {
+                                    Method::Closure(closure) => {
+                                        // Run through `run_closure` rather than jumping to it
+                                        // directly, so return values are cleaned up properly
+                                        self.run_closure(closure, vec![table, key, value])?;
+                                        handled = true;
+                                        break;
+                                    }
+                                    Method::NativeFunction(name, f) => {
+                                        let args = vec![table, key, value];
+                                        self.push_call_frame(
+                                            Some(
+                                                format!("native function '{}'", name)
+                                                    .into_bytes()
+                                                    .to_vec(),
+                                            ),
+                                            0,
+                                            false,
+                                            self.stack.len(),
+                                            self.chunks[chunk_index].ip + 1,
+                                            None,
+                                            false,
+                                        )?;
+                                        if let Some(return_value) =
+                                            f(self, args)?.into_iter().next()
+                                        {
+                                            self.push(return_value);
+                                        } else {
+                                            self.push(LuaValue::Nil);
+                                        }
+                                        self.pop_call_frame();
+                                    }
+                                }
+                                handled = true;
+                                break;
+                            }
+
+                            target = __newindex;
+                        } else if is_table_with_missing_key {
+                            assert_table!(write, target, table, {
+                                table.insert(key, value);
+                            });
+                            handled = true;
+                            break;
+                        } else {
+                            break;
                         }
                     }
+
+                    if !handled {
+                        return Err(miette!("attempt to index a non-table"));
+                    }
+
                     1
                 }
                 Instruction::GetTable => {
                     let key = self.pop();
                     let table = self.pop();
-                    // TODO: Handle metatables
-                    match &table {
-                        LuaValue::Object(o) => match &*o.read().unwrap() {
-                            LuaObject::Table(t) => {
-                                let value = t.get(&key).cloned().unwrap_or(LuaValue::Nil);
-                                self.push(value);
-                            }
-                            o => {
-                                if let Some(metatable) = o.get_metatable() {
-                                    assert_table!(metatable, metatable, {
-                                        let __index =
-                                            metatable.get(&LuaValue::String(b"__index".to_vec()));
-                                        if let Some(__index) = __index {
-                                            match __index {
-                                                LuaValue::Object(__index) => {
-                                                    match &*__index.read().unwrap() {
-                                                        LuaObject::Closure(closure) => {
-                                                            let closure = closure.clone();
-                                                            self.push_call_frame(
-                                                                None,
-                                                                closure.chunk,
-                                                                false,
-                                                                self.stack.len() - 1,
-                                                                self.chunks[chunk_index].ip + 2,
-                                                                Some(closure.upvalues),
-                                                                true,
-                                                            )?;
-                                                            self.chunks[closure.chunk].ip =
-                                                                closure.ip as usize;
-                                                            continue;
-                                                        }
-                                                        LuaObject::NativeFunction(name, f) => {
-                                                            let args = vec![table.clone(), key];
-                                                            self.push_call_frame(
-                                                                Some(
-                                                                    format!(
-                                                                        "native function '{}'",
-                                                                        name
-                                                                    )
-                                                                    .into_bytes()
-                                                                    .to_vec(),
-                                                                ),
-                                                                0,
-                                                                false,
-                                                                self.stack.len() - 2,
-                                                                self.chunks[chunk_index].ip + 2,
-                                                                None,
-                                                                true,
-                                                            )?;
-                                                            for value in f(self, args)? {
-                                                                self.push(value);
-                                                            }
-                                                            self.pop_call_frame();
-                                                        }
-                                                        _ => {
-                                                            return Err(miette!(
-                                                                "__index metamethod must be a function"
-                                                            ));
-                                                        }
-                                                    }
-                                                }
-                                                _ => {
-                                                    return Err(miette!(
-                                                        "attempt to index a non-table 1"
-                                                    ));
-                                                }
-                                            }
-                                        } else {
-                                            return Err(miette!("attempt to index a non-table 0"));
-                                        }
-                                    })
-                                } else {
-                                    return Err(miette!("attempt to index a non-table 3"));
+
+                    let mut handled = false;
+
+                    let mut target = table.clone();
+                    loop {
+                        if let LuaValue::Object(o) = &target {
+                            if let LuaObject::Table(t) = &*o.read().unwrap() {
+                                if let Some(value) = t.get(&key).cloned() {
+                                    self.push(value);
+                                    handled = true;
+                                    break;
                                 }
                             }
-                        },
-                        LuaValue::String(_) => {
-                            // Maybe it's an stdlib string method
-                            let string = stdlib::string();
-                            assert_table!(string, string, {
-                                if let Some(value) = string.get(&key) {
-                                    self.push(value.clone());
-                                } else {
-                                    return Err(miette!("attempt to index a non-table"));
-                                }
-                            })
                         }
-                        _ => {
-                            return Err(miette!("attempt to index a non-table"));
+
+                        if let Some(__index) = target.get_metavalue(&INDEX_KEY) {
+                            let __index_callable: Result<Callable, _> = (&__index).try_into();
+                            if let Ok(__index) = __index_callable {
+                                match __index.method {
+                                    Method::Closure(closure) => {
+                                        self.push(table);
+                                        self.push(key);
+                                        self.push_call_frame(
+                                            closure.name,
+                                            closure.chunk,
+                                            false,
+                                            self.stack.len() - 2,
+                                            self.chunks[chunk_index].ip + 1,
+                                            Some(closure.upvalues),
+                                            false,
+                                        )?;
+                                        continue 'main;
+                                    }
+                                    Method::NativeFunction(name, f) => {
+                                        let args = vec![table, key];
+                                        self.push_call_frame(
+                                            Some(
+                                                format!("native function '{}'", name)
+                                                    .into_bytes()
+                                                    .to_vec(),
+                                            ),
+                                            0,
+                                            false,
+                                            self.stack.len(),
+                                            self.chunks[chunk_index].ip + 1,
+                                            None,
+                                            false,
+                                        )?;
+                                        if let Some(return_value) =
+                                            f(self, args)?.into_iter().next()
+                                        {
+                                            self.push(return_value);
+                                        } else {
+                                            self.push(LuaValue::Nil);
+                                        }
+                                        self.pop_call_frame();
+                                    }
+                                }
+                                handled = true;
+                                break;
+                            }
+
+                            target = __index;
+                        } else {
+                            break;
                         }
                     }
+
+                    if !handled {
+                        return Err(miette!("attempt to index a non-table"));
+                    }
+
                     1
                 }
                 Instruction::AppendToTable => {
@@ -1101,44 +1152,8 @@ impl<'source> VM<'source> {
                         function => function,
                     };
 
-                    enum Callable {
-                        Closure(LuaClosure),
-                        NativeFunction(
-                            String,
-                            fn(&mut VM, Vec<LuaValue>) -> miette::Result<Vec<LuaValue>>,
-                        ),
-                    }
-
-                    // If it's a metamethod, the function is the __call metamethod
-                    // In that case, the object itself is (implicitly) the first argument
-                    let mut is_metamethod = None;
-
                     // Find the underlying closure or native function, handling metamethods
-                    // FIXME: I don't like all of this cloning.
-                    let function = match &function {
-                        LuaValue::Object(o) => match &*o.read().unwrap() {
-                            LuaObject::Closure(closure) => Some(Callable::Closure(closure.clone())),
-                            LuaObject::NativeFunction(name, f) => {
-                                Some(Callable::NativeFunction(name.to_string(), *f))
-                            }
-                            other => other.get_metavalue(&CALL_KEY).and_then(|__call| {
-                                is_metamethod = Some(function.clone());
-                                match __call {
-                                    LuaValue::Object(__call) => match &*__call.read().unwrap() {
-                                        LuaObject::Closure(closure) => {
-                                            Some(Callable::Closure(closure.clone()))
-                                        }
-                                        LuaObject::NativeFunction(name, f) => {
-                                            Some(Callable::NativeFunction(name.to_string(), *f))
-                                        }
-                                        _ => None,
-                                    },
-                                    _ => None,
-                                }
-                            }),
-                        },
-                        _ => None,
-                    };
+                    let callable: Option<Callable> = (&function).try_into().ok();
 
                     // Look up the stack to find the marker, anything above that is
                     // arguments to the function
@@ -1149,9 +1164,9 @@ impl<'source> VM<'source> {
                         .expect("no function call args marker found");
                     let mut num_args = self.stack.len() - marker_position - 1;
 
-                    if let Some(self_parameter) = is_metamethod {
+                    if callable.as_ref().map_or(false, |c| c.is_metamethod) {
                         // We can reuse the marker index as self parameter value
-                        self.stack[marker_position] = self_parameter;
+                        self.stack[marker_position] = function;
                         num_args += 1;
                     } else {
                         // Get rid of the marker
@@ -1160,9 +1175,10 @@ impl<'source> VM<'source> {
                     }
 
                     let is_single_return = instr_param!() == 1;
+                    let callable = callable.map(|c| c.method);
 
-                    match function {
-                        Some(Callable::Closure(closure)) => {
+                    match callable {
+                        Some(Method::Closure(closure)) => {
                             self.push_call_frame(
                                 closure.name.clone(),
                                 closure.chunk,
@@ -1176,7 +1192,7 @@ impl<'source> VM<'source> {
 
                             continue;
                         }
-                        Some(Callable::NativeFunction(name, f)) => {
+                        Some(Method::NativeFunction(name, f)) => {
                             // Push a call frame just for nicer stack traces
                             self.push_call_frame(
                                 Some(format!("native function '{}'", name).into_bytes().to_vec()),

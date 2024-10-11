@@ -11,7 +11,10 @@ use crate::{
     compiler::Compiler,
     macros::{assert_string, assert_table, require_string, require_table},
     stdlib::package,
-    value::{metatables, LuaClosure, LuaNumber, LuaObject, LuaValue},
+    value::{
+        callable::{Callable, Method},
+        metatables, LuaClosure, LuaNumber, LuaObject, LuaValue,
+    },
     vm::VM,
 };
 
@@ -260,23 +263,20 @@ pub(crate) fn pairs(vm: &mut VM, mut input: Vec<LuaValue>) -> miette::Result<Vec
         return Err(miette!("bad argument #1 to 'pairs' (value expected)"));
     }
 
+    // If t has a metamethod __pairs, calls it with t as argument and returns the first three results from the call.
     let t = input.swap_remove(0);
-    if let Some(LuaValue::Object(o)) = t.get_metavalue(&metatables::PAIRS_KEY) {
-        match &*o.read().unwrap() {
-            LuaObject::Closure(c) => {
-                let mut result = vm.run_closure(c.clone(), vec![t.clone()])?;
-                result.resize(3, LuaValue::Nil);
+    if let Some(Callable { method, .. }) = t
+        .get_metavalue(&metatables::PAIRS_KEY)
+        .and_then(|v| v.try_into().ok())
+    {
+        let args = vec![t.clone()];
+        let mut result = match method {
+            Method::Closure(closure) => vm.run_closure(closure, args)?,
+            Method::NativeFunction(_, f) => f(vm, args)?,
+        };
+        result.resize(3, LuaValue::Nil);
 
-                return Ok(result);
-            }
-            LuaObject::NativeFunction(_, f) => {
-                let mut result = f(vm, vec![t.clone()])?;
-                result.resize(3, LuaValue::Nil);
-
-                return Ok(result);
-            }
-            _ => {}
-        }
+        return Ok(result);
     }
 
     Ok(vec![
@@ -289,13 +289,7 @@ pub(crate) fn pairs(vm: &mut VM, mut input: Vec<LuaValue>) -> miette::Result<Vec
 pub(crate) fn pcall(vm: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     let mut input = input.into_iter();
     let function = match input.next() {
-        Some(LuaValue::Object(o)) => o,
-        Some(value) => {
-            return Err(miette!(
-                "bad argument #1 to 'pcall' (function expected, got {})",
-                value.type_name()
-            ));
-        }
+        Some(value) => value,
         None => {
             return Err(miette!(
                 "bad argument #1 to 'pcall' (function expected, got no value)"
@@ -303,16 +297,21 @@ pub(crate) fn pcall(vm: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<Lua
         }
     };
 
-    let args = input.collect();
-    let result = match &*function.read().unwrap() {
-        LuaObject::Closure(closure) => vm.run_closure(closure.clone(), args),
-        LuaObject::NativeFunction(_, f) => f(vm, args),
-        _ => {
-            return Err(miette!(
-                "bad argument #1 to 'pcall' (function expected, got {})",
-                function.read().unwrap().type_name()
-            ));
-        }
+    let mut args: Vec<_> = input.collect();
+    let callable_function: Callable = (&function).try_into().map_err(|_| {
+        miette!(
+            "bad argument #1 to 'pcall' (function expected, got {})",
+            function.type_name()
+        )
+    })?;
+
+    if callable_function.is_metamethod {
+        args.insert(0, function);
+    }
+
+    let result = match callable_function.method {
+        Method::Closure(closure) => vm.run_closure(closure.clone(), args),
+        Method::NativeFunction(_, f) => f(vm, args),
     };
 
     Ok(match result {

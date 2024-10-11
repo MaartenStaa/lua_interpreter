@@ -1,10 +1,12 @@
-use crate::vm::VM;
+use crate::{stdlib, vm::VM};
 use miette::miette;
 
 use super::{metatables, LuaNumber, LuaObject, LuaTable, LuaValue};
 
 pub(crate) fn get_string_metatable() -> LuaTable {
     let mut metatable = LuaTable::new();
+
+    metatable.insert(metatables::INDEX_KEY.clone(), stdlib::string());
 
     metatable.insert(
         metatables::ADD_KEY.clone(),
