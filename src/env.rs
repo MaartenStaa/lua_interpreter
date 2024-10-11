@@ -79,6 +79,10 @@ pub fn create_global_env() -> LuaTable {
         "warn".into(),
         LuaObject::NativeFunction("warn", stdlib::globals::warn).into(),
     );
+    env.insert(
+        "xpcall".into(),
+        LuaObject::NativeFunction("xpcall", stdlib::globals::xpcall).into(),
+    );
 
     // Global constants
     env.insert("_VERSION".into(), stdlib::globals::_VERSION.into());

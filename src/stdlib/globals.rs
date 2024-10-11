@@ -677,3 +677,77 @@ pub(crate) fn warn(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaVa
 
     Ok(vec![LuaValue::Nil])
 }
+
+pub(crate) fn xpcall(vm: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+    let mut input = input.into_iter();
+    let function = match input.next() {
+        Some(value) => value,
+        None => {
+            return Err(miette!(
+                "bad argument #1 to 'xpcall' (function expected, got no value)"
+            ));
+        }
+    };
+
+    let msgh = match input.next() {
+        Some(value) => value,
+        None => {
+            return Err(miette!(
+                "bad argument #2 to 'xpcall' (function expected, got no value)"
+            ))
+        }
+    };
+
+    let mut args: Vec<_> = input.collect();
+
+    let function_callable: Callable = (&function).try_into().map_err(|_| {
+        miette!(
+            "bad argument #1 to 'xpcall' (function expected, got {})",
+            function.type_name()
+        )
+    })?;
+    let msgh: Callable = (&msgh).try_into().map_err(|_| {
+        miette!(
+            "bad argument #2 to 'xpcall' (function expected, got {})",
+            msgh.type_name()
+        )
+    })?;
+
+    if function_callable.is_metamethod {
+        args.insert(0, function);
+    }
+
+    let mut result = match function_callable.method {
+        Method::Closure(closure) => vm.run_closure(closure.clone(), args),
+        Method::NativeFunction(_, f) => f(vm, args),
+    };
+
+    const MAX_MESSAGE_HANDLER_DEPTH: usize = 200;
+    for _ in 0..MAX_MESSAGE_HANDLER_DEPTH {
+        match result {
+            Ok(_) => break,
+            Err(e) => {
+                result = match &msgh.method {
+                    Method::Closure(closure) => vm.run_closure(
+                        closure.clone(),
+                        vec![LuaValue::String(e.to_string().into_bytes())],
+                    ),
+                    Method::NativeFunction(_, f) => {
+                        f(vm, vec![LuaValue::String(e.to_string().into_bytes())])
+                    }
+                };
+            }
+        }
+    }
+
+    Ok(match result {
+        Ok(mut values) => {
+            values.insert(0, LuaValue::Boolean(true));
+            values
+        }
+        Err(e) => vec![
+            LuaValue::Boolean(false),
+            LuaValue::String(e.to_string().into_bytes()),
+        ],
+    })
+}
