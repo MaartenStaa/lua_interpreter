@@ -41,7 +41,7 @@ impl<'path, 'source> Parser<'path, 'source> {
     }
 
     fn with_source_code(&self, report: miette::Report) -> miette::Report {
-        let source = self.source.to_vec();
+        let source = String::from_utf8_lossy(self.source).into_owned();
         if let Some(filename) = self.filename {
             return report.with_source_code(
                 miette::NamedSource::new(filename.to_string_lossy(), source).with_language("lua"),

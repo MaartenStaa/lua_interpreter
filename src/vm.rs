@@ -294,7 +294,7 @@ impl<'source> VM<'source> {
                 source,
                 ..
             } = &self.chunks[0];
-            let source = source.to_vec();
+            let source = String::from_utf8_lossy(source.as_ref()).to_string();
             if let Some(filename) = filename {
                 err = err.with_source_code(
                     NamedSource::new(filename.to_string_lossy(), source).with_language("lua"),

@@ -104,6 +104,7 @@ fn run_debug_lexer(lexer: Lexer, filename: &Path, source: &[u8]) {
         .file_name()
         .map(|f| f.to_string_lossy().to_string())
         .unwrap_or_else(|| "<file>".to_string());
+    let source = String::from_utf8_lossy(source).to_string();
     for token in lexer {
         match token {
             Ok(t) => {
@@ -116,7 +117,7 @@ fn run_debug_lexer(lexer: Lexer, filename: &Path, source: &[u8]) {
                     severity = miette::Severity::Advice,
                     "found a token",
                 )
-                .with_source_code(NamedSource::new(filename.clone(), source.to_owned()));
+                .with_source_code(NamedSource::new(filename.clone(), source.clone()));
                 eprintln!("{:?}", diag);
             }
             Err(e) => {
