@@ -12,9 +12,6 @@ pub(crate) static GLOBAL_NUMBER_METATABLE: LazyLock<LuaValue> =
 pub(crate) static GLOBAL_STRING_METATABLE: LazyLock<LuaValue> =
     LazyLock::new(|| super::string::get_string_metatable().into());
 
-pub(crate) static METATABLE_KEY: LazyLock<LuaValue> =
-    LazyLock::new(|| LuaValue::String(b"__metatable".into()));
-
 pub(crate) static ADD_KEY: LazyLock<LuaValue> = LazyLock::new(|| LuaValue::String(b"__add".into()));
 pub(crate) static SUB_KEY: LazyLock<LuaValue> = LazyLock::new(|| LuaValue::String(b"__sub".into()));
 pub(crate) static MUL_KEY: LazyLock<LuaValue> = LazyLock::new(|| LuaValue::String(b"__mul".into()));

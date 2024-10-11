@@ -836,9 +836,7 @@ impl<'source> VM<'source> {
                         _ => {
                             let value =
                                 assert_table_object!(read, self.chunks[chunk_index].env, env, {
-                                    env.get(&key.into())
-                                        .cloned()
-                                        .unwrap_or_else(|| LuaValue::Nil)
+                                    env.get(&key.into()).cloned().unwrap_or(LuaValue::Nil)
                                 });
                             self.push(value);
                         }

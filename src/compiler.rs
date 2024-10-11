@@ -866,11 +866,9 @@ impl<'a, 'source> Compiler<'a, 'source> {
                         self.push_load_marker();
                         // Arguments marker
                         self.push_load_marker();
-                        self.chunk
-                            .push_instruction(Instruction::GetLocal, Some(span));
+                        self.chunk.push_instruction(Instruction::GetLocal, None);
                         self.chunk.push_instruction(state_local, None);
-                        self.chunk
-                            .push_instruction(Instruction::GetLocal, Some(span));
+                        self.chunk.push_instruction(Instruction::GetLocal, None);
                         self.chunk.push_instruction(control_local, None);
                         self.chunk.push_instruction(Instruction::GetLocal, None);
                         self.chunk.push_instruction(iterator_local, None);
@@ -896,9 +894,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                         self.chunk
                             .push_instruction(Instruction::GetLocal, Some(span));
                         self.chunk.push_instruction(control_local, None);
-                        let nil_const_index = self.get_const_index(LuaConst::Nil);
-                        self.chunk.push_instruction(Instruction::LoadConst, None);
-                        self.chunk.push_const_index(nil_const_index);
+                        self.push_load_nil(None);
                         self.chunk.push_instruction(Instruction::Eq, None);
                         self.chunk.push_instruction(Instruction::JmpTrue, None);
                         let jmp_true_addr = self.chunk.push_addr_placeholder();

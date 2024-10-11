@@ -89,10 +89,6 @@ impl NumberParser {
         let next = rest_chars.peek();
         match next {
             Some(c) if c.is_ascii_alphabetic() => {
-                // return Err(self.with_source_code(miette!(
-                //     labels = vec![LabeledSpan::at(start..self.position + 1, "this literal")],
-                //     "invalid number literal"
-                // )))
                 return Err(NumberParseError {
                     message: format!(
                         "invalid number literal near '{}'",
