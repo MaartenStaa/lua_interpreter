@@ -36,16 +36,11 @@ fn concat(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
             temp = Some(n.to_string());
             temp.as_ref().map(|s| s.as_bytes())
         }
-        Some(LuaValue::Nil) => None,
+        None | Some(LuaValue::Nil) => None,
         Some(v) => {
             return Err(miette!(
                 "bad argument #1 to 'table.concat' (string expected, got {type_name})",
                 type_name = v.type_name()
-            ))
-        }
-        None => {
-            return Err(miette!(
-                "bad argument #1 to 'table.concat' (value expected)"
             ))
         }
     };
