@@ -68,7 +68,13 @@ pub(crate) fn getmetatable(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<V
         }
     };
 
-    let metatable = value.get_metatable();
+    // NOTE: Only tables and full user data objects have metatables. Under the hood there are
+    // metatables for other values as well, but these are only accessible in native code, or via
+    // `debug.getmetatable`.
+    let metatable = match value {
+        LuaValue::Object(o) => o.read().unwrap().get_metatable(),
+        _ => None,
+    };
 
     Ok(vec![metatable.unwrap_or(LuaValue::Nil)])
 }
