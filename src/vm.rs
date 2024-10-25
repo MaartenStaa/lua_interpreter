@@ -1038,12 +1038,15 @@ impl<'source> VM<'source> {
 
                     let mut target = table.clone();
                     loop {
+                        let mut is_table_with_missing_key = false;
                         if let LuaValue::Object(o) = &target {
                             if let LuaObject::Table(t) = &*o.read().unwrap() {
                                 if let Some(value) = t.get(&key).cloned() {
                                     self.push(value);
                                     handled = true;
                                     break;
+                                } else {
+                                    is_table_with_missing_key = true;
                                 }
                             }
                         }
@@ -1096,6 +1099,10 @@ impl<'source> VM<'source> {
                             }
 
                             target = __index;
+                        } else if is_table_with_missing_key {
+                            self.push(LuaValue::Nil);
+                            handled = true;
+                            break;
                         } else {
                             break;
                         }
