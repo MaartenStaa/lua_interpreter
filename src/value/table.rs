@@ -91,6 +91,8 @@ impl LuaTable {
 
         if value == LuaValue::Nil {
             self.is_sequence = false;
+            self.fields.remove(&key);
+            return;
         }
 
         self.fields.insert(key, value);
