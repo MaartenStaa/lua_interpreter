@@ -46,6 +46,8 @@ pub(crate) static CLOSE_KEY: LazyLock<LuaValue> =
     LazyLock::new(|| LuaValue::String(b"__close".into()));
 pub(crate) static PAIRS_KEY: LazyLock<LuaValue> =
     LazyLock::new(|| LuaValue::String(b"__pairs".into()));
+pub(crate) static TOSTRING_KEY: LazyLock<LuaValue> =
+    LazyLock::new(|| LuaValue::String(b"__tostring".into()));
 
 impl LuaValue {
     pub fn get_metatable(&self) -> Option<LuaValue> {

@@ -12,6 +12,7 @@ mod upvalue;
 mod userdata;
 
 pub use attribute::LuaVariableAttribute;
+use callable::{Callable, Method};
 pub use closure::LuaClosure;
 pub use constant::{LuaConst, LuaFunctionDefinition};
 pub use number::LuaNumber;
@@ -20,11 +21,14 @@ pub use table::LuaTable;
 pub use upvalue::UpValue;
 pub use userdata::UserData;
 
+use miette::miette;
 use std::{
     fmt::{Debug, Display},
     hash::Hash,
     sync::{Arc, RwLock},
 };
+
+use crate::vm::VM;
 
 #[derive(Clone)]
 pub enum LuaValue {
@@ -35,6 +39,39 @@ pub enum LuaValue {
     String(Vec<u8>),
     Object(Arc<RwLock<LuaObject>>),
     UpValue(Arc<RwLock<UpValue>>),
+}
+
+impl LuaValue {
+    /// Turn the value into a string, using the `__tostring` metamethod if it exists.
+    /// Falls back on this type's `Display` implementation if the metamethod does not exist.
+    pub fn as_string(&self, vm: &mut VM) -> miette::Result<Vec<u8>> {
+        let __tostring = self.get_metavalue(&metatables::TOSTRING_KEY);
+        if let Some(__tostring) = __tostring {
+            let __tostring: Callable = (&__tostring).try_into().map_err(|_| {
+                miette!(
+                    "invalid value for __tostring metamethod in {}, expected function, got {}",
+                    self.type_name(),
+                    __tostring.type_name()
+                )
+            })?;
+
+            let mut result = match __tostring.method {
+                Method::Closure(closure) => vm.run_closure(closure, vec![self.clone()])?,
+                Method::NativeFunction(_, f) => f(vm, vec![self.clone()])?,
+            };
+            result.resize(1, LuaValue::Nil);
+
+            return match result.swap_remove(0) {
+                LuaValue::String(s) => Ok(s),
+                v => Err(miette!(
+                    "__tostring metamethod must return a string, got {}",
+                    v.type_name()
+                )),
+            };
+        }
+
+        Ok(format!("{}", self).into_bytes())
+    }
 }
 
 impl Debug for LuaValue {

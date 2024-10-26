@@ -1,5 +1,6 @@
 use std::{
     fs,
+    io::Write,
     path::Path,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -18,7 +19,7 @@ use crate::{
     vm::VM,
 };
 
-use miette::miette;
+use miette::{miette, IntoDiagnostic};
 
 use super::{
     debug::DEBUG, io::IO, math::MATH, os::OS, package::PACKAGE, string::STRING, table::TABLE,
@@ -332,14 +333,17 @@ pub(crate) fn pcall(vm: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<Lua
     })
 }
 
-pub(crate) fn print(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+pub(crate) fn print(vm: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+    let mut output = std::io::stdout();
+
     for (i, value) in input.into_iter().enumerate() {
         if i != 0 {
-            print!("\t");
+            output.write_all(b"\t").into_diagnostic()?;
         }
-        print!("{}", value);
+        output.write_all(&value.as_string(vm)?).into_diagnostic()?;
     }
-    println!();
+    output.write_all(b"\n").into_diagnostic()?;
+    output.flush().into_diagnostic()?;
 
     Ok(vec![LuaValue::Nil])
 }
@@ -626,10 +630,10 @@ pub(crate) fn tonumber(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<L
     Ok(vec![value])
 }
 
-pub(crate) fn tostring(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+pub(crate) fn tostring(vm: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     let value = input.first().unwrap_or(&LuaValue::Nil);
 
-    Ok(vec![LuaValue::String(value.to_string().into_bytes())])
+    Ok(vec![LuaValue::String(value.as_string(vm)?)])
 }
 
 pub(crate) fn r#type(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
