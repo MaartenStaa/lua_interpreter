@@ -97,5 +97,11 @@ pub fn create_global_env() -> LuaTable {
     env.insert("table".into(), stdlib::table::TABLE.clone());
     env.insert("utf8".into(), stdlib::utf8::UTF8.clone());
 
+    // Stubs
+    env.insert(
+        "collectgarbage".into(),
+        LuaObject::NativeFunction("collectgarbage", stdlib::stubs::collectgarbage).into(),
+    );
+
     env
 }
