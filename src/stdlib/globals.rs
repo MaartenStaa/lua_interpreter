@@ -73,7 +73,13 @@ pub(crate) fn getmetatable(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<V
     // metatables for other values as well, but these are only accessible in native code, or via
     // `debug.getmetatable`.
     let metatable = match value {
-        LuaValue::Object(o) => o.read().unwrap().get_metatable(),
+        LuaValue::Object(o) => {
+            let o = o.read().unwrap();
+
+            // "if the object's metatable has a __metatable field, returns the associated value"
+            o.get_metavalue(&metatables::METATABLE_KEY)
+                .or_else(|| o.get_metatable())
+        }
         _ => None,
     };
 
