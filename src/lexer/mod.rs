@@ -498,7 +498,8 @@ impl<'path, 'source> Lexer<'path, 'source> {
                         }
 
                         // Lua allows any value up to 2^31 - 1, so account for up to 8 hex digits
-                        let mut hex = [b'0'; 8];
+                        let max_hex_value: u64 = 0x7FFFFFFF >> 4;
+                        let mut hex: u64 = 0;
                         let mut n = 0;
                         let mut seen_close_brace = false;
                         for c in chars.by_ref().copied() {
@@ -527,7 +528,17 @@ impl<'path, 'source> Lexer<'path, 'source> {
                                 )));
                             }
 
-                            hex[n] = c;
+                            if hex > max_hex_value {
+                                return Err(self.with_source_code(miette!(
+                                    labels = vec![LabeledSpan::at(
+                                        escape_start..self.position + 1,
+                                        "hex escape too large"
+                                    )],
+                                    "UTF-8 value too large"
+                                )));
+                            }
+
+                            hex = (hex << 4) + c.to_digit(16).unwrap() as u64;
                             n += 1;
                         }
 
@@ -551,8 +562,34 @@ impl<'path, 'source> Lexer<'path, 'source> {
 
                         self.position += n + 3;
 
-                        let value = numbers::parse_hex_number(hex[..n].iter().copied());
-                        string.extend(value.to_be_bytes().iter());
+                        // The below is a port of `luaO_utf8esc` from the Lua source code
+                        if hex < 0x80 {
+                            // ascii
+                            string.push(hex as u8);
+                        } else {
+                            // need continuation bytes
+                            let mut maximum_first_byte = 0x3f;
+                            let mut buffer = [0u8; 8];
+                            let mut n = 1;
+                            loop {
+                                buffer[8 - n] = 0x80 | (hex & 0x3f) as u8;
+                                n += 1;
+
+                                // remove added bits
+                                hex >>= 6;
+                                // now there is one less bit available in the first byte
+                                maximum_first_byte >>= 1;
+
+                                if hex <= maximum_first_byte {
+                                    break;
+                                }
+                            }
+
+                            // add first byte
+                            buffer[8 - n] = ((!maximum_first_byte << 1) | hex) as u8;
+
+                            string.extend(&buffer[8 - n..]);
+                        }
 
                         escape = false;
                         continue;
@@ -928,6 +965,19 @@ mod tests {
             let mut lexer = Lexer::new(Some(Path::new("test.lua")), input.as_bytes());
             let token = lexer.next().unwrap().unwrap();
             assert_eq!(token.kind, TokenKind::String(expected.to_vec()));
+        }
+    }
+
+    #[test]
+    fn unicode_escapes() {
+        for input in [r#""\u{0}""#, r#""\u{00000000}""#, r#""\x00""#, r#""\0""#] {
+            let mut lexer = Lexer::new(Some(Path::new("test.lua")), input.as_bytes());
+            let token = lexer.next().unwrap().unwrap();
+            assert_eq!(
+                token.kind,
+                TokenKind::String(vec![0]),
+                "when parsing '{input}'"
+            );
         }
     }
 }
