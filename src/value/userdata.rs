@@ -1,6 +1,7 @@
 use std::{
     any::{type_name_of_val, Any},
     fmt::Display,
+    ops::Deref,
     sync::{Arc, RwLock},
 };
 
@@ -30,6 +31,17 @@ impl UserData {
             data: Arc::new(RwLock::new(Box::new(data))),
             type_name,
             metatable: Some(metatable.into()),
+        }
+    }
+}
+
+impl Deref for UserData {
+    type Target = Arc<RwLock<Box<dyn Any + Sync + Send>>>;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            UserData::Light(data) => data,
+            UserData::Full { data, .. } => data,
         }
     }
 }
