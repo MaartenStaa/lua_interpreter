@@ -62,7 +62,7 @@ macro_rules! assert_table_object(
         }
     };
     ($value:expr, $table:ident, $tt:stmt) => {
-        assert_table!(read, $value, $table, $tt)
+        assert_table_object!(read, $value, $table, $tt)
     }
 );
 
