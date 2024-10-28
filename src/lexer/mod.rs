@@ -233,6 +233,7 @@ impl<'path, 'source> Iterator for Lexer<'path, 'source> {
                 b'0'..=b'9' => State::Number,
 
                 c if c.is_ascii_whitespace() => continue,
+                0xb => continue, // Vertical tab
 
                 _ => {
                     return Some(Err(self.with_source_code(miette!(
@@ -240,7 +241,7 @@ impl<'path, 'source> Iterator for Lexer<'path, 'source> {
                             c_start..self.position,
                             "unexpected character"
                         )],
-                        "unexpected token {c}"
+                        "unexpected token 0x{c:0x}"
                     ))))
                 }
             };
