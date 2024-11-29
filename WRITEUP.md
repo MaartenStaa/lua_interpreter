@@ -696,6 +696,115 @@ And the stack would look like this at each step:
 08: [] // Printed the result, which consumed the value
 ```
 
+### Variables
+
+The next step is to add support for variables. In Lua, variables can be local or
+global, and can be assigned to, read from, and passed to functions. The VM needs
+to keep track of these variables, and their values, in order to execute the
+program correctly.
+
+In the VM, local variables are stored on the stack, with an offset from the
+frame pointer, a concept we will dive into later when we implement function
+calls. For now, we can just assume that the index of a local variable
+corresponds to its position on the stack.
+
+Global variables, on the other hand, are stored in a table in the VM, which maps
+variable names to values. This table is shared between all functions, and is
+used to store and reference global variables.
+
+Let's look at another example, this time using both local and global variables:
+
+```lua
+local x = 3 * 4
+y = 5 + x
+x = x + 1
+local z = x + y
+print(z)
+```
+
+Here, we're declaring a local variable `x`, assigning it the value `3 * 4`, then
+assigning the value `5 + x` to the global variable `y`, then assigning the value
+`x + y` to the local variable `z`, and finally printing the value of `z`.
+
+The bytecode for this program would look something like this:
+
+```
+00: LOAD_CONST 0 // Load the constant 3
+02: LOAD_CONST 1 // Load the constant 4
+04: MUL          // Multiply 3 and 4
+05: LOAD_CONST 2 // Load the constant 5
+07: GET_LOCAL 0  // Get the value of x
+09: ADD          // Add 5 and x
+10: SET_GLOBAL 3 // Set the value of y
+12: GET_LOCAL 0  // Get the value of x
+14: LOAD_CONST 4 // Load the constant 1
+16: ADD          // Add x and 1
+17: SET_LOCAL 0  // Set the value of x
+19: GET_LOCAL 0  // Get the value of x
+21: GET_GLOBAL 3 // Get the value of y
+23: ADD          // Add x and y
+24: GET_LOCAL 2  // Get the value of z
+26: PRINT        // Print the value of z
+27: HALT         // Stop execution
+```
+
+Perhaps the most surprising part here, is that there are no `SET_LOCAL`
+instructions corresponding to the initial assignments of `x` and `z`. These are
+not needed, as both the "temporary" we work with, and the local variables
+themselves, are kept on the stack. Imagine we had the Lua code `local x = 3`,
+we could implement that as follows:
+
+```
+00: LOAD_CONST 0 // Load the constant 3
+02: SET_LOCAL 0  // Set the value of x
+```
+
+This would push the constant `3` onto the stack, and then pop it off again and
+store it back on the stack at index 0. But `3` was _already_ on the stack at
+index 0, so the `SET_LOCAL` instruction is effectively a no-op. Therefore, we
+only use `SET_LOCAL` when _updating_ a pre-existing local variable.
+
+Another thing to note is that the `GET_GLOBAL` and `SET_GLOBAL` instructions
+take an index into the constant table, rather than the name of the variable
+itself. At compile time, the name of the variable is registered as a constant,
+so the bytecode can stay small, without any variable-length instructions (for
+now...).
+
+Just for completeness sake, this is what the constant table would look like for
+the program above, and what the stack and globals table would look like after
+each instruction.
+
+Globals:
+
+| index | value       |
+| ----- | ----------- |
+| 0     | int(3)      |
+| 1     | int(4)      |
+| 2     | int(5)      |
+| 3     | string("y") |
+| 4     | int(1)      |
+
+Stack and globals after each instruction:
+
+| instruction pointer | stack        | globals     |
+| ------------------- | ------------ | ----------- |
+| 00:                 | [3]          | {}          |
+| 02:                 | [3, 4]       | {}          |
+| 04:                 | [12]         | {}          |
+| 05:                 | [12, 5]      | {}          |
+| 07:                 | [12, 5, 12]  | {}          |
+| 09:                 | [12, 17]     | {}          |
+| 10:                 | [12]         | { "y": 17 } |
+| 12:                 | [12, 12]     | { "y": 17 } |
+| 14:                 | [12, 12, 1]  | { "y": 17 } |
+| 16:                 | [12, 13]     | { "y": 17 } |
+| 17:                 | [13]         | { "y": 17 } |
+| 19:                 | [13, 13]     | { "y": 17 } |
+| 21:                 | [13, 13, 17] | { "y": 17 } |
+| 23:                 | [13, 30]     | { "y": 17 } |
+| 24:                 | [13, 30, 30] | { "y": 17 } |
+| 26:                 | [13, 30]     | { "y": 17 } |
+
 ### Error handling
 
 ### Function calls
