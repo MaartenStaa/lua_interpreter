@@ -1036,11 +1036,14 @@ impl<'source> VM<'source> {
                     let table = self.pop();
 
                     let mut handled = false;
+                    let mut valid_object = false;
 
                     let mut target = table.clone();
                     loop {
                         if let LuaValue::Object(o) = &target {
                             if let LuaObject::Table(t) = &*o.read().unwrap() {
+                                valid_object = true;
+
                                 if let Some(value) = t.get(&key).cloned() {
                                     self.push(value);
                                     handled = true;
@@ -1103,7 +1106,11 @@ impl<'source> VM<'source> {
                     }
 
                     if !handled {
-                        return Err(miette!("attempt to index a non-table"));
+                        if valid_object {
+                            self.push(LuaValue::Nil);
+                        } else {
+                            return Err(miette!("attempt to index a non-table"));
+                        }
                     }
 
                     1
