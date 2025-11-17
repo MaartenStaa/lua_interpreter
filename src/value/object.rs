@@ -33,7 +33,9 @@ impl PartialEq for LuaObject {
                     ..
                 }),
             ) => chunk_a == chunk_b && ip_a == ip_b,
-            (LuaObject::NativeFunction(_, a), LuaObject::NativeFunction(_, b)) => a == b,
+            (LuaObject::NativeFunction(_, a), LuaObject::NativeFunction(_, b)) => {
+                std::ptr::fn_addr_eq(*a, *b)
+            }
 
             // TODO: Implement these
             (LuaObject::Thread, LuaObject::Thread) => true,

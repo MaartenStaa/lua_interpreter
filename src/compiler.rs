@@ -1672,7 +1672,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                 .locals
                 .last()
                 .as_ref()
-                .map_or(false, |local| local.depth > current_frame.scope_depth)
+                .is_some_and(|local| local.depth > current_frame.scope_depth)
         {
             current_frame.locals.pop();
             self.chunk.push_instruction(Instruction::Pop, None);

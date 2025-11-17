@@ -148,7 +148,7 @@ impl<'source> VM<'source> {
         index
     }
 
-    pub fn get_chunk(&self, index: usize) -> Option<&Chunk> {
+    pub fn get_chunk(&self, index: usize) -> Option<&Chunk<'source>> {
         self.chunks.get(index)
     }
 
@@ -197,6 +197,7 @@ impl<'source> VM<'source> {
         &self.consts
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn push_call_frame(
         &mut self,
         name: Option<Vec<u8>>,
@@ -1162,7 +1163,7 @@ impl<'source> VM<'source> {
                         .expect("no function call args marker found");
                     let mut num_args = self.stack.len() - marker_position - 1;
 
-                    if callable.as_ref().map_or(false, |c| c.is_metamethod) {
+                    if callable.as_ref().is_some_and(|c| c.is_metamethod) {
                         // We can reuse the marker index as self parameter value
                         self.stack[marker_position] = function;
                         num_args += 1;

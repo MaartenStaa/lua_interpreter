@@ -264,7 +264,7 @@ fn find(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
 
     let s = &s[(init - 1) as usize..];
 
-    let plain = input.get(3).map_or(false, |v| v.as_boolean());
+    let plain = input.get(3).is_some_and(|v| v.as_boolean());
     let pattern = if plain {
         LuaPattern::Plain(pattern.clone())
     } else {
@@ -377,7 +377,7 @@ fn rep(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     let n = require_number!(input, "string.rep", 1).integer_repr()?;
     let sep = get_string!(input, "string.rep", 2)
         .map(|s| s.as_slice())
-        .unwrap_or_else(|| b"");
+        .unwrap_or(b"");
     if n < 1 {
         return Ok(vec![LuaValue::String(vec![])]);
     }
