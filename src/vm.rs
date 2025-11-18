@@ -331,6 +331,8 @@ impl<'source> VM<'source> {
             false,
         )?;
 
+        // NOTE: Don't pop the call frame here. Chunks always end in a `return`
+        // statement (implicit or explicit), which will pop the call frame.
         self.run_inner()
     }
 
@@ -373,6 +375,30 @@ impl<'source> VM<'source> {
         }
 
         self.chunks[value.chunk].ip = old_ip;
+        result
+    }
+
+    fn run_native_function(
+        &mut self,
+        name: &str,
+        function: fn(&mut VM, Vec<LuaValue>) -> miette::Result<Vec<LuaValue>>,
+        args: Vec<LuaValue>,
+    ) -> miette::Result<Vec<LuaValue>> {
+        // NOTE: Most values here are not relevant for native functions.
+        self.push_call_frame(
+            Some(format!("native function '{}'", name).as_bytes().to_vec()),
+            0,
+            false,
+            0,
+            0,
+            None,
+            false,
+        )?;
+
+        let result = function(self, args);
+
+        self.pop_call_frame();
+
         result
     }
 
@@ -466,8 +492,8 @@ impl<'source> VM<'source> {
                                 Method::Closure(closure) => {
                                     self.run_closure(closure, args)?;
                                 }
-                                Method::NativeFunction(_, func) => {
-                                    func(self, args)?;
+                                Method::NativeFunction(name, func) => {
+                                    self.run_native_function(&name, func, args)?;
                                 }
                             }
                         } else {
@@ -986,22 +1012,8 @@ impl<'source> VM<'source> {
                                     }
                                     Method::NativeFunction(name, f) => {
                                         let args = vec![table, key, value];
-                                        self.push_call_frame(
-                                            Some(
-                                                format!("native function '{}'", name)
-                                                    .into_bytes()
-                                                    .to_vec(),
-                                            ),
-                                            0,
-                                            false,
-                                            self.stack.len(),
-                                            self.chunks[chunk_index].ip + 1,
-                                            None,
-                                            false,
-                                        )?;
-                                        if let Some(return_value) =
-                                            f(self, args)?.into_iter().next()
-                                        {
+                                        let result = self.run_native_function(&name, f, args)?;
+                                        if let Some(return_value) = result.into_iter().next() {
                                             self.push(return_value);
                                         } else {
                                             self.push(LuaValue::Nil);
@@ -1072,22 +1084,8 @@ impl<'source> VM<'source> {
                                     }
                                     Method::NativeFunction(name, f) => {
                                         let args = vec![table, key];
-                                        self.push_call_frame(
-                                            Some(
-                                                format!("native function '{}'", name)
-                                                    .into_bytes()
-                                                    .to_vec(),
-                                            ),
-                                            0,
-                                            false,
-                                            self.stack.len(),
-                                            self.chunks[chunk_index].ip + 1,
-                                            None,
-                                            false,
-                                        )?;
-                                        if let Some(return_value) =
-                                            f(self, args)?.into_iter().next()
-                                        {
+                                        let result = self.run_native_function(&name, f, args)?;
+                                        if let Some(return_value) = result.into_iter().next() {
                                             self.push(return_value);
                                         } else {
                                             self.push(LuaValue::Nil);
@@ -1199,39 +1197,23 @@ impl<'source> VM<'source> {
                             continue;
                         }
                         Some(Method::NativeFunction(name, f)) => {
-                            // Push a call frame just for nicer stack traces
-                            self.push_call_frame(
-                                Some(format!("native function '{}'", name).into_bytes().to_vec()),
-                                0,
-                                false,
-                                self.stack.len() - num_args,
-                                self.chunks[chunk_index].ip + 2,
-                                None,
-                                !is_single_return,
-                            )?;
                             let mut args = Vec::with_capacity(num_args);
                             for _ in 0..num_args {
                                 args.push(self.pop());
                             }
                             args.reverse();
 
-                            let result = f(self, args);
-                            self.pop_call_frame();
+                            let result = self.run_native_function(&name, f, args)?;
 
-                            match result {
-                                Ok(values) => {
-                                    if values.is_empty() && is_single_return {
-                                        self.push(LuaValue::Nil);
-                                    } else {
-                                        for value in values {
-                                            self.push(value);
-                                            if is_single_return {
-                                                break;
-                                            }
-                                        }
+                            if result.is_empty() && is_single_return {
+                                self.push(LuaValue::Nil);
+                            } else {
+                                for value in result {
+                                    self.push(value);
+                                    if is_single_return {
+                                        break;
                                     }
                                 }
-                                Err(e) => return Err(e),
                             }
 
                             2
