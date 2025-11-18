@@ -6,7 +6,7 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use miette::{miette, IntoDiagnostic, NamedSource};
+use miette::{miette, IntoDiagnostic, MietteDiagnostic, NamedSource, Report};
 
 use crate::{
     error::RuntimeError,
@@ -209,7 +209,7 @@ impl<'source> VM<'source> {
         allow_multi_return_values: bool,
     ) -> miette::Result<()> {
         if self.call_stack_index >= MAX_STACK_SIZE {
-            return Err(miette!("stack overflow"));
+            return Err(self.miette_err("stack overflow"));
         }
 
         // Reuse the existing object to keep the `upvalues` vec
@@ -265,18 +265,9 @@ impl<'source> VM<'source> {
     pub fn run(&mut self) {
         assert!(!self.chunks.is_empty(), "no chunks to run");
 
-        if let Err(err) = self.run_chunk(0) {
-            let labels =
-                if let Some(span) = self.chunks[0].instruction_spans.get(&self.chunks[0].ip) {
-                    vec![span.labeled("here")]
-                } else {
-                    vec![]
-                };
+        if let Err(mut err) = self.run_chunk(0) {
+            err = self.miette_set_labels_if_needed(err);
 
-            // FIXME: This is a workaround for the fact that miette doesn't support
-            // adding labels ad-hoc, but it ends up printing the error message
-            // kind of weirdly.
-            let mut err = miette!(labels = labels, "{err:?}");
             // Attach stack trace
             for (i, frame) in self.call_stack[..self.call_stack_index]
                 .iter()
@@ -478,7 +469,7 @@ impl<'source> VM<'source> {
                     if attr & to_be_closed == to_be_closed && value.as_boolean() {
                         if let Some(__close) = value.get_metavalue(&CLOSE_KEY) {
                             let close: Callable = (&__close).try_into().map_err(|_| {
-                                miette!("__close metamethod must be a callable value")
+                                self.miette_err("__close metamethod must be a callable value")
                             })?;
                             // TODO: Second value refers to "the error object that caused the exit
                             // (if any)", but we don't have that yet. Sound like we'll need to
@@ -493,12 +484,13 @@ impl<'source> VM<'source> {
                                     self.run_closure(closure, args)?;
                                 }
                                 Method::NativeFunction(name, func) => {
+                                    // func(self, args)?;
                                     self.run_native_function(&name, func, args)?;
                                 }
                             }
                         } else {
-                            return Err(miette!(
-                                "variable marked for closing has a non-closeable value"
+                            return Err(self.miette_err(
+                                "variable marked for closing has a non-closeable value",
                             ));
                         }
                     }
@@ -879,7 +871,7 @@ impl<'source> VM<'source> {
                         & (LuaVariableAttribute::Constant as u8)
                         == 1
                     {
-                        return Err(miette!("attempt to modify a constant"));
+                        return Err(self.miette_err("attempt to modify a constant"));
                     }
 
                     let old_value = &self.stack[frame_pointer + local_index as usize];
@@ -1038,7 +1030,7 @@ impl<'source> VM<'source> {
                     }
 
                     if !handled {
-                        return Err(miette!("attempt to index a non-table"));
+                        return Err(self.miette_err("attempt to index a non-table"));
                     }
 
                     1
@@ -1107,7 +1099,7 @@ impl<'source> VM<'source> {
                         if valid_object {
                             self.push(LuaValue::Nil);
                         } else {
-                            return Err(miette!("attempt to index a non-table"));
+                            return Err(self.miette_err("attempt to index a non-table"));
                         }
                     }
 
@@ -1134,11 +1126,11 @@ impl<'source> VM<'source> {
                                 }
                             }
                             _ => {
-                                return Err(miette!("attempt to index a non-table"));
+                                return Err(self.miette_err("attempt to index a non-table"));
                             }
                         },
                         _ => {
-                            return Err(miette!("attempt to index a non-table"));
+                            return Err(self.miette_err("attempt to index a non-table"));
                         }
                     }
 
@@ -1219,7 +1211,7 @@ impl<'source> VM<'source> {
                             2
                         }
                         _ => {
-                            return Err(miette!("attempt to call a non-function"));
+                            return Err(self.miette_err("attempt to call a non-function"));
                         }
                     }
                 }
@@ -1276,7 +1268,7 @@ impl<'source> VM<'source> {
                         // TODO: We probably want a nicer error here. Was this a break
                         // outside of a loop? Was it a goto statement with no matching
                         // label?
-                        return Err(miette!("attempt to jump to an invalid address"));
+                        return Err(self.miette_err("attempt to jump to an invalid address"));
                     }
                     self.chunks[chunk_index].ip = addr as usize;
                     continue;
@@ -1307,6 +1299,39 @@ impl<'source> VM<'source> {
                 }
             };
             self.chunks[chunk_index].ip += instruction_increment;
+        }
+    }
+
+    fn miette_err<T: std::fmt::Display>(&self, message: T) -> miette::Error {
+        let frame = &self.call_stack[self.call_stack_index - 1];
+        let chunk = &self.chunks[frame.chunk];
+
+        if let Some(span) = chunk.instruction_spans.get(&chunk.ip) {
+            let labels = vec![span.labeled("here")];
+            miette!(labels = labels, "{message}")
+        } else {
+            miette!("{message}")
+        }
+    }
+
+    /// Set a label based on the current frame's IP, if it doesn't already have one.
+    fn miette_set_labels_if_needed(&self, report: Report) -> Report {
+        if let Some(source) = report.source() {
+            if let Some(diagnostic) = source.downcast_ref::<MietteDiagnostic>() {
+                if !diagnostic.labels.as_ref().is_some_and(|l| l.is_empty()) {
+                    return report;
+                }
+            }
+        }
+
+        let frame = &self.call_stack[self.call_stack_index - 1];
+        let chunk = &self.chunks[frame.chunk];
+
+        if let Some(span) = chunk.instruction_spans.get(&chunk.ip) {
+            let labels = vec![span.labeled("here")];
+            miette!(labels = labels, "{report:?}")
+        } else {
+            miette!("{report:?}")
         }
     }
 }
