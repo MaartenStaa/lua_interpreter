@@ -7,7 +7,7 @@ use crate::{
     vm::VM,
 };
 use miette::miette;
-use rand::prelude::*;
+use rand::{prelude::*, rng};
 
 pub static MATH: LazyLock<LuaValue> = LazyLock::new(|| {
     let mut math = LuaTable::new();
@@ -325,12 +325,12 @@ fn rad(_: &mut VM, values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
 }
 
 static RANDOM: LazyLock<RwLock<StdRng>> =
-    LazyLock::new(|| RwLock::new(StdRng::from_rng(thread_rng()).unwrap()));
+    LazyLock::new(|| RwLock::new(StdRng::from_rng(&mut rng())));
 
 fn random(_: &mut VM, values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     if values.is_empty() {
         return Ok(vec![LuaValue::Number(LuaNumber::Float(
-            RANDOM.write().unwrap().gen_range(0f64..1f64),
+            RANDOM.write().unwrap().random_range(0f64..1f64),
         ))]);
     }
 
@@ -341,10 +341,10 @@ fn random(_: &mut VM, values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
                 "bad argument #1 to 'math.random' (interval is empty)"
             )),
             Some(std::cmp::Ordering::Equal) => Ok(vec![LuaValue::Number(LuaNumber::Integer(
-                RANDOM.write().unwrap().gen(),
+                RANDOM.write().unwrap().random(),
             ))]),
             _ => Ok(vec![LuaValue::Number(LuaNumber::Integer(
-                RANDOM.write().unwrap().gen_range(1..m),
+                RANDOM.write().unwrap().random_range(1..m),
             ))]),
         };
     }
@@ -360,7 +360,7 @@ fn random(_: &mut VM, values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     }
 
     Ok(vec![LuaValue::Number(LuaNumber::Integer(
-        RANDOM.write().unwrap().gen_range(m..n),
+        RANDOM.write().unwrap().random_range(m..n),
     ))])
 }
 
@@ -368,7 +368,9 @@ fn randomseed(_: &mut VM, values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>
     let x = get_number!(values, "math.randomseed")
         .cloned()
         .unwrap_or_else(|| {
-            LuaNumber::Integer(i64::from_le_bytes(thread_rng().next_u64().to_le_bytes()))
+            LuaNumber::Integer(i64::from_le_bytes(
+                RANDOM.write().unwrap().next_u64().to_le_bytes(),
+            ))
         });
     let y = get_number!(values, "math.randomseed", 1)
         .cloned()
