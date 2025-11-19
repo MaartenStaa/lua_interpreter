@@ -370,17 +370,24 @@ impl<'source> VM<'source> {
         args: Vec<LuaValue>,
     ) -> crate::Result<Vec<LuaValue>> {
         // NOTE: Most values here are not relevant for native functions.
+        let current_chunk = self.get_current_chunk();
         self.push_call_frame(
             Some(format!("native function '{}'", name).as_bytes().to_vec()),
-            0,
+            current_chunk.index,
             false,
             0,
-            0,
+            current_chunk.ip,
             None,
             false,
         )?;
 
-        let result = function(self, args);
+        let result = function(self, args).map_err(|mut err| {
+            let current_chunk = self.get_current_chunk();
+            if let Some(span) = current_chunk.instruction_spans.get(&current_chunk.ip) {
+                err = err.with_labels(*span);
+            }
+            err.with_source_code(current_chunk.named_source())
+        });
 
         self.pop_call_frame();
 
