@@ -310,7 +310,7 @@ impl<'source> VM<'source> {
             Some(self.chunks[chunk_index].chunk_name.as_bytes().to_vec()),
             chunk_index,
             true,
-            0,
+            self.stack.len(),
             0,
             None,
             false,
