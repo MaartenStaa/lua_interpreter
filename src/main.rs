@@ -6,7 +6,7 @@ use std::{
 
 use clap::Parser;
 use lua_interpreter::{
-    compiler::Compiler, debug, env, lexer::Lexer, optimizer::optimize as optimize_ast, parser,
+    compiler::Compiler, env, lexer::Lexer, optimizer::optimize as optimize_ast, parser,
     token::TokenKind, value::LuaObject, vm::VM,
 };
 use miette::{LabeledSpan, NamedSource};
@@ -78,7 +78,7 @@ fn main() {
 
     let global_env = Arc::new(RwLock::new(LuaObject::Table(env::create_global_env())));
 
-    let mut vm = VM::new(Arc::clone(&global_env));
+    let mut vm = VM::new(Arc::clone(&global_env), print_bytecode);
     if let Err(e) = Compiler::new(
         &mut vm,
         Some(global_env),
@@ -91,9 +91,6 @@ fn main() {
         let e = e.with_source_code(NamedSource::new(chunk_name, source));
         eprintln!("compilation failed: {e:?}");
         std::process::exit(1);
-    }
-    if print_bytecode {
-        debug::print_instructions(&vm);
     }
 
     vm.run();

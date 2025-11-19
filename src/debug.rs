@@ -5,7 +5,7 @@ use crate::{
     instruction::Instruction,
     macros::assert_function_const,
     value::{LuaConst, LuaFunctionDefinition, LuaVariableAttribute},
-    vm::{ConstIndex, JumpAddr, VM},
+    vm::{Chunk, ConstIndex, JumpAddr, VM},
 };
 
 const IP_WIDTH: usize = 4;
@@ -18,11 +18,8 @@ macro_rules! instr {
     };
 }
 
-pub fn print_instructions(vm: &VM) {
-    let instructions = vm
-        .get_chunk(0)
-        .expect("at least one chunk")
-        .get_instructions();
+pub fn print_instructions(vm: &VM, chunk: &Chunk<'_>) {
+    let instructions = chunk.get_instructions();
     let consts = vm.get_consts();
     let mut instruction_pointer = 0;
 

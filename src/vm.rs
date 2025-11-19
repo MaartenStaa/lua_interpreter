@@ -78,6 +78,7 @@ pub struct VM<'source> {
     stack_attrs: Vec<u8>,
     call_stack: [CallFrame; MAX_STACK_SIZE],
     call_stack_index: usize,
+    print_bytecode: bool,
 }
 
 #[derive(Debug)]
@@ -114,7 +115,7 @@ struct PoppedCallFrame {
 }
 
 impl<'source> VM<'source> {
-    pub fn new(global_env: Arc<RwLock<LuaObject>>) -> Self {
+    pub fn new(global_env: Arc<RwLock<LuaObject>>, print_bytecode: bool) -> Self {
         Self {
             global_env,
             chunks: vec![],
@@ -125,6 +126,7 @@ impl<'source> VM<'source> {
             stack_attrs: vec![],
             call_stack: [const { CallFrame::default() }; MAX_STACK_SIZE],
             call_stack_index: 0,
+            print_bytecode,
         }
     }
 
@@ -303,18 +305,14 @@ impl<'source> VM<'source> {
         }
     }
 
-    pub(crate) fn run_chunk(
-        &mut self,
-        initial_chunk_index: usize,
-    ) -> miette::Result<Vec<LuaValue>> {
+    pub(crate) fn run_chunk(&mut self, chunk_index: usize) -> crate::Result<Vec<LuaValue>> {
+        if self.print_bytecode {
+            debug::print_instructions(self, &self.chunks[chunk_index]);
+        }
+
         self.push_call_frame(
-            Some(
-                self.chunks[initial_chunk_index]
-                    .chunk_name
-                    .as_bytes()
-                    .to_vec(),
-            ),
-            initial_chunk_index,
+            Some(self.chunks[chunk_index].chunk_name.as_bytes().to_vec()),
+            chunk_index,
             true,
             0,
             0,
