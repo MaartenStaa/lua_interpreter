@@ -1227,6 +1227,10 @@ impl<'source> VM<'source> {
                         _ => unreachable!(),
                     };
 
+                    if matches!(instr, Instruction::ReturnM) {
+                        self.multres = num_return_values;
+                    }
+
                     // Collect the return values
                     let mut return_values: Vec<_> =
                         (0..num_return_values).map(|_| self.pop()).collect();
