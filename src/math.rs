@@ -466,7 +466,7 @@ impl ops::Neg for LuaNumber {
 
     fn neg(self) -> LuaNumber {
         match self {
-            LuaNumber::Integer(a) => LuaNumber::Integer(-a),
+            LuaNumber::Integer(a) => LuaNumber::Integer(a.saturating_neg()),
             LuaNumber::Float(a) => LuaNumber::Float(-a),
         }
     }
