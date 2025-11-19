@@ -1113,16 +1113,13 @@ impl<'source> VM<'source> {
 
                     1
                 }
-                Instruction::AppendToTable => {
-                    // Find the latest marker, and append each value after it to the table at the
-                    // stack right before the marker
-                    let marker_index = self
-                        .stack
-                        .iter()
-                        .rposition(|v| v == &LuaValue::Marker)
-                        .expect("no marker found");
-                    let table = &self.stack[marker_index - 1].clone();
-                    let num_values = self.stack.len() - marker_index - 1;
+                instr @ Instruction::AppendToTable | instr @ Instruction::AppendToTableM => {
+                    // Append each value to the table at the stack right before the values
+                    let mut num_values = instr_param!() as usize;
+                    if matches!(instr, Instruction::AppendToTableM) {
+                        num_values += self.multres;
+                    }
+                    let table = &self.stack[self.stack.len() - num_values - 1].clone();
 
                     match table {
                         LuaValue::Object(o) => match &mut *o.write().unwrap() {
@@ -1142,10 +1139,7 @@ impl<'source> VM<'source> {
                         }
                     }
 
-                    // Get rid of the marker
-                    self.pop();
-
-                    1
+                    2
                 }
 
                 // Function

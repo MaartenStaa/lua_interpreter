@@ -1569,11 +1569,21 @@ impl<'a, 'source> Compiler<'a, 'source> {
 
         let num_fields = table.node.fields.len();
         let mut previous_was_value_field = false;
+        let mut num_values = 0;
+        let mut previous_was_multires = false;
         for (i, field) in table.node.fields.into_iter().enumerate() {
             if previous_was_value_field && !matches!(&field.node, Field::Value(_)) {
-                self.chunk
-                    .push_instruction(Instruction::AppendToTable, Some(field.span));
+                self.chunk.push_instruction(
+                    if !previous_was_multires {
+                        Instruction::AppendToTable
+                    } else {
+                        Instruction::AppendToTableM
+                    },
+                    Some(field.span),
+                );
+                self.chunk.push_instruction(num_values, None);
                 previous_was_value_field = false;
+                previous_was_multires = false;
             }
 
             match field.node {
@@ -1593,27 +1603,38 @@ impl<'a, 'source> Compiler<'a, 'source> {
                         .push_instruction(Instruction::SetTable, Some(field.span));
                 }
                 Field::Value(value) => {
-                    if !previous_was_value_field {
-                        self.push_load_marker();
-                        previous_was_value_field = true;
-                    }
+                    previous_was_value_field = true;
 
                     let is_last_field = i == num_fields - 1;
-                    self.compile_expression(
-                        value,
-                        if is_last_field {
-                            ExpressionResult::Multiple
-                        } else {
-                            ExpressionResult::Single
-                        },
-                    )?;
+                    if matches!(
+                        self.compile_expression(
+                            value,
+                            if is_last_field {
+                                ExpressionResult::Multiple
+                            } else {
+                                ExpressionResult::Single
+                            },
+                        )?,
+                        ExpressionResult::Multiple
+                    ) {
+                        previous_was_multires = true;
+                    } else {
+                        num_values += 1;
+                    }
                 }
             }
         }
 
         if previous_was_value_field {
-            self.chunk
-                .push_instruction(Instruction::AppendToTable, None);
+            self.chunk.push_instruction(
+                if !previous_was_multires {
+                    Instruction::AppendToTable
+                } else {
+                    Instruction::AppendToTableM
+                },
+                None,
+            );
+            self.chunk.push_instruction(num_values, None);
         }
 
         Ok(())

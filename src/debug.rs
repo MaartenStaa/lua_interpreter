@@ -10,7 +10,7 @@ use crate::{
 
 const IP_WIDTH: usize = 4;
 const IP_HEX_WIDTH: usize = 2;
-const IP_TEXT_WIDTH: usize = 16;
+const IP_TEXT_WIDTH: usize = 18;
 
 macro_rules! instr {
     ($name:expr) => {
@@ -292,8 +292,16 @@ pub fn print_instructions(vm: &VM, chunk: &Chunk<'_>) {
                 1
             }
             Instruction::AppendToTable => {
-                println!("APPEND_TO_TABLE");
-                1
+                instr!("APPEND_TO_TABLE");
+                let num_values = instructions[instruction_pointer + 1];
+                println!("{num_values}");
+                2
+            }
+            Instruction::AppendToTableM => {
+                instr!("APPEND_TO_TABLE_M");
+                let num_values = instructions[instruction_pointer + 1];
+                println!("{num_values}");
+                2
             }
 
             // Function
