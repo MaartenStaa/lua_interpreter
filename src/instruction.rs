@@ -66,6 +66,9 @@ pub enum Instruction {
     // Function
     Call,
     Return,
+    Return0,
+    Return1,
+    ReturnN,
 
     // Control
     Jmp,

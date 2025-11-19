@@ -1216,24 +1216,38 @@ impl<'source> VM<'source> {
                         }
                     }
                 }
-                Instruction::Return => {
+                instr @ Instruction::Return
+                | instr @ Instruction::Return0
+                | instr @ Instruction::Return1
+                | instr @ Instruction::ReturnN => {
                     let frame = self.pop_call_frame();
 
                     // Find the marker indicating the start of the return values
-                    let marker_position = self
-                        .stack
-                        .iter()
-                        .rposition(|v| v == &LuaValue::Marker)
-                        .expect("no return values marker found");
+                    let num_return_values = match instr {
+                        Instruction::Return => {
+                            let marker_position = self
+                                .stack
+                                .iter()
+                                .rposition(|v| v == &LuaValue::Marker)
+                                .expect("no return values marker found");
+
+                            self.stack.len() - marker_position - 1
+                        }
+                        Instruction::Return0 => 0,
+                        Instruction::Return1 => 1,
+                        Instruction::ReturnN => instr_param!() as usize,
+                        _ => unreachable!(),
+                    };
 
                     // Collect the return values
-                    let mut return_values: Vec<_> = (marker_position + 1..self.stack.len())
-                        .map(|_| self.pop())
-                        .collect();
+                    let mut return_values: Vec<_> =
+                        (0..num_return_values).map(|_| self.pop()).collect();
                     return_values.reverse();
 
                     // Pop the marker
-                    self.pop();
+                    if matches!(instr, Instruction::Return) {
+                        self.pop();
+                    }
 
                     if return_values.is_empty() && !frame.allow_multi_return_values {
                         return_values.push(LuaValue::Nil);

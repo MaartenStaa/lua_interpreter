@@ -307,6 +307,20 @@ pub fn print_instructions(vm: &VM, chunk: &Chunk<'_>) {
                 println!("RETURN");
                 1
             }
+            Instruction::Return0 => {
+                println!("RETURN0");
+                1
+            }
+            Instruction::Return1 => {
+                println!("RETURN1");
+                1
+            }
+            Instruction::ReturnN => {
+                instr!("RETURN_N");
+                let n = instructions[instruction_pointer + 1];
+                println!("{n}");
+                2
+            }
 
             // Control
             Instruction::Jmp => {

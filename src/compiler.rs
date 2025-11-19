@@ -227,8 +227,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
 
         if !has_return {
             // Add implicit final return
-            self.push_load_marker();
-            self.chunk.push_instruction(Instruction::Return, None);
+            self.chunk.push_instruction(Instruction::Return0, None);
         }
 
         debug_assert!(
@@ -309,13 +308,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
             }
 
             if !handled_as_tail_call {
-                self.push_load_marker();
-                if return_statement.is_empty() {
-                    self.push_load_nil(None);
-                } else {
-                    self.compile_expression_list(return_statement)?;
-                }
-                self.chunk.push_instruction(Instruction::Return, None);
+                self.compile_return_statement(return_statement)?;
             }
         }
 
@@ -1079,11 +1072,56 @@ impl<'a, 'source> Compiler<'a, 'source> {
         })
     }
 
+    fn compile_return_statement(
+        &mut self,
+        return_statement: Vec<TokenTree<Expression>>,
+    ) -> crate::Result {
+        if return_statement.is_empty() {
+            self.chunk.push_instruction(Instruction::Return0, None);
+            return Ok(());
+        }
+
+        let (num_returns, is_variable) = {
+            (
+                return_statement.len(),
+                // The number of return values is variable if the last expression is
+                // a function call or an ellipsis (things that can result in
+                // multiple values themselves).
+                matches!(
+                    return_statement.last(),
+                    Some(TokenTree {
+                        node: Expression::PrefixExpression(TokenTree {
+                            node: PrefixExpression::FunctionCall(..),
+                            ..
+                        }) | Expression::Ellipsis,
+                        ..
+                    })
+                ),
+            )
+        };
+
+        if is_variable {
+            self.push_load_marker();
+        }
+        self.compile_expression_list(return_statement)?;
+
+        if num_returns == 1 && !is_variable {
+            self.chunk.push_instruction(Instruction::Return1, None);
+        } else if is_variable {
+            self.chunk.push_instruction(Instruction::Return, None);
+        } else {
+            self.chunk.push_instruction(Instruction::ReturnN, None);
+            self.chunk.push_instruction(num_returns as u8, None);
+        }
+
+        Ok(())
+    }
+
     fn compile_function_call(
         &mut self,
         function_call: TokenTree<FunctionCall>,
         result_mode: ExpressionResult,
-    ) -> crate::Result<()> {
+    ) -> crate::Result {
         // Marker for the start of the function call arguments
         self.push_load_marker();
 
@@ -1264,12 +1302,10 @@ impl<'a, 'source> Compiler<'a, 'source> {
 
         // NOTE: We don't call `end_scope` here because we want to keep the locals around for the
         // return values. They're handled by the return statement, when the call frame is dropped.
-        // self.end_scope();
         let frame = self.end_frame()?;
 
         if !has_return {
-            self.push_load_marker();
-            self.chunk.push_instruction(Instruction::Return, None);
+            self.chunk.push_instruction(Instruction::Return0, None);
         }
 
         // Jump over the function
