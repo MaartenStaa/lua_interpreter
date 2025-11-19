@@ -179,10 +179,17 @@ enum VariableMode {
     Write,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 enum ExpressionResult {
     Single,
     Multiple,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum ExpressionListLength {
+    Constant,
+    /// Expression list ends in an expression that _may_ result in multiple values.
+    MultRes,
 }
 
 impl<'a, 'source> Compiler<'a, 'source> {
@@ -343,21 +350,17 @@ impl<'a, 'source> Compiler<'a, 'source> {
                 let empty_expressions = expressions.is_empty();
                 let needs_alignment = !empty_expressions
                     && (names.len() != expressions.len()
-                        || expressions.iter().any(|e| {
-                            matches!(
-                                e.node,
-                                Expression::PrefixExpression(TokenTree {
-                                    // Function calls can produce multiple values
-                                    node: PrefixExpression::FunctionCall(_),
-                                    ..
-                                })
-                            )
-                        }));
+                        || matches!(
+                            expressions.last().unwrap().node,
+                            Expression::PrefixExpression(TokenTree {
+                                // Function calls can produce multiple values
+                                node: PrefixExpression::FunctionCall(_),
+                                ..
+                            }) | Expression::Ellipsis
+                        ));
 
                 if needs_alignment {
-                    let marker_const_index = self.get_const_index(LuaConst::Marker);
-                    self.chunk.push_instruction(Instruction::LoadConst, None);
-                    self.chunk.push_const_index(marker_const_index);
+                    self.push_load_marker();
                 }
 
                 self.compile_expression_list(expressions)?;
@@ -417,21 +420,19 @@ impl<'a, 'source> Compiler<'a, 'source> {
             }
             Statement::Assignment { varlist, explist } => {
                 let needs_alignment = varlist.len() != explist.len()
-                    || explist.iter().any(|e| {
+                    || explist.last().is_some_and(|e| {
                         matches!(
                             e.node,
                             Expression::PrefixExpression(TokenTree {
                                 // Function calls can produce multiple values
                                 node: PrefixExpression::FunctionCall(_),
                                 ..
-                            })
+                            }) | Expression::Ellipsis
                         )
                     });
 
                 if needs_alignment {
-                    let marker_const_index = self.get_const_index(LuaConst::Marker);
-                    self.chunk.push_instruction(Instruction::LoadConst, None);
-                    self.chunk.push_const_index(marker_const_index);
+                    self.push_load_marker();
                 }
 
                 self.compile_expression_list(explist)?;
@@ -856,8 +857,6 @@ impl<'a, 'source> Compiler<'a, 'source> {
                         let step_addr = self.chunk.get_current_addr();
                         // Results marker
                         self.push_load_marker();
-                        // Arguments marker
-                        self.push_load_marker();
                         self.chunk.push_instruction(Instruction::GetLocal, None);
                         self.chunk.push_instruction(state_local, None);
                         self.chunk.push_instruction(Instruction::GetLocal, None);
@@ -866,6 +865,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                         self.chunk.push_instruction(iterator_local, None);
                         self.chunk.push_instruction(Instruction::Call, None);
                         self.chunk.push_instruction(0, None);
+                        self.chunk.push_instruction(2, None);
                         // Align to number of names
                         self.chunk.push_instruction(Instruction::Align, None);
                         self.chunk.push_instruction(names.len() as u8, None);
@@ -1100,18 +1100,25 @@ impl<'a, 'source> Compiler<'a, 'source> {
             )
         };
 
-        if is_variable {
-            self.push_load_marker();
-        }
-        self.compile_expression_list(return_statement)?;
+        let expression_list_length = self.compile_expression_list(return_statement)?;
 
         if num_returns == 1 && !is_variable {
             self.chunk.push_instruction(Instruction::Return1, None);
-        } else if is_variable {
-            self.chunk.push_instruction(Instruction::Return, None);
         } else {
-            self.chunk.push_instruction(Instruction::ReturnN, None);
-            self.chunk.push_instruction(num_returns as u8, None);
+            self.chunk.push_instruction(
+                match expression_list_length {
+                    ExpressionListLength::Constant => Instruction::Return,
+                    ExpressionListLength::MultRes => Instruction::ReturnM,
+                },
+                None,
+            );
+            self.chunk.push_instruction(
+                match expression_list_length {
+                    ExpressionListLength::Constant => num_returns as u8,
+                    ExpressionListLength::MultRes => (num_returns - 1) as u8,
+                },
+                None,
+            );
         }
 
         Ok(())
@@ -1122,17 +1129,17 @@ impl<'a, 'source> Compiler<'a, 'source> {
         function_call: TokenTree<FunctionCall>,
         result_mode: ExpressionResult,
     ) -> crate::Result {
-        // Marker for the start of the function call arguments
-        self.push_load_marker();
+        let num_args = function_call.node.args.node.len();
 
         // If this is a method call, we need to push the object as the first argument
-        if let Some(method_name) = function_call.node.method_name {
+        let expression_list_length = if let Some(method_name) = function_call.node.method_name {
             self.compile_prefix_expression(*function_call.node.function, ExpressionResult::Single)?;
 
             // It's unfortunate to duplicate the argument loop here with the else below, but this
             // avoids the borrow checker complaining, and having to `clone()` the function call
             // node above.
-            self.compile_expression_list(function_call.node.args.node)?;
+            let expression_list_length =
+                self.compile_expression_list(function_call.node.args.node)?;
 
             // We'll look up the target object as the first item after the marker
             // on the stack, and then retrieve the method as a field on that object.
@@ -1150,8 +1157,11 @@ impl<'a, 'source> Compiler<'a, 'source> {
                 Instruction::GetTable,
                 Some(Span::new(function_call.span.start, method_name.span.end)),
             );
+
+            expression_list_length
         } else {
-            self.compile_expression_list(function_call.node.args.node)?;
+            let expression_list_length =
+                self.compile_expression_list(function_call.node.args.node)?;
 
             match *function_call.node.function {
                 TokenTree {
@@ -1168,15 +1178,35 @@ impl<'a, 'source> Compiler<'a, 'source> {
                     self.compile_prefix_expression(prefix_expression, ExpressionResult::Single)?;
                 }
             }
-        }
 
-        self.chunk
-            .push_instruction(Instruction::Call, Some(function_call.span));
+            expression_list_length
+        };
+
+        // Instruction: [CALL|CALLM] [NUM_RESULTS] [NUM_KNOWN_ARGUMENTS]
+        // CALL for regular calls, CALLM for calls with a multres expression at
+        // the end of its arguments.
+        // NUM_RESULTS is 1 for single result, 0 for multres.
+        // NUM_KNOWN_ARGUMENTS is the number of known arguments, not counting
+        // the multres at the end (if any), plus 1.
+        self.chunk.push_instruction(
+            match expression_list_length {
+                ExpressionListLength::Constant => Instruction::Call,
+                ExpressionListLength::MultRes => Instruction::CallM,
+            },
+            Some(function_call.span),
+        );
         self.chunk.push_instruction(
             if result_mode == ExpressionResult::Single {
                 1
             } else {
                 0
+            },
+            None,
+        );
+        self.chunk.push_instruction(
+            match expression_list_length {
+                ExpressionListLength::Constant => (num_args + 1) as u8,
+                ExpressionListLength::MultRes => num_args as u8,
             },
             None,
         );
@@ -1334,67 +1364,91 @@ impl<'a, 'source> Compiler<'a, 'source> {
     fn compile_expression_list(
         &mut self,
         expressions: Vec<TokenTree<Expression>>,
-    ) -> crate::Result<()> {
+    ) -> crate::Result<ExpressionListLength> {
         let num_expressions = expressions.len();
+        let mut multres = false;
         for (i, expression) in expressions.into_iter().enumerate() {
             let is_last = i == num_expressions - 1;
-            self.compile_expression(
-                expression,
-                if is_last {
-                    ExpressionResult::Multiple
-                } else {
-                    ExpressionResult::Single
-                },
-            )?;
+            if matches!(
+                self.compile_expression(
+                    expression,
+                    if is_last {
+                        ExpressionResult::Multiple
+                    } else {
+                        ExpressionResult::Single
+                    },
+                )?,
+                ExpressionResult::Multiple
+            ) {
+                multres = true;
+            }
         }
 
-        Ok(())
+        Ok(if multres {
+            ExpressionListLength::MultRes
+        } else {
+            ExpressionListLength::Constant
+        })
     }
 
     fn compile_expression(
         &mut self,
         expression: TokenTree<Expression>,
         result_mode: ExpressionResult,
-    ) -> crate::Result<()> {
+    ) -> crate::Result<ExpressionResult> {
         let span = expression.span;
-        match expression.node {
+        Ok(match expression.node {
             Expression::Literal(literal) => {
                 self.compile_load_literal(literal.node, Some(literal.span));
+
+                ExpressionResult::Single
             }
-            Expression::BinaryOp { op, lhs, rhs } => match &op.node {
-                BinaryOperator::And => {
-                    self.compile_expression(*lhs, ExpressionResult::Single)?;
-                    self.chunk.push_instruction(Instruction::JmpFalse, None);
-                    let jmp_false_addr = self.chunk.push_addr_placeholder();
-                    self.compile_expression(*rhs, ExpressionResult::Single)?;
-                    self.chunk.push_instruction(Instruction::And, Some(span));
-                    self.chunk.patch_addr_placeholder(jmp_false_addr)
+            Expression::BinaryOp { op, lhs, rhs } => {
+                match &op.node {
+                    BinaryOperator::And => {
+                        self.compile_expression(*lhs, ExpressionResult::Single)?;
+                        self.chunk.push_instruction(Instruction::JmpFalse, None);
+                        let jmp_false_addr = self.chunk.push_addr_placeholder();
+                        self.compile_expression(*rhs, ExpressionResult::Single)?;
+                        self.chunk.push_instruction(Instruction::And, Some(span));
+                        self.chunk.patch_addr_placeholder(jmp_false_addr)
+                    }
+                    BinaryOperator::Or => {
+                        self.compile_expression(*lhs, ExpressionResult::Single)?;
+                        self.chunk.push_instruction(Instruction::JmpTrue, None);
+                        let jmp_true_addr = self.chunk.push_addr_placeholder();
+                        self.compile_expression(*rhs, ExpressionResult::Single)?;
+                        self.chunk.push_instruction(Instruction::Or, Some(span));
+                        self.chunk.patch_addr_placeholder(jmp_true_addr);
+                    }
+                    _ => {
+                        self.compile_expression(*lhs, ExpressionResult::Single)?;
+                        self.compile_expression(*rhs, ExpressionResult::Single)?;
+                        self.compile_binary_operator(op, expression.span);
+                    }
                 }
-                BinaryOperator::Or => {
-                    self.compile_expression(*lhs, ExpressionResult::Single)?;
-                    self.chunk.push_instruction(Instruction::JmpTrue, None);
-                    let jmp_true_addr = self.chunk.push_addr_placeholder();
-                    self.compile_expression(*rhs, ExpressionResult::Single)?;
-                    self.chunk.push_instruction(Instruction::Or, Some(span));
-                    self.chunk.patch_addr_placeholder(jmp_true_addr);
-                }
-                _ => {
-                    self.compile_expression(*lhs, ExpressionResult::Single)?;
-                    self.compile_expression(*rhs, ExpressionResult::Single)?;
-                    self.compile_binary_operator(op, expression.span);
-                }
-            },
+
+                ExpressionResult::Single
+            }
             Expression::PrefixExpression(function_call) => {
-                self.compile_prefix_expression(function_call, result_mode)?;
+                self.compile_prefix_expression(function_call, result_mode)?
             }
             Expression::UnaryOp { op, rhs } => {
                 self.compile_expression(*rhs, ExpressionResult::Single)?;
                 self.compile_unary_operator(op, expression.span);
+
+                ExpressionResult::Single
             }
             Expression::FunctionDef(function_def) => {
                 self.compile_function_def(function_def)?;
+
+                ExpressionResult::Single
             }
-            Expression::TableConstructor(table) => self.compile_table_constructor(table)?,
+            Expression::TableConstructor(table) => {
+                self.compile_table_constructor(table)?;
+
+                ExpressionResult::Single
+            }
             Expression::Ellipsis => {
                 let vararg_local_index = self
                     .resolve_local(VARARG_LOCAL_NAME)
@@ -1410,45 +1464,51 @@ impl<'a, 'source> Compiler<'a, 'source> {
                     },
                     None,
                 );
-            }
-        }
 
-        Ok(())
+                result_mode
+            }
+        })
     }
 
     fn compile_prefix_expression(
         &mut self,
         prefix_expression: TokenTree<PrefixExpression>,
         result_mode: ExpressionResult,
-    ) -> crate::Result<()> {
-        match prefix_expression.node {
+    ) -> crate::Result<ExpressionResult> {
+        Ok(match prefix_expression.node {
             PrefixExpression::FunctionCall(function_call) => {
                 self.compile_function_call(function_call, result_mode)?;
+
+                result_mode
             }
             PrefixExpression::Parenthesized(expression) => {
                 self.compile_expression(*expression, ExpressionResult::Single)?;
-            }
-            PrefixExpression::Variable(variable) => match variable.node {
-                Variable::Name(name) => self.variable(name, VariableMode::Read),
-                Variable::Indexed(prefix, index) => {
-                    self.compile_prefix_expression(*prefix, ExpressionResult::Single)?;
-                    self.compile_expression(*index, ExpressionResult::Single)?;
-                    self.chunk
-                        .push_instruction(Instruction::GetTable, Some(prefix_expression.span));
-                }
-                Variable::Field(prefix, name) => {
-                    self.compile_prefix_expression(*prefix, ExpressionResult::Single)?;
-                    let const_index = self.get_const_index(LuaConst::String(name.node.0));
-                    self.chunk
-                        .push_instruction(Instruction::LoadConst, Some(prefix_expression.span));
-                    self.chunk.push_const_index(const_index);
-                    self.chunk
-                        .push_instruction(Instruction::GetTable, Some(prefix_expression.span));
-                }
-            },
-        }
 
-        Ok(())
+                ExpressionResult::Single
+            }
+            PrefixExpression::Variable(variable) => {
+                match variable.node {
+                    Variable::Name(name) => self.variable(name, VariableMode::Read),
+                    Variable::Indexed(prefix, index) => {
+                        self.compile_prefix_expression(*prefix, ExpressionResult::Single)?;
+                        self.compile_expression(*index, ExpressionResult::Single)?;
+                        self.chunk
+                            .push_instruction(Instruction::GetTable, Some(prefix_expression.span));
+                    }
+                    Variable::Field(prefix, name) => {
+                        self.compile_prefix_expression(*prefix, ExpressionResult::Single)?;
+                        let const_index = self.get_const_index(LuaConst::String(name.node.0));
+                        self.chunk
+                            .push_instruction(Instruction::LoadConst, Some(prefix_expression.span));
+                        self.chunk.push_const_index(const_index);
+                        self.chunk
+                            .push_instruction(Instruction::GetTable, Some(prefix_expression.span));
+                    }
+                }
+
+                ExpressionResult::Single
+            }
+        })
     }
 
     fn compile_table_constructor(

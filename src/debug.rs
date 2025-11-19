@@ -297,11 +297,24 @@ pub fn print_instructions(vm: &VM, chunk: &Chunk<'_>) {
             }
 
             // Function
-            Instruction::Call => {
+            instr @ Instruction::Call | instr @ Instruction::CallM => {
                 let is_single_return = instructions[instruction_pointer + 1] == 1;
-                instr!("CALL");
-                println!("{}", if is_single_return { "single" } else { "multi" });
-                2
+                let num_params = instructions[instruction_pointer + 2];
+                instr!(if matches!(instr, Instruction::Call) {
+                    "CALL"
+                } else {
+                    "CALLM"
+                });
+                println!(
+                    "{}  {}",
+                    if is_single_return { "single" } else { "multi" },
+                    if num_params == 0 {
+                        "dynamic"
+                    } else {
+                        &(num_params - 1).to_string()
+                    }
+                );
+                3
             }
             Instruction::Return => {
                 println!("RETURN");
@@ -315,8 +328,8 @@ pub fn print_instructions(vm: &VM, chunk: &Chunk<'_>) {
                 println!("RETURN1");
                 1
             }
-            Instruction::ReturnN => {
-                instr!("RETURN_N");
+            Instruction::ReturnM => {
+                instr!("RETURN_M");
                 let n = instructions[instruction_pointer + 1];
                 println!("{n}");
                 2

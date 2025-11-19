@@ -77,6 +77,8 @@ pub struct VM<'source> {
     const_index: ConstIndex,
     stack: Vec<LuaValue>,
     stack_attrs: Vec<u8>,
+    // Ephemeral result count for multi-return value calls
+    multres: usize,
     call_stack: [CallFrame; MAX_STACK_SIZE],
     call_stack_index: usize,
     print_bytecode: bool,
@@ -125,6 +127,7 @@ impl<'source> VM<'source> {
             const_index: 0,
             stack: vec![],
             stack_attrs: vec![],
+            multres: 0,
             call_stack: [const { CallFrame::default() }; MAX_STACK_SIZE],
             call_stack_index: 0,
             print_bytecode,
@@ -948,6 +951,10 @@ impl<'source> VM<'source> {
                                         .unwrap_or(LuaValue::Nil);
                                     self.push(value);
                                 }
+
+                                if !is_single_vararg {
+                                    self.multres = table.len();
+                                }
                             }
                             _ => {
                                 unreachable!("vararg is not a non-table object");
@@ -1142,7 +1149,17 @@ impl<'source> VM<'source> {
                 }
 
                 // Function
-                Instruction::Call => {
+                instr @ Instruction::Call | instr @ Instruction::CallM => {
+                    let is_single_return = instr_param!(1) == 1;
+                    let mut num_args = instr_param!(2) as usize;
+
+                    let is_callm = matches!(instr, Instruction::CallM);
+                    if is_callm {
+                        num_args += self.multres;
+                    } else {
+                        num_args -= 1;
+                    }
+
                     // Pop the function off the stack, and dereference the upvalue if it's one
                     let function = match self.pop() {
                         LuaValue::UpValue(upval) => upval.read().unwrap().clone(),
@@ -1152,26 +1169,11 @@ impl<'source> VM<'source> {
                     // Find the underlying closure or native function, handling metamethods
                     let callable: Option<Callable> = (&function).try_into().ok();
 
-                    // Look up the stack to find the marker, anything above that is
-                    // arguments to the function
-                    let marker_position = self
-                        .stack
-                        .iter()
-                        .rposition(|v| v == &LuaValue::Marker)
-                        .expect("no function call args marker found");
-                    let mut num_args = self.stack.len() - marker_position - 1;
-
                     if callable.as_ref().is_some_and(|c| c.is_metamethod) {
                         // We can reuse the marker index as self parameter value
-                        self.stack[marker_position] = function;
-                        num_args += 1;
-                    } else {
-                        // Get rid of the marker
-                        self.shift_left(num_args, 1);
-                        self.pop();
+                        todo!("self parameter position");
                     }
 
-                    let is_single_return = instr_param!() == 1;
                     let callable = callable.map(|c| c.method);
 
                     match callable {
@@ -1181,7 +1183,7 @@ impl<'source> VM<'source> {
                                 closure.chunk,
                                 false,
                                 self.stack.len() - num_args,
-                                self.chunks[chunk_index].ip + 2,
+                                self.chunks[chunk_index].ip + 3,
                                 Some(closure.upvalues),
                                 !is_single_return,
                             )?;
@@ -1209,7 +1211,7 @@ impl<'source> VM<'source> {
                                 }
                             }
 
-                            2
+                            3
                         }
                         _ => {
                             return Err(self.err("attempt to call a non-function"));
@@ -1219,23 +1221,15 @@ impl<'source> VM<'source> {
                 instr @ Instruction::Return
                 | instr @ Instruction::Return0
                 | instr @ Instruction::Return1
-                | instr @ Instruction::ReturnN => {
+                | instr @ Instruction::ReturnM => {
                     let frame = self.pop_call_frame();
 
                     // Find the marker indicating the start of the return values
                     let num_return_values = match instr {
-                        Instruction::Return => {
-                            let marker_position = self
-                                .stack
-                                .iter()
-                                .rposition(|v| v == &LuaValue::Marker)
-                                .expect("no return values marker found");
-
-                            self.stack.len() - marker_position - 1
-                        }
+                        Instruction::Return => instr_param!() as usize,
+                        Instruction::ReturnM => instr_param!() as usize + self.multres,
                         Instruction::Return0 => 0,
                         Instruction::Return1 => 1,
-                        Instruction::ReturnN => instr_param!() as usize,
                         _ => unreachable!(),
                     };
 
@@ -1243,11 +1237,6 @@ impl<'source> VM<'source> {
                     let mut return_values: Vec<_> =
                         (0..num_return_values).map(|_| self.pop()).collect();
                     return_values.reverse();
-
-                    // Pop the marker
-                    if matches!(instr, Instruction::Return) {
-                        self.pop();
-                    }
 
                     if return_values.is_empty() && !frame.allow_multi_return_values {
                         return_values.push(LuaValue::Nil);
