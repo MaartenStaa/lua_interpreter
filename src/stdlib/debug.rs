@@ -17,7 +17,7 @@ pub static DEBUG: LazyLock<LuaValue> = LazyLock::new(|| {
     debug.into()
 });
 
-fn upvalueid(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+fn upvalueid(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     require_closure!(input, "debug.upvalueid", closure, {
         let n = require_number!(input, "debug.upvalueid", 1).integer_repr()? - 1;
         if n < 0 || n as usize >= closure.upvalues.len() {

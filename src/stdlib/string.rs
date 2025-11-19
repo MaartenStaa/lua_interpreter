@@ -3,6 +3,7 @@ use std::{cmp::Ordering, sync::LazyLock};
 use subslice::SubsliceExt;
 
 use crate::{
+    error::lua_error,
     macros::{get_number, get_string, require_number, require_string},
     value::{LuaNumber, LuaObject, LuaTable, LuaValue},
     vm::VM,
@@ -48,7 +49,7 @@ enum LuaPattern {
     Regex(Regex),
 }
 
-fn pattern_to_regex(pattern: &[u8]) -> miette::Result<LuaPattern> {
+fn pattern_to_regex(pattern: &[u8]) -> crate::Result<LuaPattern> {
     let mut regex = String::with_capacity(pattern.len());
     let len = pattern.len();
     let mut chars = pattern.iter().enumerate().peekable();
@@ -60,7 +61,7 @@ fn pattern_to_regex(pattern: &[u8]) -> miette::Result<LuaPattern> {
                 any_special = true;
 
                 if i == len - 1 {
-                    return Err(miette::miette!("malformed pattern (ends with '%')"));
+                    return Err(lua_error!("malformed pattern (ends with '%')"));
                 }
 
                 match chars.next().unwrap().1 {
@@ -93,8 +94,8 @@ fn pattern_to_regex(pattern: &[u8]) -> miette::Result<LuaPattern> {
                     }
 
                     // Others
-                    b'b' => return Err(miette::miette!("unsupported pattern character: '%b'")),
-                    b'f' => return Err(miette::miette!("unsupported pattern character: '%f'")),
+                    b'b' => return Err(lua_error!("unsupported pattern character: '%b'")),
+                    b'f' => return Err(lua_error!("unsupported pattern character: '%f'")),
 
                     // Things we have to escape for regex
                     other @ b'%'
@@ -170,13 +171,13 @@ fn pattern_to_regex(pattern: &[u8]) -> miette::Result<LuaPattern> {
     if any_special {
         Regex::new(&regex)
             .map(LuaPattern::Regex)
-            .map_err(|e| miette::miette!(e))
+            .map_err(|e| lua_error!("{e}"))
     } else {
         Ok(LuaPattern::Plain(pattern.to_vec()))
     }
 }
 
-fn byte(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+fn byte(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     let s = require_string!(input, "string.byte");
     let i = get_number!(input, "string.byte", 1)
         .unwrap_or(&LuaNumber::Integer(1))
@@ -214,12 +215,12 @@ fn byte(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     })
 }
 
-fn char(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+fn char(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     let mut str = Vec::with_capacity(input.len());
     for (i, _) in input.iter().enumerate() {
         let i = require_number!(input, "string.char", i).integer_repr()?;
         if i < u8::MIN as i64 || i > u8::MAX as i64 {
-            return Err(miette::miette!(
+            return Err(lua_error!(
                 "bad argument #{i} to 'string.char' (value out of range)",
             ));
         }
@@ -230,14 +231,14 @@ fn char(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     Ok(vec![LuaValue::String(str)])
 }
 
-fn find(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+fn find(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     let s = require_string!(input, "string.find");
     let pattern = require_string!(input, "string.find", 1);
     let init = match input.get(2) {
         Some(LuaValue::Number(LuaNumber::Integer(i))) => *i,
         Some(LuaValue::Number(f @ LuaNumber::Float(_))) => f.integer_repr()?,
         Some(v) => {
-            return Err(miette::miette!(
+            return Err(lua_error!(
                 "bad argument #3 to 'find' (number expected, got {type_name})",
                 type_name = v.type_name()
             ));
@@ -288,7 +289,7 @@ fn find(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     })
 }
 
-fn format(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+fn format(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     let mut format_string = require_string!(input, "string.format").clone();
 
     let mut format_from = 0;
@@ -317,14 +318,14 @@ fn format(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
             'd' => match v {
                 LuaValue::Number(n) => n.to_string(),
                 _ => {
-                    return Err(miette::miette!(
+                    return Err(lua_error!(
                         "bad argument #{} to 'format' (number expected, got {type_name})",
                         input.iter().position(|x| x == v).unwrap() + 1,
                         type_name = v.type_name()
                     ));
                 }
             },
-            other => return Err(miette::miette!("unsupported format specifier: {:?}", other)),
+            other => return Err(lua_error!("unsupported format specifier: {:?}", other)),
         };
 
         format_string.splice(index..index + 2, formatted_value.bytes());
@@ -334,7 +335,7 @@ fn format(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     Ok(vec![LuaValue::String(format_string)])
 }
 
-fn len(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+fn len(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     let input = require_string!(input, "string.len");
 
     Ok(vec![LuaValue::Number(LuaNumber::Integer(
@@ -342,7 +343,7 @@ fn len(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     ))])
 }
 
-fn r#match(_: &mut VM, mut input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+fn r#match(_: &mut VM, mut input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     let s = require_string!(input, "string.match");
     let pattern = require_string!(input, "string.match", 1);
     // TODO: init parameter
@@ -372,7 +373,7 @@ fn r#match(_: &mut VM, mut input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>
     }
 }
 
-fn rep(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+fn rep(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     let s = require_string!(input, "string.rep");
     let n = require_number!(input, "string.rep", 1).integer_repr()?;
     let sep = get_string!(input, "string.rep", 2)
@@ -391,7 +392,7 @@ fn rep(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     Ok(vec![LuaValue::String(result)])
 }
 
-fn reverse(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+fn reverse(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     let input = require_string!(input, "string.reverse");
 
     let mut reversed = input.clone();
@@ -399,14 +400,14 @@ fn reverse(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     Ok(vec![LuaValue::String(reversed)])
 }
 
-fn sub(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+fn sub(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     let s = require_string!(input, "string.sub");
     let i = require_number!(input, "string.sub", 1).integer_repr()?;
     let j = match input.get(2) {
         Some(LuaValue::Number(LuaNumber::Integer(i))) => *i,
         Some(LuaValue::Number(f @ LuaNumber::Float(_))) => f.integer_repr()?,
         Some(v) => {
-            return Err(miette::miette!(
+            return Err(lua_error!(
                 "bad argument #3 to 'string.sub' (number expected, got {type_name})",
                 type_name = v.type_name()
             ));

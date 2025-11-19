@@ -16,6 +16,18 @@ impl Span {
     }
 }
 
+impl From<Span> for LabeledSpan {
+    fn from(span: Span) -> LabeledSpan {
+        LabeledSpan::new_with_span(None, span)
+    }
+}
+
+impl From<Span> for Vec<LabeledSpan> {
+    fn from(span: Span) -> Vec<LabeledSpan> {
+        vec![span.into()]
+    }
+}
+
 impl From<Span> for SourceSpan {
     fn from(span: Span) -> SourceSpan {
         SourceSpan::new(span.start.into(), span.end - span.start)

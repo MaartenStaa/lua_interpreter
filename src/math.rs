@@ -1,4 +1,3 @@
-use miette::{miette, Context};
 use std::{
     fmt::{self, Display},
     ops,
@@ -6,6 +5,7 @@ use std::{
 
 use crate::{
     ast,
+    error::{lua_error, Context},
     value::{LuaNumber, LuaObject, LuaValue},
 };
 
@@ -227,16 +227,16 @@ impl ops::Not for &LuaValue {
 }
 
 impl ops::Shl for LuaValue {
-    type Output = miette::Result<Self>;
+    type Output = crate::Result<Self>;
 
-    fn shl(self, other: Self) -> miette::Result<Self> {
+    fn shl(self, other: Self) -> crate::Result<Self> {
         match (&self, &other) {
             (LuaValue::Number(a), LuaValue::Number(b)) => Ok(LuaValue::Number((a << b)?)),
             _ => {
                 let left_type = self.type_name();
                 let right_type = other.type_name();
 
-                Err(miette!(
+                Err(lua_error!(
                     "cannot bitwise shift left a '{}' with a '{}'",
                     left_type,
                     right_type
@@ -247,16 +247,16 @@ impl ops::Shl for LuaValue {
 }
 
 impl ops::Shr for LuaValue {
-    type Output = miette::Result<Self>;
+    type Output = crate::Result<Self>;
 
-    fn shr(self, other: Self) -> miette::Result<Self> {
+    fn shr(self, other: Self) -> crate::Result<Self> {
         match (&self, &other) {
             (LuaValue::Number(a), LuaValue::Number(b)) => Ok(LuaValue::Number((a >> b)?)),
             _ => {
                 let left_type = self.type_name();
                 let right_type = other.type_name();
 
-                Err(miette!(
+                Err(lua_error!(
                     "cannot bitwise shift right a '{}' with a '{}'",
                     left_type,
                     right_type
@@ -277,7 +277,7 @@ impl PartialOrd for LuaValue {
 }
 
 impl LuaValue {
-    pub fn concat(self, other: Self) -> miette::Result<Self> {
+    pub fn concat(self, other: Self) -> crate::Result<Self> {
         match (self, other) {
             (LuaValue::String(mut a), LuaValue::String(b)) => {
                 a.extend(b);
@@ -303,7 +303,7 @@ impl LuaValue {
                 let left_type = self_.type_name();
                 let right_type = other.type_name();
 
-                Err(miette!(
+                Err(lua_error!(
                     "cannot concatenate a '{}' with a '{}'",
                     left_type,
                     right_type
@@ -312,14 +312,14 @@ impl LuaValue {
         }
     }
 
-    pub fn pow(self, other: Self) -> miette::Result<Self> {
+    pub fn pow(self, other: Self) -> crate::Result<Self> {
         match (&self, &other) {
             (LuaValue::Number(a), LuaValue::Number(b)) => Ok(LuaValue::Number(a.pow(b))),
             _ => {
                 let left_type = self.type_name();
                 let right_type = other.type_name();
 
-                Err(miette!(
+                Err(lua_error!(
                     "cannot raise a '{}' to the power of a '{}'",
                     left_type,
                     right_type
@@ -336,21 +336,21 @@ impl LuaValue {
         }
     }
 
-    pub fn len(&self) -> miette::Result<LuaValue> {
+    pub fn len(&self) -> crate::Result<LuaValue> {
         match self {
             LuaValue::String(s) => Ok(LuaValue::Number(LuaNumber::Integer(s.len() as i64))),
             LuaValue::Object(o) => {
                 let len = o.read().unwrap().len()?;
                 Ok(LuaValue::Number(LuaNumber::Integer(len as i64)))
             }
-            _ => Err(miette!("attempt to get length of a non-string value")),
+            _ => Err(lua_error!("attempt to get length of a non-string value")),
         }
     }
 
-    pub fn bitwise_not(&self) -> miette::Result<Self> {
+    pub fn bitwise_not(&self) -> crate::Result<Self> {
         match self {
             LuaValue::Number(n) => Ok(LuaValue::Number((!n)?)),
-            _ => Err(miette!(
+            _ => Err(lua_error!(
                 "attempt to perform bitwise not on a non-number value"
             )),
         }
@@ -365,10 +365,10 @@ impl LuaObject {
         }
     }
 
-    pub fn len(&self) -> miette::Result<usize> {
+    pub fn len(&self) -> crate::Result<usize> {
         match self {
             LuaObject::Table(t) => Ok(t.len()),
-            _ => Err(miette!("attempt to get length of a non-string value")),
+            _ => Err(lua_error!("attempt to get length of a non-string value")),
         }
     }
 }
@@ -484,9 +484,9 @@ impl ops::Neg for &LuaNumber {
 }
 
 impl ops::BitAnd for LuaNumber {
-    type Output = miette::Result<LuaNumber>;
+    type Output = crate::Result<LuaNumber>;
 
-    fn bitand(self, other: Self) -> miette::Result<LuaNumber> {
+    fn bitand(self, other: Self) -> crate::Result<LuaNumber> {
         match (self.integer_repr(), other.integer_repr()) {
             (Ok(a), Ok(b)) => Ok(LuaNumber::Integer(a & b)),
             (Err(e), _) | (_, Err(e)) => Err(e).wrap_err("during bitwise and"),
@@ -495,9 +495,9 @@ impl ops::BitAnd for LuaNumber {
 }
 
 impl ops::BitAnd for &LuaNumber {
-    type Output = miette::Result<LuaNumber>;
+    type Output = crate::Result<LuaNumber>;
 
-    fn bitand(self, other: Self) -> miette::Result<LuaNumber> {
+    fn bitand(self, other: Self) -> crate::Result<LuaNumber> {
         match (self.integer_repr(), other.integer_repr()) {
             (Ok(a), Ok(b)) => Ok(LuaNumber::Integer(a & b)),
             (Err(e), _) | (_, Err(e)) => Err(e).wrap_err("during bitwise and"),
@@ -506,9 +506,9 @@ impl ops::BitAnd for &LuaNumber {
 }
 
 impl ops::BitOr for LuaNumber {
-    type Output = miette::Result<LuaNumber>;
+    type Output = crate::Result<LuaNumber>;
 
-    fn bitor(self, other: Self) -> miette::Result<LuaNumber> {
+    fn bitor(self, other: Self) -> crate::Result<LuaNumber> {
         match (self.integer_repr(), other.integer_repr()) {
             (Ok(a), Ok(b)) => Ok(LuaNumber::Integer(a | b)),
             (Err(e), _) | (_, Err(e)) => Err(e).wrap_err("during bitwise or"),
@@ -517,9 +517,9 @@ impl ops::BitOr for LuaNumber {
 }
 
 impl ops::BitOr for &LuaNumber {
-    type Output = miette::Result<LuaNumber>;
+    type Output = crate::Result<LuaNumber>;
 
-    fn bitor(self, other: Self) -> miette::Result<LuaNumber> {
+    fn bitor(self, other: Self) -> crate::Result<LuaNumber> {
         match (self.integer_repr(), other.integer_repr()) {
             (Ok(a), Ok(b)) => Ok(LuaNumber::Integer(a | b)),
             (Err(e), _) | (_, Err(e)) => Err(e).wrap_err("during bitwise or"),
@@ -528,9 +528,9 @@ impl ops::BitOr for &LuaNumber {
 }
 
 impl ops::BitXor for LuaNumber {
-    type Output = miette::Result<LuaNumber>;
+    type Output = crate::Result<LuaNumber>;
 
-    fn bitxor(self, other: Self) -> miette::Result<LuaNumber> {
+    fn bitxor(self, other: Self) -> crate::Result<LuaNumber> {
         match (self.integer_repr(), other.integer_repr()) {
             (Ok(a), Ok(b)) => Ok(LuaNumber::Integer(a ^ b)),
             (Err(e), _) | (_, Err(e)) => Err(e).wrap_err("during bitwise xor"),
@@ -539,9 +539,9 @@ impl ops::BitXor for LuaNumber {
 }
 
 impl ops::BitXor for &LuaNumber {
-    type Output = miette::Result<LuaNumber>;
+    type Output = crate::Result<LuaNumber>;
 
-    fn bitxor(self, other: Self) -> miette::Result<LuaNumber> {
+    fn bitxor(self, other: Self) -> crate::Result<LuaNumber> {
         match (self.integer_repr(), other.integer_repr()) {
             (Ok(a), Ok(b)) => Ok(LuaNumber::Integer(a ^ b)),
             (Err(e), _) | (_, Err(e)) => Err(e).wrap_err("during bitwise xor"),
@@ -550,9 +550,9 @@ impl ops::BitXor for &LuaNumber {
 }
 
 impl ops::Shl for &LuaNumber {
-    type Output = miette::Result<LuaNumber>;
+    type Output = crate::Result<LuaNumber>;
 
-    fn shl(self, other: Self) -> miette::Result<LuaNumber> {
+    fn shl(self, other: Self) -> crate::Result<LuaNumber> {
         match (self.integer_repr(), other.integer_repr()) {
             (Ok(a), Ok(b)) => Ok(LuaNumber::Integer(if b >= 0 {
                 a.checked_shl(b as u32).unwrap_or(0)
@@ -565,9 +565,9 @@ impl ops::Shl for &LuaNumber {
 }
 
 impl ops::Shr for &LuaNumber {
-    type Output = miette::Result<LuaNumber>;
+    type Output = crate::Result<LuaNumber>;
 
-    fn shr(self, other: Self) -> miette::Result<LuaNumber> {
+    fn shr(self, other: Self) -> crate::Result<LuaNumber> {
         match (self.integer_repr(), other.integer_repr()) {
             (Ok(a), Ok(b)) => Ok(LuaNumber::Integer(if b >= 0 {
                 a.checked_shr(b as u32).unwrap_or(0)
@@ -580,9 +580,9 @@ impl ops::Shr for &LuaNumber {
 }
 
 impl ops::Not for &LuaNumber {
-    type Output = miette::Result<LuaNumber>;
+    type Output = crate::Result<LuaNumber>;
 
-    fn not(self) -> miette::Result<LuaNumber> {
+    fn not(self) -> crate::Result<LuaNumber> {
         match self.integer_repr() {
             Ok(a) => Ok(LuaNumber::Integer(!a)),
             Err(e) => Err(e).wrap_err("during bitwise not"),

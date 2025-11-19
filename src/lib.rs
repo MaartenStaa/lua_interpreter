@@ -14,3 +14,5 @@ mod stdlib;
 pub mod token;
 pub mod value;
 pub mod vm;
+
+pub use error::Result;

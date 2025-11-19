@@ -9,6 +9,7 @@ use std::{
 
 use crate::{
     compiler::Compiler,
+    error::lua_error,
     macros::{assert_string, assert_table, require_string, require_table},
     stdlib::package,
     value::{
@@ -18,8 +19,6 @@ use crate::{
     vm::VM,
 };
 
-use miette::miette;
-
 use super::{
     debug::DEBUG, io::IO, math::MATH, os::OS, package::PACKAGE, string::STRING, table::TABLE,
     utf8::UTF8,
@@ -27,26 +26,27 @@ use super::{
 
 pub const _VERSION: &str = "LuaRust 5.4";
 
-pub(crate) fn assert(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+pub(crate) fn assert(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     let Some(value) = input.first() else {
-        return Err(miette::miette!(
-            "bad argument #1 to 'assert' (value expected)"
-        ));
+        return Err(lua_error!("bad argument #1 to 'assert' (value expected)"));
     };
 
     if !value {
         return match input.get(1) {
-            Some(LuaValue::String(s)) => Err(miette!("{}", String::from_utf8_lossy(s))),
-            Some(LuaValue::Number(n)) => Err(miette!("{}", n)),
-            Some(value) => Err(miette!("(error object is a {} value)", value.type_name())),
-            _ => Err(miette!("assertion failed!")),
+            Some(LuaValue::String(s)) => Err(lua_error!("{}", String::from_utf8_lossy(s))),
+            Some(LuaValue::Number(n)) => Err(lua_error!("{n}")),
+            Some(value) => Err(lua_error!(
+                "(error object is a {} value)",
+                value.type_name()
+            )),
+            _ => Err(lua_error!("assertion failed!")),
         };
     }
 
     Ok(input)
 }
 
-pub(crate) fn error(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+pub(crate) fn error(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     // TODO: You can call error with no arguments, in which case the error value is nil. How can we
     // do that with miette?
     let message = require_string!(input, "error");
@@ -55,14 +55,14 @@ pub(crate) fn error(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaV
         // raise the error.
     }
 
-    Err(miette!("{}", String::from_utf8_lossy(message)))
+    Err(lua_error!("{}", String::from_utf8_lossy(message)))
 }
 
-pub(crate) fn getmetatable(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+pub(crate) fn getmetatable(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     let value = match input.first() {
         Some(value) => value,
         None => {
-            return Err(miette::miette!(
+            return Err(lua_error!(
                 "bad argument #1 to 'getmetatable' (value expected)"
             ));
         }
@@ -73,25 +73,23 @@ pub(crate) fn getmetatable(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<V
     Ok(vec![metatable.unwrap_or(LuaValue::Nil)])
 }
 
-fn iter(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+fn iter(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     let a = match input.first() {
         Some(value) => value,
         None => {
-            return Err(miette::miette!(
-                "bad argument #1 to 'iter' (value expected)"
-            ));
+            return Err(lua_error!("bad argument #1 to 'iter' (value expected)"));
         }
     };
     let i = match input.get(1) {
         Some(LuaValue::Number(n)) => n,
         Some(value) => {
-            return Err(miette::miette!(
+            return Err(lua_error!(
                 "bad argument #2 to 'iter' (number expected, got {})",
-                value.type_name()
+                value.type_name(),
             ));
         }
         None => {
-            return Err(miette::miette!(
+            return Err(lua_error!(
                 "bad argument #2 to 'iter' (number expected, got no value)"
             ));
         }
@@ -114,11 +112,9 @@ fn iter(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     }
 }
 
-pub(crate) fn ipairs(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+pub(crate) fn ipairs(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     let Some(value) = input.first() else {
-        return Err(miette::miette!(
-            "bad argument #1 to 'ipairs' (value expected)"
-        ));
+        return Err(lua_error!("bad argument #1 to 'ipairs' (value expected)"));
     };
 
     // Return three values: the iterator function, the target value, and the initial index
@@ -129,7 +125,7 @@ pub(crate) fn ipairs(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<Lua
     ])
 }
 
-pub(crate) fn load(vm: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+pub(crate) fn load(vm: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     let source = match input.first() {
         Some(LuaValue::String(s)) => s.clone(),
         Some(LuaValue::Object(o)) => match &*o.read().unwrap() {
@@ -150,10 +146,10 @@ pub(crate) fn load(vm: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaV
                             break;
                         }
                         _ => {
-                            return Err(miette!(
-                                    "unexpected return value from chunk loader (string or nil expected, got {})",
-                                    piece_result.type_name()
-                                ));
+                            return Err(lua_error!(
+                                "unexpected return value from chunk loader (string or nil expected, got {})",
+                                piece_result.type_name()
+                            ));
                         }
                     }
                 }
@@ -165,20 +161,20 @@ pub(crate) fn load(vm: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaV
                 return Ok(result);
             }
             _ => {
-                return Err(miette!(
+                return Err(lua_error!(
                     "bad argument #1 to 'load' (string or function expected, got {})",
-                    o.read().unwrap().type_name()
+                    o.read().unwrap().type_name(),
                 ));
             }
         },
         Some(value) => {
-            return Err(miette!(
+            return Err(lua_error!(
                 "bad argument #1 to 'load' (string expected, got {})",
-                value.type_name()
+                value.type_name(),
             ));
         }
         None => {
-            return Err(miette!(
+            return Err(lua_error!(
                 "bad argument #1 to 'load' (string expected, got no value)"
             ));
         }
@@ -188,9 +184,9 @@ pub(crate) fn load(vm: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaV
         Some(LuaValue::String(s)) => String::from_utf8_lossy(s).to_string(),
         Some(LuaValue::Nil) | None => "chunk".to_string(),
         Some(value) => {
-            return Err(miette!(
+            return Err(lua_error!(
                 "bad argument #2 to 'load' (string expected, got {})",
-                value.type_name()
+                value.type_name(),
             ));
         }
     };
@@ -199,9 +195,9 @@ pub(crate) fn load(vm: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaV
         Some(LuaValue::Object(o)) => Some(o.clone()),
         Some(LuaValue::Nil) | None => None,
         Some(value) => {
-            return Err(miette!(
+            return Err(lua_error!(
                 "bad argument #4 to 'load' (table expected, got {})",
-                value.type_name()
+                value.type_name(),
             ));
         }
     };
@@ -228,7 +224,7 @@ pub(crate) fn load(vm: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaV
     )))])
 }
 
-pub(crate) fn next(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+pub(crate) fn next(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     require_table!(read, input, "next", 0, table, {
         let kv = match input.get(1) {
             None | Some(LuaValue::Nil) => table.iter().next(),
@@ -258,9 +254,9 @@ pub(crate) fn next(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaVa
     })
 }
 
-pub(crate) fn pairs(vm: &mut VM, mut input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+pub(crate) fn pairs(vm: &mut VM, mut input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     if input.is_empty() {
-        return Err(miette!("bad argument #1 to 'pairs' (value expected)"));
+        return Err(lua_error!("bad argument #1 to 'pairs' (value expected)"));
     }
 
     // If t has a metamethod __pairs, calls it with t as argument and returns the first three results from the call.
@@ -286,12 +282,12 @@ pub(crate) fn pairs(vm: &mut VM, mut input: Vec<LuaValue>) -> miette::Result<Vec
     ])
 }
 
-pub(crate) fn pcall(vm: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+pub(crate) fn pcall(vm: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     let mut input = input.into_iter();
     let function = match input.next() {
         Some(value) => value,
         None => {
-            return Err(miette!(
+            return Err(lua_error!(
                 "bad argument #1 to 'pcall' (function expected, got no value)"
             ));
         }
@@ -299,9 +295,9 @@ pub(crate) fn pcall(vm: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<Lua
 
     let mut args: Vec<_> = input.collect();
     let callable_function: Callable = (&function).try_into().map_err(|_| {
-        miette!(
+        lua_error!(
             "bad argument #1 to 'pcall' (function expected, got {})",
-            function.type_name()
+            function.type_name(),
         )
     })?;
 
@@ -326,7 +322,7 @@ pub(crate) fn pcall(vm: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<Lua
     })
 }
 
-pub(crate) fn print(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+pub(crate) fn print(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     for (i, value) in input.into_iter().enumerate() {
         if i != 0 {
             print!("\t");
@@ -338,34 +334,36 @@ pub(crate) fn print(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaV
     Ok(vec![LuaValue::Nil])
 }
 
-pub(crate) fn rawget(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+pub(crate) fn rawget(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     require_table!(input, "rawget", 0, table, {
         let key = input
             .get(1)
-            .ok_or_else(|| miette!("bad argument #2 to 'rawget' (value expected)"))?;
+            .ok_or_else(|| lua_error!("bad argument #2 to 'rawget' (value expected)"))?;
         let value = table.get(key).cloned().unwrap_or(LuaValue::Nil);
 
         Ok(vec![value])
     })
 }
 
-pub(crate) fn rawset(_: &mut VM, mut input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+pub(crate) fn rawset(_: &mut VM, mut input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     let key = input
         .get(1)
         .cloned()
-        .ok_or_else(|| miette!("bad argument #2 to 'rawset' (value expected)"))?;
+        .ok_or_else(|| lua_error!("bad argument #2 to 'rawset' (value expected)"))?;
     match key {
         LuaValue::Nil => {
-            return Err(miette!("bad argument #2 to 'rawset' (value expected)"));
+            return Err(lua_error!("bad argument #2 to 'rawset' (value expected)"));
         }
         LuaValue::Number(LuaNumber::Float(f)) if f.is_nan() => {
-            return Err(miette!("bad argument #2 to 'rawset' (key cannot be NaN)"));
+            return Err(lua_error!(
+                "bad argument #2 to 'rawset' (key cannot be NaN)"
+            ));
         }
         _ => {}
     }
 
     if input.len() < 3 {
-        return Err(miette!("bad argument #3 to 'rawset' (value expected)"));
+        return Err(lua_error!("bad argument #3 to 'rawset' (value expected)"));
     }
     let value = input.swap_remove(2);
 
@@ -376,17 +374,17 @@ pub(crate) fn rawset(_: &mut VM, mut input: Vec<LuaValue>) -> miette::Result<Vec
     Ok(vec![input.swap_remove(0)])
 }
 
-pub(crate) fn require(vm: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+pub(crate) fn require(vm: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     let name = match input.first() {
         Some(LuaValue::String(s)) => s,
         Some(value) => {
-            return Err(miette!(
+            return Err(lua_error!(
                 "bad argument #1 to 'require' (string expected, got {})",
-                value.type_name()
+                value.type_name(),
             ));
         }
         None => {
-            return Err(miette!(
+            return Err(lua_error!(
                 "bad argument #1 to 'require' (string expected, got no value)"
             ));
         }
@@ -455,13 +453,11 @@ pub(crate) fn require(vm: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<L
             continue;
         }
         if path.is_dir() {
-            return Err(
-                miette!(
-                    "error loading module '{name_str}' from file '{source}': cannot read '{dir_name}': is a directory",
-                    source = "<unknown>",
-                    dir_name = path.file_name().map(|s| s.to_string_lossy()).unwrap_or_else(|| "<unknown>".into())
-                )
-            );
+            return Err(lua_error!(
+                "error loading module '{name_str}' from file '{source}': cannot read '{dir_name}': is a directory",
+                source = "<unknown>",
+                dir_name = path.file_name().map(|s| s.to_string_lossy()).unwrap_or_else(|| "<unknown>".into())
+            ));
         }
 
         // Check if it's already loaded
@@ -477,7 +473,7 @@ pub(crate) fn require(vm: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<L
             })
         });
 
-        let source = fs::read(path).map_err(|_| miette!("unable to read module {name_str}",))?;
+        let source = fs::read(&path).map_err(|_| lua_error!("unable to read module {name_str}"))?;
 
         let compiler = Compiler::new(
             vm,
@@ -502,10 +498,10 @@ pub(crate) fn require(vm: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<L
         return Ok(vec![result, path_value]);
     }
 
-    Err(miette!("module '{name_str}' not found",))
+    Err(lua_error!("module '{name_str}' not found"))
 }
 
-pub(crate) fn select(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+pub(crate) fn select(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     let index = match input.first() {
         Some(LuaValue::Number(n)) => n,
         Some(LuaValue::String(s)) => {
@@ -514,19 +510,19 @@ pub(crate) fn select(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<Lua
                     input.len() as i64 - 1,
                 ))]);
             } else {
-                return Err(miette!(
+                return Err(lua_error!(
                     "bad argument #1 to 'select' (number expected, got string)"
                 ));
             }
         }
         Some(value) => {
-            return Err(miette!(
+            return Err(lua_error!(
                 "bad argument #1 to 'select' (number expected, got {})",
-                value.type_name()
+                value.type_name(),
             ));
         }
         None => {
-            return Err(miette!(
+            return Err(lua_error!(
                 "bad argument #1 to 'select' (number expected, got no value)"
             ));
         }
@@ -534,13 +530,15 @@ pub(crate) fn select(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<Lua
 
     let index = index.integer_repr()?;
     if index < 1 {
-        return Err(miette!("bad argument #1 to 'select' (index out of range)"));
+        return Err(lua_error!(
+            "bad argument #1 to 'select' (index out of range)"
+        ));
     }
 
     Ok(input.into_iter().skip(index as usize).collect())
 }
 
-pub(crate) fn setmetatable(_: &mut VM, mut input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+pub(crate) fn setmetatable(_: &mut VM, mut input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     match (input.first(), input.get(1)) {
         (Some(LuaValue::Object(target)), Some(LuaValue::Object(metatable))) => {
             match (&mut *target.write().unwrap(), &*metatable.read().unwrap()) {
@@ -548,12 +546,12 @@ pub(crate) fn setmetatable(_: &mut VM, mut input: Vec<LuaValue>) -> miette::Resu
                     table.set_metatable(Some(LuaValue::Object(metatable.clone())));
                 }
                 (LuaObject::Table(_), _) => {
-                    return Err(miette!(
+                    return Err(lua_error!(
                         "bad argument #2 to 'setmetatable' (table expected)"
                     ));
                 }
                 _ => {
-                    return Err(miette!(
+                    return Err(lua_error!(
                         "bad argument #1 to 'setmetatable' (table expected)"
                     ));
                 }
@@ -565,7 +563,7 @@ pub(crate) fn setmetatable(_: &mut VM, mut input: Vec<LuaValue>) -> miette::Resu
                     table.set_metatable(None);
                 }
                 _ => {
-                    return Err(miette!(
+                    return Err(lua_error!(
                         "bad argument #1 to 'setmetatable' (table expected)"
                     ));
                 }
@@ -573,17 +571,17 @@ pub(crate) fn setmetatable(_: &mut VM, mut input: Vec<LuaValue>) -> miette::Resu
         }
         (Some(LuaValue::Object(target)), _) => {
             if matches!(&*target.read().unwrap(), LuaObject::Table(_)) {
-                return Err(miette!(
+                return Err(lua_error!(
                     "bad argument #2 to 'setmetatable' (table expected)"
                 ));
             } else {
-                return Err(miette!(
+                return Err(lua_error!(
                     "bad argument #1 to 'setmetatable' (table expected)"
                 ));
             }
         }
         (_, _) => {
-            return Err(miette!(
+            return Err(lua_error!(
                 "bad argument #1 to 'setmetatable' (table expected)"
             ));
         }
@@ -592,13 +590,11 @@ pub(crate) fn setmetatable(_: &mut VM, mut input: Vec<LuaValue>) -> miette::Resu
     Ok(vec![input.swap_remove(0)])
 }
 
-pub(crate) fn tonumber(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+pub(crate) fn tonumber(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     let value = match input.first() {
         Some(value) => value,
         None => {
-            return Err(miette::miette!(
-                "bad argument #1 to 'tonumber' (value expected)"
-            ));
+            return Err(lua_error!("bad argument #1 to 'tonumber' (value expected)"));
         }
     };
 
@@ -620,17 +616,15 @@ pub(crate) fn tonumber(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<L
     Ok(vec![value])
 }
 
-pub(crate) fn tostring(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+pub(crate) fn tostring(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     let value = input.first().unwrap_or(&LuaValue::Nil);
 
     Ok(vec![LuaValue::String(value.to_string().into_bytes())])
 }
 
-pub(crate) fn r#type(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+pub(crate) fn r#type(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     let Some(value) = input.first() else {
-        return Err(miette::miette!(
-            "bad argument #1 to 'type' (value expected)"
-        ));
+        return Err(lua_error!("bad argument #1 to 'type' (value expected)"));
     };
 
     Ok(vec![LuaValue::String(value.type_name().bytes().collect())])
@@ -638,15 +632,15 @@ pub(crate) fn r#type(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<Lua
 
 static CONTROL_MESSAGES_ENABLED: AtomicBool = AtomicBool::new(false);
 
-pub(crate) fn warn(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+pub(crate) fn warn(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     let strings: Vec<_> = input
         .iter()
         .enumerate()
         .map(|(i, v)| match v {
             LuaValue::String(s) => Ok(String::from_utf8_lossy(s).to_string()),
-            _ => Err(miette!(
+            _ => Err(lua_error!(
                 "bad argument #{i} to 'warn' (string expected, got {})",
-                v.type_name()
+                v.type_name(),
             )),
         })
         .collect::<Result<_, _>>()?;
@@ -654,7 +648,7 @@ pub(crate) fn warn(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaVa
     // Check for control messages
     let first = strings
         .first()
-        .ok_or_else(|| miette!("bad argument #1 to 'warn' (string expected)"))?;
+        .ok_or_else(|| lua_error!("bad argument #1 to 'warn' (string expected)"))?;
     if first.starts_with('@') {
         match first.as_str() {
             "@on" => CONTROL_MESSAGES_ENABLED.store(true, Ordering::Relaxed),
@@ -678,12 +672,12 @@ pub(crate) fn warn(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaVa
     Ok(vec![LuaValue::Nil])
 }
 
-pub(crate) fn xpcall(vm: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+pub(crate) fn xpcall(vm: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     let mut input = input.into_iter();
     let function = match input.next() {
         Some(value) => value,
         None => {
-            return Err(miette!(
+            return Err(lua_error!(
                 "bad argument #1 to 'xpcall' (function expected, got no value)"
             ));
         }
@@ -692,7 +686,7 @@ pub(crate) fn xpcall(vm: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<Lu
     let msgh = match input.next() {
         Some(value) => value,
         None => {
-            return Err(miette!(
+            return Err(lua_error!(
                 "bad argument #2 to 'xpcall' (function expected, got no value)"
             ))
         }
@@ -701,15 +695,15 @@ pub(crate) fn xpcall(vm: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<Lu
     let mut args: Vec<_> = input.collect();
 
     let function_callable: Callable = (&function).try_into().map_err(|_| {
-        miette!(
+        lua_error!(
             "bad argument #1 to 'xpcall' (function expected, got {})",
-            function.type_name()
+            function.type_name(),
         )
     })?;
     let msgh: Callable = (&msgh).try_into().map_err(|_| {
-        miette!(
+        lua_error!(
             "bad argument #2 to 'xpcall' (function expected, got {})",
-            msgh.type_name()
+            msgh.type_name(),
         )
     })?;
 

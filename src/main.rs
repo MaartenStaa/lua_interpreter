@@ -88,6 +88,7 @@ fn main() {
     )
     .compile(Some(ast))
     {
+        let source = String::from_utf8_lossy(&source).to_string();
         let e = e.with_source_code(NamedSource::new(chunk_name, source));
         eprintln!("compilation failed: {e:?}");
         std::process::exit(1);

@@ -6,10 +6,11 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use miette::{miette, IntoDiagnostic, MietteDiagnostic, NamedSource, Report};
+use miette::NamedSource;
 
 use crate::{
-    error::RuntimeError,
+    debug,
+    error::{IntoLuaError, LuaError, RuntimeError},
     instruction::Instruction,
     macros::{assert_closure, assert_table, assert_table_object},
     token::Span,
@@ -154,6 +155,10 @@ impl<'source> VM<'source> {
         self.chunks.get(index)
     }
 
+    pub fn get_current_chunk(&self) -> &Chunk<'source> {
+        &self.chunks[self.call_stack[self.call_stack_index - 1].chunk]
+    }
+
     pub fn register_const(&mut self, constant: LuaConst) -> ConstIndex {
         let index = self.const_index;
         self.consts.push(constant);
@@ -209,9 +214,9 @@ impl<'source> VM<'source> {
         return_addr: usize,
         upvalues: Option<Vec<Option<Arc<RwLock<UpValue>>>>>,
         allow_multi_return_values: bool,
-    ) -> miette::Result<()> {
+    ) -> crate::Result {
         if self.call_stack_index >= MAX_STACK_SIZE {
-            return Err(self.miette_err("stack overflow"));
+            return Err(self.err("stack overflow"));
         }
 
         // Reuse the existing object to keep the `upvalues` vec
@@ -268,34 +273,25 @@ impl<'source> VM<'source> {
         assert!(!self.chunks.is_empty(), "no chunks to run");
 
         if let Err(mut err) = self.run_chunk(0) {
-            err = self.miette_set_labels_if_needed(err);
-
             // Attach stack trace
             for (i, frame) in self.call_stack[..self.call_stack_index]
                 .iter()
                 .enumerate()
                 .rev()
             {
-                err = err.wrap_err(format!(
-                    "#{i} {}",
-                    String::from_utf8_lossy(frame.name.as_deref().unwrap_or(b"<anonymous>")),
-                ));
-            }
+                let chunk = &self.chunks[frame.chunk];
+                let source = chunk.named_source();
+                let span = chunk.instruction_spans.get(&frame.return_addr);
 
-            let Chunk {
-                filename,
-                chunk_name,
-                source,
-                ..
-            } = &self.chunks[0];
-            let source = String::from_utf8_lossy(source.as_ref()).to_string();
-            if let Some(filename) = filename {
-                err = err.with_source_code(
-                    NamedSource::new(filename.to_string_lossy(), source).with_language("lua"),
-                );
-            } else {
-                err =
-                    err.with_source_code(NamedSource::new(chunk_name, source).with_language("lua"));
+                err = err
+                    .wrap_err(format!(
+                        "#{i} {}",
+                        String::from_utf8_lossy(frame.name.as_deref().unwrap_or(b"<anonymous>")),
+                    ))
+                    .with_source_code(source);
+                if let Some(span) = span {
+                    err = err.with_labels(*span);
+                }
             }
 
             eprintln!("{:?}", err);
@@ -329,7 +325,7 @@ impl<'source> VM<'source> {
         &mut self,
         value: LuaClosure,
         args: Vec<LuaValue>,
-    ) -> miette::Result<Vec<LuaValue>> {
+    ) -> crate::Result<Vec<LuaValue>> {
         let call_frame_offset = self.call_stack_index;
         let frame_pointer = self.stack.len();
         for arg in args {
@@ -370,9 +366,9 @@ impl<'source> VM<'source> {
     fn run_native_function(
         &mut self,
         name: &str,
-        function: fn(&mut VM, Vec<LuaValue>) -> miette::Result<Vec<LuaValue>>,
+        function: fn(&mut VM, Vec<LuaValue>) -> crate::Result<Vec<LuaValue>>,
         args: Vec<LuaValue>,
-    ) -> miette::Result<Vec<LuaValue>> {
+    ) -> crate::Result<Vec<LuaValue>> {
         // NOTE: Most values here are not relevant for native functions.
         self.push_call_frame(
             Some(format!("native function '{}'", name).as_bytes().to_vec()),
@@ -391,7 +387,7 @@ impl<'source> VM<'source> {
         result
     }
 
-    fn run_inner(&mut self) -> miette::Result<Vec<LuaValue>> {
+    fn run_inner(&mut self) -> crate::Result<Vec<LuaValue>> {
         'main: loop {
             let chunk_index = self.call_stack[self.call_stack_index - 1].chunk;
             let instruction = self.chunks[chunk_index].instructions[self.chunks[chunk_index].ip];
@@ -467,7 +463,7 @@ impl<'source> VM<'source> {
                     if attr & to_be_closed == to_be_closed && value.as_boolean() {
                         if let Some(__close) = value.get_metavalue(&CLOSE_KEY) {
                             let close: Callable = (&__close).try_into().map_err(|_| {
-                                self.miette_err("__close metamethod must be a callable value")
+                                self.err("__close metamethod must be a callable value")
                             })?;
                             // TODO: Second value refers to "the error object that caused the exit
                             // (if any)", but we don't have that yet. Sound like we'll need to
@@ -487,9 +483,9 @@ impl<'source> VM<'source> {
                                 }
                             }
                         } else {
-                            return Err(self.miette_err(
-                                "variable marked for closing has a non-closeable value",
-                            ));
+                            return Err(
+                                self.err("variable marked for closing has a non-closeable value")
+                            );
                         }
                     }
                     1
@@ -869,7 +865,7 @@ impl<'source> VM<'source> {
                         & (LuaVariableAttribute::Constant as u8)
                         == 1
                     {
-                        return Err(self.miette_err("attempt to modify a constant"));
+                        return Err(self.err("attempt to modify a constant"));
                     }
 
                     let old_value = &self.stack[frame_pointer + local_index as usize];
@@ -1028,7 +1024,7 @@ impl<'source> VM<'source> {
                     }
 
                     if !handled {
-                        return Err(self.miette_err("attempt to index a non-table"));
+                        return Err(self.err("attempt to index a non-table"));
                     }
 
                     1
@@ -1097,7 +1093,7 @@ impl<'source> VM<'source> {
                         if valid_object {
                             self.push(LuaValue::Nil);
                         } else {
-                            return Err(self.miette_err("attempt to index a non-table"));
+                            return Err(self.err("attempt to index a non-table"));
                         }
                     }
 
@@ -1124,11 +1120,11 @@ impl<'source> VM<'source> {
                                 }
                             }
                             _ => {
-                                return Err(self.miette_err("attempt to index a non-table"));
+                                return Err(self.err("attempt to index a non-table"));
                             }
                         },
                         _ => {
-                            return Err(self.miette_err("attempt to index a non-table"));
+                            return Err(self.err("attempt to index a non-table"));
                         }
                     }
 
@@ -1209,7 +1205,7 @@ impl<'source> VM<'source> {
                             2
                         }
                         _ => {
-                            return Err(self.miette_err("attempt to call a non-function"));
+                            return Err(self.err("attempt to call a non-function"));
                         }
                     }
                 }
@@ -1266,7 +1262,7 @@ impl<'source> VM<'source> {
                         // TODO: We probably want a nicer error here. Was this a break
                         // outside of a loop? Was it a goto statement with no matching
                         // label?
-                        return Err(self.miette_err("attempt to jump to an invalid address"));
+                        return Err(self.err("attempt to jump to an invalid address"));
                     }
                     self.chunks[chunk_index].ip = addr as usize;
                     continue;
@@ -1293,43 +1289,23 @@ impl<'source> VM<'source> {
                 // Other
                 Instruction::Error => {
                     let error_type = instr_param!();
-                    return Err(RuntimeError::try_from(error_type)?).into_diagnostic();
+                    return Err(RuntimeError::try_from(error_type)?).into_lua_error();
                 }
             };
             self.chunks[chunk_index].ip += instruction_increment;
         }
     }
 
-    fn miette_err<T: std::fmt::Display>(&self, message: T) -> miette::Error {
+    pub(crate) fn err<T: std::fmt::Display>(&self, message: T) -> LuaError {
         let frame = &self.call_stack[self.call_stack_index - 1];
         let chunk = &self.chunks[frame.chunk];
+        let source = chunk.named_source();
 
+        let error = LuaError::new(message.to_string()).with_source_code(source);
         if let Some(span) = chunk.instruction_spans.get(&chunk.ip) {
-            let labels = vec![span.labeled("here")];
-            miette!(labels = labels, "{message}")
+            error.with_labels(*span)
         } else {
-            miette!("{message}")
-        }
-    }
-
-    /// Set a label based on the current frame's IP, if it doesn't already have one.
-    fn miette_set_labels_if_needed(&self, report: Report) -> Report {
-        if let Some(source) = report.source() {
-            if let Some(diagnostic) = source.downcast_ref::<MietteDiagnostic>() {
-                if !diagnostic.labels.as_ref().is_some_and(|l| l.is_empty()) {
-                    return report;
-                }
-            }
-        }
-
-        let frame = &self.call_stack[self.call_stack_index - 1];
-        let chunk = &self.chunks[frame.chunk];
-
-        if let Some(span) = chunk.instruction_spans.get(&chunk.ip) {
-            let labels = vec![span.labeled("here")];
-            miette!(labels = labels, "{report:?}")
-        } else {
-            miette!("{report:?}")
+            error
         }
     }
 }
@@ -1381,5 +1357,14 @@ impl<'source> Chunk<'source> {
 
     pub fn get_instructions(&self) -> &[u8] {
         &self.instructions
+    }
+
+    pub fn named_source(&self) -> NamedSource<String> {
+        let source = String::from_utf8_lossy(&self.source).to_string();
+        if let Some(filename) = &self.filename {
+            NamedSource::new(filename.to_string_lossy(), source).with_language("lua")
+        } else {
+            NamedSource::new(&self.chunk_name, source).with_language("lua")
+        }
     }
 }

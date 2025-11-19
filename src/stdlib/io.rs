@@ -1,10 +1,10 @@
-use miette::{miette, IntoDiagnostic};
 use std::{
     io::{stderr, stdin, stdout, Write},
     sync::LazyLock,
 };
 
 use crate::{
+    error::{lua_error, IntoLuaError},
     macros::{require_userdata, require_userdata_type},
     value::{LuaObject, LuaTable, LuaValue, UserData},
     vm::VM,
@@ -46,14 +46,14 @@ pub enum FileHandle {
 }
 
 impl FileHandle {
-    fn write_all(&mut self, data: &[u8]) -> miette::Result<()> {
+    fn write_all(&mut self, data: &[u8]) -> crate::Result<()> {
         match self {
             FileHandle::Stdin(_) => {
-                return Err(miette!("cannot write to stdin"));
+                return Err(lua_error!("cannot write to stdin"));
             }
-            FileHandle::Stdout(handle) => handle.write_all(data).into_diagnostic()?,
-            FileHandle::Stderr(handle) => handle.write_all(data).into_diagnostic()?,
-            FileHandle::File(handle) => handle.write_all(data).into_diagnostic()?,
+            FileHandle::Stdout(handle) => handle.write_all(data).into_lua_error()?,
+            FileHandle::Stderr(handle) => handle.write_all(data).into_lua_error()?,
+            FileHandle::File(handle) => handle.write_all(data).into_lua_error()?,
         }
 
         Ok(())
@@ -71,7 +71,7 @@ fn create_file(handle: FileHandle) -> LuaValue {
     UserData::new_full(File { methods, handle }, FILE_METATABLE.clone()).into()
 }
 
-fn file_index(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+fn file_index(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     require_userdata!(input, "file:__index", 0, userdata, {
         require_userdata_type!(userdata, "file:__index", 0, File, file, _metatable, {
             Ok(vec![file
@@ -83,7 +83,7 @@ fn file_index(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>>
     })
 }
 
-fn file_write(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+fn file_write(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     require_userdata!(write, input, "file:write", 0, userdata, {
         require_userdata_type!(write, userdata, "file:write", 0, File, file, _metatable, {
             for (i, value) in input.iter().enumerate().skip(1) {
@@ -95,7 +95,7 @@ fn file_write(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>>
                         file.handle.write_all(n.to_string().as_bytes()).unwrap();
                     }
                     _ => {
-                        return Err(miette!(
+                        return Err(lua_error!(
                             "bad argument #{} to 'write' (string or number expected, got {})",
                             i + 1,
                             value.type_name()

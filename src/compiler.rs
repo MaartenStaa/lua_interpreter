@@ -1,4 +1,3 @@
-use miette::miette;
 use std::{
     borrow::Cow,
     collections::HashMap,
@@ -12,7 +11,7 @@ use crate::{
         LocalAttribute, Name, Number, PrefixExpression, Statement, TableConstructor, TokenTree,
         UnaryOperator, Variable,
     },
-    error::RuntimeError,
+    error::{lua_error, RuntimeError},
     instruction::Instruction,
     parser::Parser,
     token::Span,
@@ -158,13 +157,13 @@ impl BlockResult {
         self
     }
 
-    fn assert_no_new_locals(&self) -> miette::Result<()> {
+    fn assert_no_new_locals(&self) -> crate::Result<()> {
         if let Some(new_local) = &self.any_new_locals {
             let mut labels = vec![new_local.goto.1.labeled("this goto statement")];
             if let Some(span) = new_local.local.1 {
                 labels.push(span.labeled("this local variable definition"));
             }
-            return Err(miette!(
+            return Err(lua_error!(
                 labels = labels,
                 "<goto {}> jumps into the scope of local '{}'",
                 String::from_utf8_lossy(&new_local.goto.0),
@@ -208,7 +207,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
         }
     }
 
-    pub fn compile(mut self, ast: Option<TokenTree<Block>>) -> miette::Result<usize> {
+    pub fn compile(mut self, ast: Option<TokenTree<Block>>) -> crate::Result<usize> {
         let ast = match ast {
             Some(ast) => Ok(ast),
             None => Parser::new(self.chunk.get_filename(), self.chunk.get_source()).parse(),
@@ -275,7 +274,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
         ast: TokenTree<Block>,
         block_is_final_statement: bool,
         options: BlockOptions,
-    ) -> miette::Result<BlockResult> {
+    ) -> crate::Result<BlockResult> {
         if options.new_scope {
             self.begin_scope();
         }
@@ -333,7 +332,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
         statement: TokenTree<Statement>,
         options: &BlockOptions,
         is_final_statement: bool,
-    ) -> miette::Result<BlockResult> {
+    ) -> crate::Result<BlockResult> {
         let span = statement.span;
         Ok(match statement.node {
             Statement::FunctionCall(function_call) => {
@@ -591,7 +590,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
             }
             Statement::Break => {
                 if !options.is_loop {
-                    return Err(miette!(
+                    return Err(lua_error!(
                         labels = vec![span.labeled("here")],
                         "cannot break outside of a loop"
                     ));
@@ -1002,7 +1001,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
             Statement::Label(label) => {
                 let frame = self.frames.last_mut().expect("frames is not empty");
                 if frame.labels.contains_key(&label.node.0) {
-                    return Err(miette!(
+                    return Err(lua_error!(
                         labels = vec![label.span.labeled("here")],
                         "label '{}' already defined",
                         String::from_utf8_lossy(&label.node.0)
@@ -1022,7 +1021,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                         let mut any_new_locals = None;
                         for goto in gotos.iter_mut() {
                             if goto.depth < frame.scope_depth {
-                                return Err(miette!(
+                                return Err(lua_error!(
                                     labels = vec![
                                         goto.span.labeled("this goto statement"),
                                         label.span.labeled("this label")
@@ -1084,7 +1083,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
         &mut self,
         function_call: TokenTree<FunctionCall>,
         result_mode: ExpressionResult,
-    ) -> miette::Result<()> {
+    ) -> crate::Result<()> {
         // Marker for the start of the function call arguments
         self.push_load_marker();
 
@@ -1147,10 +1146,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
         Ok(())
     }
 
-    fn compile_tail_call(
-        &mut self,
-        function_call: TokenTree<FunctionCall>,
-    ) -> miette::Result<bool> {
+    fn compile_tail_call(&mut self, function_call: TokenTree<FunctionCall>) -> crate::Result<bool> {
         // Check if this function call refers to the current function
         let frame = self.frames.last().expect("frames is not empty");
         let is_tail_call = match &function_call.node.function.node {
@@ -1225,7 +1221,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
         Ok(true)
     }
 
-    fn compile_function_def(&mut self, function_def: TokenTree<FunctionDef>) -> miette::Result<()> {
+    fn compile_function_def(&mut self, function_def: TokenTree<FunctionDef>) -> crate::Result<()> {
         // We'll issue the bytecode inline here, but jump over it at runtime
         self.chunk.push_instruction(Instruction::Jmp, None);
         let jmp_over_func_addr = self.chunk.push_addr_placeholder();
@@ -1302,7 +1298,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
     fn compile_expression_list(
         &mut self,
         expressions: Vec<TokenTree<Expression>>,
-    ) -> miette::Result<()> {
+    ) -> crate::Result<()> {
         let num_expressions = expressions.len();
         for (i, expression) in expressions.into_iter().enumerate() {
             let is_last = i == num_expressions - 1;
@@ -1323,7 +1319,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
         &mut self,
         expression: TokenTree<Expression>,
         result_mode: ExpressionResult,
-    ) -> miette::Result<()> {
+    ) -> crate::Result<()> {
         let span = expression.span;
         match expression.node {
             Expression::Literal(literal) => {
@@ -1388,7 +1384,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
         &mut self,
         prefix_expression: TokenTree<PrefixExpression>,
         result_mode: ExpressionResult,
-    ) -> miette::Result<()> {
+    ) -> crate::Result<()> {
         match prefix_expression.node {
             PrefixExpression::FunctionCall(function_call) => {
                 self.compile_function_call(function_call, result_mode)?;
@@ -1422,7 +1418,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
     fn compile_table_constructor(
         &mut self,
         table: TokenTree<TableConstructor>,
-    ) -> miette::Result<()> {
+    ) -> crate::Result<()> {
         // Optimization: if all of the fields are literals, we can just create the table here and
         // load it as a constant.
         if table.node.fields.iter().all(|field| match &field.node {
@@ -1633,7 +1629,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
         self.frames.push(Frame::new(ip, name, method_name));
     }
 
-    fn end_frame(&mut self) -> miette::Result<Frame> {
+    fn end_frame(&mut self) -> crate::Result<Frame> {
         let frame = self.frames.pop().expect("frame exists");
 
         if let Some((name, goto)) = frame
@@ -1642,7 +1638,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
             .flat_map(|(name, jumps)| jumps.iter().map(move |jump| (name, jump)))
             .next()
         {
-            return Err(miette!(
+            return Err(lua_error!(
                 labels = vec![goto.span.labeled("here")],
                 "label '{}' not found",
                 String::from_utf8_lossy(name)
@@ -1660,7 +1656,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
         current_frame.scope_depth
     }
 
-    fn end_scope(&mut self) -> miette::Result<()> {
+    fn end_scope(&mut self) -> crate::Result<()> {
         let current_frame = self.frames.last_mut().unwrap();
         let scope_id = current_frame.scope_id();
         current_frame.scope_ids.pop();
@@ -1692,7 +1688,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                         && !jump.to_end_of_scope
                     {
                         if jump.depth < label.depth {
-                            return Err(miette!(
+                            return Err(lua_error!(
                                 labels = vec![jump.span.labeled("here")],
                                 "label '{}' not found",
                                 String::from_utf8_lossy(name)

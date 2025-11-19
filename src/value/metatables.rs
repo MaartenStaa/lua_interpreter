@@ -1,7 +1,6 @@
-use miette::miette;
 use std::sync::LazyLock;
 
-use crate::{macros::assert_table, vm::VM};
+use crate::{error::lua_error, macros::assert_table, vm::VM};
 
 use super::{LuaObject, LuaTable, LuaValue, UserData};
 
@@ -84,7 +83,7 @@ pub fn handle(
     key: &LuaValue,
     op_name: &'static str,
     input: Vec<LuaValue>,
-) -> miette::Result<LuaValue> {
+) -> crate::Result<LuaValue> {
     assert!(!input.is_empty());
 
     for value in input.iter() {
@@ -116,5 +115,5 @@ pub fn handle(
         message.push_str(&format!(" and a '{}'", b.type_name()));
     }
 
-    Err(miette!("{}", message))
+    Err(lua_error!("{}", message))
 }

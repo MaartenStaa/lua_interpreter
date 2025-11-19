@@ -13,7 +13,7 @@ pub(crate) enum Method {
     Closure(LuaClosure),
     NativeFunction(
         String,
-        fn(&mut VM, Vec<LuaValue>) -> miette::Result<Vec<LuaValue>>,
+        fn(&mut VM, Vec<LuaValue>) -> crate::Result<Vec<LuaValue>>,
     ),
 }
 

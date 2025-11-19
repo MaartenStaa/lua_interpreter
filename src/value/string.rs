@@ -1,5 +1,4 @@
-use crate::{stdlib, vm::VM};
-use miette::miette;
+use crate::{error::lua_error, stdlib, vm::VM};
 
 use super::{metatables, LuaNumber, LuaObject, LuaTable, LuaValue};
 
@@ -56,7 +55,7 @@ pub(crate) fn get_string_metatable() -> LuaTable {
     metatable
 }
 
-pub(crate) fn coerce_number(value: LuaValue) -> miette::Result<LuaNumber> {
+pub(crate) fn coerce_number(value: LuaValue) -> crate::Result<LuaNumber> {
     // TODO: This should follow the same string parsing used in the lexer, with the addition of
     // trimming whitespace, and allowing a mark for the current locale (which is not part of the
     // grammar for lexing).
@@ -68,17 +67,17 @@ pub(crate) fn coerce_number(value: LuaValue) -> miette::Result<LuaNumber> {
                 Ok(n) => Ok(LuaNumber::Integer(n)),
                 Err(_) => match s.trim().parse::<f64>() {
                     Ok(n) => Ok(LuaNumber::Float(n)),
-                    Err(_) => Err(miette!("expected number")),
+                    Err(_) => Err(lua_error!("expected number")),
                 },
             }
         }
-        _ => Err(miette!("expected number")),
+        _ => Err(lua_error!("expected number")),
     }
 }
 
-fn value_numbers(mut values: Vec<LuaValue>) -> Result<(LuaNumber, LuaNumber), miette::Error> {
+fn value_numbers(mut values: Vec<LuaValue>) -> crate::Result<(LuaNumber, LuaNumber)> {
     if values.len() != 2 {
-        return Err(miette!("metamethod expects 2 arguments"));
+        return Err(lua_error!("metamethod expects 2 arguments"));
     }
 
     let b = values.remove(1);
@@ -90,45 +89,45 @@ fn value_numbers(mut values: Vec<LuaValue>) -> Result<(LuaNumber, LuaNumber), mi
     Ok((a, b))
 }
 
-fn add(_: &mut VM, values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+fn add(_: &mut VM, values: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     let (a, b) = value_numbers(values)?;
 
     Ok(vec![LuaValue::Number(a + b)])
 }
 
-fn sub(_: &mut VM, values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+fn sub(_: &mut VM, values: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     let (a, b) = value_numbers(values)?;
 
     Ok(vec![LuaValue::Number(a - b)])
 }
 
-fn mul(_: &mut VM, values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+fn mul(_: &mut VM, values: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     let (a, b) = value_numbers(values)?;
 
     Ok(vec![LuaValue::Number(a * b)])
 }
 
-fn div(_: &mut VM, values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+fn div(_: &mut VM, values: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     let (a, b) = value_numbers(values)?;
 
     Ok(vec![LuaValue::Number(a / b)])
 }
 
-fn mod_(_: &mut VM, values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+fn mod_(_: &mut VM, values: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     let (a, b) = value_numbers(values)?;
 
     Ok(vec![LuaValue::Number(a % b)])
 }
 
-fn pow(_: &mut VM, values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+fn pow(_: &mut VM, values: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     let (a, b) = value_numbers(values)?;
 
     Ok(vec![LuaValue::Number(a.pow(&b))])
 }
 
-fn unm(_: &mut VM, mut values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+fn unm(_: &mut VM, mut values: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     if values.len() != 1 {
-        return Err(miette!("__unm expects 1 argument"));
+        return Err(lua_error!("__unm expects 1 argument"));
     }
 
     let a = coerce_number(values.remove(0))?;
@@ -136,25 +135,25 @@ fn unm(_: &mut VM, mut values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     Ok(vec![LuaValue::Number(-a)])
 }
 
-fn idiv(_: &mut VM, values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+fn idiv(_: &mut VM, values: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     let (a, b) = value_numbers(values)?;
 
     Ok(vec![LuaValue::Number(a.idiv(b))])
 }
 
-fn band(_: &mut VM, values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+fn band(_: &mut VM, values: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     let (a, b) = value_numbers(values)?;
 
     Ok(vec![LuaValue::Number((a & b)?)])
 }
 
-fn bor(_: &mut VM, values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+fn bor(_: &mut VM, values: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     let (a, b) = value_numbers(values)?;
 
     Ok(vec![LuaValue::Number((a | b)?)])
 }
 
-fn bxor(_: &mut VM, values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+fn bxor(_: &mut VM, values: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     let (a, b) = value_numbers(values)?;
 
     Ok(vec![LuaValue::Number((a ^ b)?)])

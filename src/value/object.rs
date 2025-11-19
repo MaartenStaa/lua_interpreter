@@ -9,7 +9,7 @@ pub enum LuaObject {
     Closure(LuaClosure),
     NativeFunction(
         &'static str,
-        fn(&mut VM, Vec<LuaValue>) -> miette::Result<Vec<LuaValue>>,
+        fn(&mut VM, Vec<LuaValue>) -> crate::Result<Vec<LuaValue>>,
     ),
     UserData(UserData),
 

@@ -1,9 +1,10 @@
 use std::path::Path;
 
 use crate::ast::*;
+use crate::error::{lua_error, Context, LuaError};
 use crate::lexer::Lexer;
 use crate::token::{Span, Token, TokenKind};
-use miette::{miette, Context, LabeledSpan};
+use miette::LabeledSpan;
 
 pub struct Parser<'path, 'source> {
     pub filename: Option<&'path Path>,
@@ -20,7 +21,7 @@ impl<'path, 'source> Parser<'path, 'source> {
         }
     }
 
-    pub fn parse(&mut self) -> miette::Result<TokenTree<Block>> {
+    pub fn parse(&mut self) -> crate::Result<TokenTree<Block>> {
         let result = self
             // NOTE: Don't start a new scope right away at the top-level
             .parse_block_inner(0, false)
@@ -28,7 +29,7 @@ impl<'path, 'source> Parser<'path, 'source> {
 
         // Ensure we've consumed all tokens
         if let Some(token) = self.lexer.next().transpose()? {
-            return Err(self.with_source_code(miette!(
+            return Err(self.with_source_code(lua_error!(
                 labels = vec![LabeledSpan::at(
                     token.span.start..token.span.end,
                     "unexpected token"
@@ -40,7 +41,7 @@ impl<'path, 'source> Parser<'path, 'source> {
         Ok(result)
     }
 
-    fn with_source_code(&self, report: miette::Report) -> miette::Report {
+    fn with_source_code(&self, report: LuaError) -> LuaError {
         let source = String::from_utf8_lossy(self.source).into_owned();
         if let Some(filename) = self.filename {
             report.with_source_code(
@@ -55,7 +56,7 @@ impl<'path, 'source> Parser<'path, 'source> {
         &mut self,
         start: usize,
         inside_vararg_function: bool,
-    ) -> miette::Result<TokenTree<Block>> {
+    ) -> crate::Result<TokenTree<Block>> {
         self.parse_block_inner(start, inside_vararg_function)
     }
 
@@ -63,7 +64,7 @@ impl<'path, 'source> Parser<'path, 'source> {
         &mut self,
         start: usize,
         inside_vararg_function: bool,
-    ) -> miette::Result<TokenTree<Block>> {
+    ) -> crate::Result<TokenTree<Block>> {
         let mut statements = Vec::new();
         while let Some(statement) = self.parse_statement(inside_vararg_function)? {
             statements.push(statement);
@@ -118,7 +119,7 @@ impl<'path, 'source> Parser<'path, 'source> {
     fn parse_statement(
         &mut self,
         inside_vararg_function: bool,
-    ) -> miette::Result<Option<TokenTree<Statement>>> {
+    ) -> crate::Result<Option<TokenTree<Statement>>> {
         loop {
             let next_token = self.lexer.peek()?;
             break match next_token {
@@ -406,7 +407,7 @@ impl<'path, 'source> Parser<'path, 'source> {
                     .wrap_err("in variable assignment or function call")
                     .map(Some),
                 Some(_) => {
-                    return Err(miette!(
+                    return Err(lua_error!(
                         labels = vec![next_token.unwrap().span.labeled("this is not a statement")],
                         "expected a statement"
                     ))
@@ -422,7 +423,7 @@ impl<'path, 'source> Parser<'path, 'source> {
         &mut self,
         start: usize,
         inside_vararg_function: bool,
-    ) -> miette::Result<TokenTree<Statement>> {
+    ) -> crate::Result<TokenTree<Statement>> {
         if matches!(
             self.lexer.peek()?.map(|t| &t.kind),
             Some(TokenKind::Function)
@@ -479,7 +480,7 @@ impl<'path, 'source> Parser<'path, 'source> {
                                 b"const" => LocalAttribute::Const,
                                 b"close" => LocalAttribute::Close,
                                 _ => {
-                                    return Err(miette!(
+                                    return Err(lua_error!(
                                         labels = vec![attr_token
                                             .span
                                             .labeled("expected 'const' or 'close'")],
@@ -567,7 +568,7 @@ impl<'path, 'source> Parser<'path, 'source> {
         &mut self,
         start_position: usize,
         inside_vararg_function: bool,
-    ) -> miette::Result<TokenTree<Statement>> {
+    ) -> crate::Result<TokenTree<Statement>> {
         let name = self.parse_name().wrap_err("name in for statement")?;
         let condition = match self.lexer.peek()? {
             Some(token) if token.kind == TokenKind::Equals => {
@@ -641,13 +642,13 @@ impl<'path, 'source> Parser<'path, 'source> {
                 )
             }
             Some(token) => {
-                return Err(miette!(
+                return Err(lua_error!(
                     labels = vec![token.span.labeled("expected '=', ',', or 'in'")],
                     "unexpected token"
                 ))
             }
             _ => {
-                return Err(miette!(
+                return Err(lua_error!(
                     labels = vec![LabeledSpan::at(
                         self.source.len()..self.source.len(),
                         "expected '=', ',', or 'in'"
@@ -672,7 +673,7 @@ impl<'path, 'source> Parser<'path, 'source> {
     fn parse_varlist_or_functioncall(
         &mut self,
         inside_vararg_function: bool,
-    ) -> miette::Result<TokenTree<Statement>> {
+    ) -> crate::Result<TokenTree<Statement>> {
         // This can be one of a few things:
         // - An assignment (ident1, ident2 = expr1, expr2)
         // - A function call (ident(args) or ident arg or ident:method(args))
@@ -726,7 +727,7 @@ impl<'path, 'source> Parser<'path, 'source> {
                             ..
                         } => v,
                         TokenTree { span, .. } => {
-                            return Err(miette!(
+                            return Err(lua_error!(
                                 labels = vec![span.labeled("expected variable")],
                                 "unexpected token"
                             ));
@@ -767,7 +768,7 @@ impl<'path, 'source> Parser<'path, 'source> {
                 node: PrefixExpression::FunctionCall(f),
                 span,
             } => Ok(TokenTree::new(Statement::FunctionCall(f), span)),
-            TokenTree { span, .. } => Err(miette!(
+            TokenTree { span, .. } => Err(lua_error!(
                 labels = vec![span.labeled("expected function call or variable assignment")],
                 "unexpected token"
             )),
@@ -777,7 +778,7 @@ impl<'path, 'source> Parser<'path, 'source> {
     fn parse_prefix_expression(
         &mut self,
         inside_vararg_function: bool,
-    ) -> miette::Result<TokenTree<PrefixExpression>> {
+    ) -> crate::Result<TokenTree<PrefixExpression>> {
         let mut prefix = match self.lexer.next().transpose()? {
             Some(Token {
                 kind: TokenKind::OpenParen,
@@ -804,7 +805,7 @@ impl<'path, 'source> Parser<'path, 'source> {
                 )
             }
             Some(t) => {
-                return Err(miette!(
+                return Err(lua_error!(
                     labels = vec![LabeledSpan::at(
                         t.span.start..t.span.end,
                         "expected prefix expression"
@@ -813,7 +814,7 @@ impl<'path, 'source> Parser<'path, 'source> {
                 ))
             }
             None => {
-                return Err(miette!(
+                return Err(lua_error!(
                     labels = vec![LabeledSpan::at(
                         self.source.len()..self.source.len(),
                         "expected prefix expression"
@@ -909,7 +910,7 @@ impl<'path, 'source> Parser<'path, 'source> {
     fn parse_args(
         &mut self,
         inside_vararg_function: bool,
-    ) -> miette::Result<TokenTree<Vec<TokenTree<Expression>>>> {
+    ) -> crate::Result<TokenTree<Vec<TokenTree<Expression>>>> {
         let mut args = Vec::new();
         if matches!(
             self.lexer.peek()?.map(|t| &t.kind),
@@ -978,7 +979,7 @@ impl<'path, 'source> Parser<'path, 'source> {
     fn parse_table_constructor(
         &mut self,
         inside_vararg_function: bool,
-    ) -> miette::Result<TokenTree<TableConstructor>> {
+    ) -> crate::Result<TokenTree<TableConstructor>> {
         macro_rules! expect_end_of_field {
             () => {
                 match self.lexer.peek()? {
@@ -998,7 +999,7 @@ impl<'path, 'source> Parser<'path, 'source> {
                         break span.end;
                     }
                     Some(t) => {
-                        return Err(miette!(
+                        return Err(lua_error!(
                             labels = vec![LabeledSpan::at(
                                 t.span.start..t.span.end,
                                 "expected table field separator"
@@ -1007,7 +1008,7 @@ impl<'path, 'source> Parser<'path, 'source> {
                         ))
                     }
                     None => {
-                        return Err(miette!(
+                        return Err(lua_error!(
                             labels = vec![LabeledSpan::at(
                                 self.source.len()..self.source.len(),
                                 "expected table field separator"
@@ -1086,7 +1087,7 @@ impl<'path, 'source> Parser<'path, 'source> {
                         }
                         Some(expression) => (None, expression),
                         None => {
-                            return Err(miette!(
+                            return Err(lua_error!(
                                 labels = vec![self
                                     .lexer
                                     .label_at_current_position("expected table field")],
@@ -1125,12 +1126,15 @@ impl<'path, 'source> Parser<'path, 'source> {
                             expect_end_of_field!();
                         }
                         None => {
-                            return Err(miette!(labels = vec![expected_span], "unexpected token"));
+                            return Err(lua_error!(
+                                labels = vec![expected_span],
+                                "unexpected token"
+                            ));
                         }
                     }
                 }
                 None => {
-                    return Err(miette!(
+                    return Err(lua_error!(
                         labels = vec![LabeledSpan::at(
                             self.source.len()..self.source.len(),
                             "expected table field"
@@ -1150,7 +1154,7 @@ impl<'path, 'source> Parser<'path, 'source> {
     fn expect_expression(
         &mut self,
         inside_vararg_function: bool,
-    ) -> miette::Result<TokenTree<Expression>> {
+    ) -> crate::Result<TokenTree<Expression>> {
         self.expect_expression_within(0, inside_vararg_function)
     }
 
@@ -1158,10 +1162,10 @@ impl<'path, 'source> Parser<'path, 'source> {
         &mut self,
         min_bp: u8,
         inside_vararg_function: bool,
-    ) -> miette::Result<TokenTree<Expression>> {
+    ) -> crate::Result<TokenTree<Expression>> {
         match self.parse_expression_within(min_bp, inside_vararg_function)? {
             Some(expression) => Ok(expression),
-            None => Err(miette!(
+            None => Err(lua_error!(
                 labels = vec![self.lexer.label_at_current_position("here")],
                 "expected an expression"
             )),
@@ -1171,7 +1175,7 @@ impl<'path, 'source> Parser<'path, 'source> {
     fn parse_expression(
         &mut self,
         inside_vararg_function: bool,
-    ) -> miette::Result<Option<TokenTree<Expression>>> {
+    ) -> crate::Result<Option<TokenTree<Expression>>> {
         self.parse_expression_within(0, inside_vararg_function)
     }
 
@@ -1179,7 +1183,7 @@ impl<'path, 'source> Parser<'path, 'source> {
         &mut self,
         min_bp: u8,
         inside_vararg_function: bool,
-    ) -> miette::Result<Option<TokenTree<Expression>>> {
+    ) -> crate::Result<Option<TokenTree<Expression>>> {
         let mut lhs = match self.lexer.peek()? {
             Some(Token {
                 kind: TokenKind::Identifier(_) | TokenKind::OpenParen,
@@ -1276,7 +1280,7 @@ impl<'path, 'source> Parser<'path, 'source> {
                 let span = *span;
                 self.lexer.next();
                 if !inside_vararg_function {
-                    return Err(miette!(
+                    return Err(lua_error!(
                         labels = vec![span.labeled("cannot use ... outside a vararg function")],
                         "unexpected token"
                     ));
@@ -1451,7 +1455,7 @@ impl<'path, 'source> Parser<'path, 'source> {
         start_position: usize,
         method_name: Option<Vec<u8>>,
         name: Option<Vec<u8>>,
-    ) -> miette::Result<TokenTree<FunctionDef>> {
+    ) -> crate::Result<TokenTree<FunctionDef>> {
         let open_paren = self.lexer.expect(|k| k == &TokenKind::OpenParen, "(")?;
 
         let mut parameters = Vec::new();
@@ -1496,13 +1500,13 @@ impl<'path, 'source> Parser<'path, 'source> {
                     }
                 }
                 Some(token) => {
-                    return Err(miette!(
+                    return Err(lua_error!(
                         labels = vec![token.span.labeled("expected parameter name")],
                         "unexpected token"
                     ))
                 }
                 None => {
-                    return Err(miette!(
+                    return Err(lua_error!(
                         labels = vec![LabeledSpan::at(
                             self.source.len()..self.source.len(),
                             "expected function signature"
@@ -1531,7 +1535,7 @@ impl<'path, 'source> Parser<'path, 'source> {
         ))
     }
 
-    fn parse_name(&mut self) -> miette::Result<TokenTree<Name>> {
+    fn parse_name(&mut self) -> crate::Result<TokenTree<Name>> {
         let token = self
             .lexer
             .expect(|k| matches!(k, &TokenKind::Identifier(_)), "identifier")?;
