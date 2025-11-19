@@ -1234,6 +1234,10 @@ impl<'source> VM<'source> {
                     // Pop the marker
                     self.pop();
 
+                    if return_values.is_empty() && !frame.allow_multi_return_values {
+                        return_values.push(LuaValue::Nil);
+                    }
+
                     // Check if this is the root frame, or if we're leaving this chunk
                     if frame.border_frame {
                         return Ok(return_values);
@@ -1247,14 +1251,10 @@ impl<'source> VM<'source> {
                     }
 
                     // Put the return values back
-                    if return_values.is_empty() && !frame.allow_multi_return_values {
-                        self.push(LuaValue::Nil);
-                    } else {
-                        for value in return_values {
-                            self.push(value);
-                            if !frame.allow_multi_return_values {
-                                break;
-                            }
+                    for value in return_values {
+                        self.push(value);
+                        if !frame.allow_multi_return_values {
+                            break;
                         }
                     }
 
