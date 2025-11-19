@@ -43,6 +43,10 @@ fn main() {
         print_bytecode,
     } = Input::parse();
 
+    let Ok(filename) = filename.canonicalize() else {
+        eprintln!("failed to canonicalize filename {}", filename.display());
+        std::process::exit(1);
+    };
     let source = std::fs::read(&filename).expect("failed to read source code file");
 
     if debug_lexer {

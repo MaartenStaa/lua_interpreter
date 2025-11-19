@@ -428,6 +428,7 @@ pub(crate) fn require(vm: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<Lu
 
     // Loop through each package path option
     let package_config = &package::CONFIG;
+    let called_from = vm.get_current_chunk().get_filename();
     for mut option in package_path
         .split(|c| *c == package_config.template_separator)
         .map(|s| s.to_vec())
@@ -445,10 +446,26 @@ pub(crate) fn require(vm: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<Lu
                 .collect();
         }
 
-        // TODO: Do we need to resolve this relative to the current file?
-        let path_str = String::from_utf8_lossy(&option);
-        // let path_os_str = OsString::from_(&option);
-        let path = Path::new(path_str.as_ref());
+        let mut path_str = String::from_utf8_lossy(&option);
+        let mut path = Path::new(path_str.as_ref()).to_owned();
+        if path.is_relative() {
+            // Resolve to the current file's directory
+            if let Some(filename) = called_from {
+                path = filename
+                    .parent()
+                    .map(|parent| parent.join(&path).canonicalize())
+                    .transpose()
+                    .map_err(|err| {
+                        lua_error!(
+                            "error loading module '{name_str}' from file '{source}': cannot resolve path '{}': {err}",
+                            path.display(),
+                            source = &filename.to_string_lossy(),
+                        )
+                    })?
+                    .unwrap_or(path);
+                path_str = path.to_string_lossy();
+            }
+        }
         if !path.exists() {
             continue;
         }
@@ -475,13 +492,7 @@ pub(crate) fn require(vm: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<Lu
 
         let source = fs::read(&path).map_err(|_| lua_error!("unable to read module {name_str}"))?;
 
-        let compiler = Compiler::new(
-            vm,
-            None,
-            Some(path.to_owned()),
-            name_str.to_string(),
-            source.into(),
-        );
+        let compiler = Compiler::new(vm, None, Some(path), name_str.to_string(), source.into());
         let chunk_index = compiler.compile(None)?;
         let mut result = vm.run_chunk(chunk_index)?;
         let result = result.swap_remove(0);
