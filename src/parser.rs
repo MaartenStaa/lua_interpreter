@@ -1465,7 +1465,7 @@ impl<'path, 'source> Parser<'path, 'source> {
                 Span::new(open_paren.span.end, open_paren.span.end),
             ));
         }
-        let mut has_varargs = false;
+        let mut varargs = None;
 
         loop {
             match self.lexer.peek()? {
@@ -1477,10 +1477,10 @@ impl<'path, 'source> Parser<'path, 'source> {
                 }
                 Some(Token {
                     kind: TokenKind::DotDotDot,
-                    ..
+                    span,
                 }) => {
+                    varargs = Some(*span);
                     self.lexer.next();
-                    has_varargs = true;
                     break;
                 }
                 Some(Token {
@@ -1519,7 +1519,7 @@ impl<'path, 'source> Parser<'path, 'source> {
 
         let close_paren = self.lexer.expect(|k| k == &TokenKind::CloseParen, ")")?;
         let block = self
-            .parse_block_inner(close_paren.span.end, has_varargs)
+            .parse_block_inner(close_paren.span.end, varargs.is_some())
             .wrap_err("in function definition")?;
         let end_token = self.lexer.expect(|k| k == &TokenKind::End, "end")?;
 
@@ -1528,7 +1528,7 @@ impl<'path, 'source> Parser<'path, 'source> {
                 name,
                 method_name,
                 parameters,
-                has_varargs,
+                varargs,
                 block,
             },
             Span::new(start_position, end_token.span.end),

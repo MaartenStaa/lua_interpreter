@@ -8,4 +8,6 @@ pub struct LuaClosure {
     pub chunk: usize,
     pub ip: u16,
     pub upvalues: Vec<Option<Arc<RwLock<UpValue>>>>,
+    pub num_params: u8,
+    pub has_varargs: bool,
 }

@@ -220,6 +220,8 @@ pub(crate) fn load(vm: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaVa
             chunk: chunk_index,
             ip: 0,
             upvalues: vec![],
+            num_params: 0,
+            has_varargs: false,
         }),
     )))])
 }

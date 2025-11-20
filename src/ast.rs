@@ -214,6 +214,6 @@ pub struct FunctionDef {
     pub name: Option<Vec<u8>>,
     pub method_name: Option<Vec<u8>>,
     pub parameters: Vec<TokenTree<Name>>,
-    pub has_varargs: bool,
+    pub varargs: Option<Span>,
     pub block: TokenTree<Block>,
 }

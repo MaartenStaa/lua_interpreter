@@ -1309,15 +1309,6 @@ impl<'a, 'source> Compiler<'a, 'source> {
             self.add_parameter(parameter.node.0, Some(parameter.span));
         }
 
-        if function_def.node.has_varargs {
-            // TODO: There actually should be a span for varargs, right?
-            self.add_parameter(VARARG_LOCAL_NAME.to_vec(), None);
-            self.chunk.push_instruction(Instruction::AlignVararg, None);
-        } else {
-            self.chunk.push_instruction(Instruction::Align, None);
-        }
-        self.chunk.push_instruction(parameter_count as u8, None);
-
         let has_return = function_def.node.block.node.return_statement.is_some();
         self.compile_block(
             function_def.node.block,
@@ -1349,6 +1340,8 @@ impl<'a, 'source> Compiler<'a, 'source> {
                 chunk: self.chunk_index,
                 ip: func_addr,
                 upvalues: frame.upvalues.len(),
+                num_params: parameter_count as u8,
+                has_varargs: function_def.node.varargs.is_some(),
             }));
         self.chunk
             .push_instruction(Instruction::LoadClosure, Some(function_def.span));
@@ -1450,12 +1443,8 @@ impl<'a, 'source> Compiler<'a, 'source> {
                 ExpressionResult::Single
             }
             Expression::Ellipsis => {
-                let vararg_local_index = self
-                    .resolve_local(VARARG_LOCAL_NAME)
-                    .expect("parser ensures that vararg is in scope");
                 self.chunk
                     .push_instruction(Instruction::LoadVararg, Some(expression.span));
-                self.chunk.push_instruction(vararg_local_index, None);
                 self.chunk.push_instruction(
                     if result_mode == ExpressionResult::Single {
                         1

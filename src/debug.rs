@@ -268,14 +268,10 @@ pub fn print_instructions(vm: &VM, chunk: &Chunk<'_>) {
                 2
             }
             Instruction::LoadVararg => {
-                let local_index = instructions[instruction_pointer + 1];
-                let is_single_value = instructions[instruction_pointer + 2] == 1;
+                let is_single_value = instructions[instruction_pointer + 1] == 1;
                 instr!("LOAD_VARARG");
-                println!(
-                    "{local_index} {}",
-                    if is_single_value { "single" } else { "multi" }
-                );
-                3
+                println!("{}", if is_single_value { "single" } else { "multi" });
+                2
             }
 
             // Table

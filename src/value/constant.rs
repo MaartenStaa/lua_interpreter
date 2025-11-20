@@ -6,6 +6,8 @@ pub struct LuaFunctionDefinition {
     pub chunk: usize,
     pub ip: u16,
     pub upvalues: usize,
+    pub num_params: u8,
+    pub has_varargs: bool,
 }
 
 #[derive(Debug, Clone)]

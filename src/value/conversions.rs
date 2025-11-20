@@ -89,11 +89,15 @@ impl From<LuaConst> for LuaValue {
                 chunk,
                 ip,
                 upvalues,
+                num_params,
+                has_varargs,
             }) => LuaValue::Object(Arc::new(RwLock::new(LuaObject::Closure(LuaClosure {
                 name,
                 chunk,
                 ip,
                 upvalues: vec![None; upvalues],
+                num_params,
+                has_varargs,
             })))),
             LuaConst::Table(t) => LuaValue::Object(Arc::new(RwLock::new(LuaObject::Table(t)))),
         }

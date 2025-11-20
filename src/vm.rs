@@ -92,6 +92,7 @@ struct CallFrame {
     frame_pointer: usize,
     return_addr: usize,
     upvalues: [Option<Arc<RwLock<UpValue>>>; u8::MAX as usize],
+    varargs: Vec<LuaValue>,
     allow_multi_return_values: bool,
 }
 
@@ -104,6 +105,7 @@ impl CallFrame {
             frame_pointer: 0,
             return_addr: 0,
             upvalues: [const { None }; u8::MAX as usize],
+            varargs: vec![],
             allow_multi_return_values: true,
         }
     }
@@ -255,6 +257,7 @@ impl<'source> VM<'source> {
         };
 
         frame.upvalues.fill(None);
+        frame.varargs.clear();
 
         popped_frame
     }
@@ -348,6 +351,8 @@ impl<'source> VM<'source> {
             false,
         )?;
 
+        self.align_closure_args(value.num_params, value.has_varargs);
+
         let result = self.run_inner();
         if result.is_err() {
             // In this case we wouldn't hit a `return` instruction, so we need to clean up the
@@ -364,6 +369,35 @@ impl<'source> VM<'source> {
 
         self.chunks[value.chunk].ip = old_ip;
         result
+    }
+
+    /// Handle arguments when entering a closure, i.e. pad extra `nil` values if
+    /// the actual number of passed arguments is less than `num_params`, store
+    /// any varargs in the frame's varargs field, and trim any extraneous values
+    /// from the stack if `has_varargs = false`.
+    /// Call this after pushing the call frame.
+    fn align_closure_args(&mut self, num_params: u8, has_varargs: bool) {
+        let num_passed_params =
+            self.stack.len() - self.call_stack[self.call_stack_index - 1].frame_pointer;
+        if num_passed_params > num_params as usize && has_varargs {
+            // TODO: Can just copy these once we have static stack access.
+            let num_varargs = num_passed_params - num_params as usize;
+            for _ in 0..num_varargs {
+                let arg = self.pop();
+                self.call_stack[self.call_stack_index - 1].varargs.push(arg);
+            }
+            self.call_stack[self.call_stack_index - 1].varargs.reverse();
+        } else if num_passed_params > num_params as usize {
+            let num_extraneous = num_passed_params - num_params as usize;
+            for _ in 0..num_extraneous {
+                self.pop();
+            }
+        } else if num_passed_params < num_params as usize {
+            let num_lacking = num_params as usize - num_passed_params;
+            for _ in 0..num_lacking {
+                self.push(LuaValue::Nil);
+            }
+        }
     }
 
     fn run_native_function(
@@ -936,40 +970,23 @@ impl<'source> VM<'source> {
                     2
                 }
                 Instruction::LoadVararg => {
-                    let local_index = instr_param!(1);
-                    let is_single_vararg = instr_param!(2) == 1;
-                    let frame_pointer = self.call_stack[self.call_stack_index - 1].frame_pointer;
-                    let vararg = self.stack[frame_pointer + local_index as usize].clone();
-                    match vararg {
-                        LuaValue::Object(o) => match &*o.read().unwrap() {
-                            LuaObject::Table(table) => {
-                                let max = if is_single_vararg { 1 } else { table.len() };
-                                for i in 1..=max {
-                                    let value = table
-                                        .get(&LuaValue::Number(LuaNumber::Integer(i as i64)))
-                                        .cloned()
-                                        .unwrap_or(LuaValue::Nil);
-                                    self.push(value);
-                                }
+                    let is_single_vararg = instr_param!() == 1;
+                    if is_single_vararg {
+                        let value = self.call_stack[self.call_stack_index - 1]
+                            .varargs
+                            .first()
+                            .cloned()
+                            .unwrap_or(LuaValue::Nil);
+                        self.push(value);
+                    } else {
+                        let varargs = self.call_stack[self.call_stack_index - 1].varargs.clone();
+                        for value in varargs {
+                            self.push(value);
+                        }
 
-                                if !is_single_vararg {
-                                    self.multres = table.len();
-                                }
-                            }
-                            _ => {
-                                unreachable!("vararg is not a non-table object");
-                            }
-                        },
-                        LuaValue::Nil => {
-                            if is_single_vararg {
-                                self.push(LuaValue::Nil);
-                            }
-                        }
-                        _ => {
-                            unreachable!("vararg is not a table or nil");
-                        }
-                    };
-                    3
+                        self.multres = self.call_stack[self.call_stack_index - 1].varargs.len();
+                    }
+                    2
                 }
 
                 // Table
@@ -1080,6 +1097,10 @@ impl<'source> VM<'source> {
                                             Some(closure.upvalues),
                                             false,
                                         )?;
+                                        self.align_closure_args(
+                                            closure.num_params,
+                                            closure.has_varargs,
+                                        );
                                         continue 'main;
                                     }
                                     Method::NativeFunction(name, f) => {
@@ -1182,6 +1203,7 @@ impl<'source> VM<'source> {
                                 !is_single_return,
                             )?;
                             self.chunks[closure.chunk].ip = closure.ip as usize;
+                            self.align_closure_args(closure.num_params, closure.has_varargs);
 
                             continue;
                         }
