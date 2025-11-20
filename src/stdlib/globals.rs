@@ -126,10 +126,12 @@ pub(crate) fn ipairs(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaV
 }
 
 pub(crate) fn load(vm: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
+    let mut load_from_closure = false;
     let source = match input.first() {
         Some(LuaValue::String(s)) => s.clone(),
         Some(LuaValue::Object(o)) => match &*o.read().unwrap() {
             LuaObject::Closure(closure) => {
+                load_from_closure = true;
                 let mut result = Vec::new();
                 loop {
                     let mut piece_result = vm.run_closure(closure.clone(), vec![])?;
@@ -182,7 +184,12 @@ pub(crate) fn load(vm: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaVa
 
     let name = match input.get(1) {
         Some(LuaValue::String(s)) => String::from_utf8_lossy(s).to_string(),
-        Some(LuaValue::Nil) | None => "chunk".to_string(),
+        Some(LuaValue::Nil) | None => if load_from_closure {
+            "=(load)"
+        } else {
+            "chunk"
+        }
+        .to_string(),
         Some(value) => {
             return Err(lua_error!(
                 "bad argument #2 to 'load' (string expected, got {})",
