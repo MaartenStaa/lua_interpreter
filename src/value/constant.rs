@@ -8,11 +8,11 @@ pub struct LuaFunctionDefinition {
     pub upvalues: usize,
     pub num_params: u8,
     pub has_varargs: bool,
+    pub max_registers: u8,
 }
 
 #[derive(Debug, Clone)]
 pub enum LuaConst {
-    Marker,
     Nil,
     Boolean(bool),
     Number(LuaNumber),
@@ -24,7 +24,6 @@ pub enum LuaConst {
 impl PartialEq for LuaConst {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (LuaConst::Marker, LuaConst::Marker) => true,
             (LuaConst::Nil, LuaConst::Nil) => true,
             (LuaConst::Boolean(a), LuaConst::Boolean(b)) => a == b,
             (LuaConst::Number(a), LuaConst::Number(b)) => match (a, b) {

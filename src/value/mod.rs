@@ -28,7 +28,6 @@ use std::{
 
 #[derive(Clone)]
 pub enum LuaValue {
-    Marker,
     Nil,
     Boolean(bool),
     Number(number::LuaNumber),
@@ -40,7 +39,6 @@ pub enum LuaValue {
 impl Debug for LuaValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            LuaValue::Marker => write!(f, "<marker>"),
             LuaValue::Nil => write!(f, "nil"),
             LuaValue::Boolean(b) => write!(f, "{}", b),
             LuaValue::Number(n) => write!(f, "{}", n),
@@ -75,7 +73,6 @@ impl PartialEq for LuaValue {
 impl Hash for LuaValue {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         match self {
-            LuaValue::Marker => 0.hash(state),
             LuaValue::Nil => 0.hash(state),
             LuaValue::Boolean(b) => b.hash(state),
             LuaValue::Number(n) => n.hash(state),
@@ -91,7 +88,6 @@ impl Eq for LuaValue {}
 impl LuaValue {
     pub fn type_name(&self) -> &'static str {
         match self {
-            LuaValue::Marker => "<marker>",
             LuaValue::Nil => "nil",
             LuaValue::Boolean(_) => "boolean",
             LuaValue::Number(_) => "number",
@@ -105,13 +101,23 @@ impl LuaValue {
 impl Display for LuaValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            LuaValue::Marker => write!(f, "<marker>"),
             LuaValue::Nil => write!(f, "nil"),
             LuaValue::Boolean(b) => write!(f, "{}", b),
             LuaValue::Number(n) => write!(f, "{}", n),
             LuaValue::String(s) => write!(f, "{}", String::from_utf8_lossy(s)),
             LuaValue::Object(o) => write!(f, "{}", o.read().unwrap()),
             LuaValue::UpValue(u) => write!(f, "{}", u.read().unwrap()),
+        }
+    }
+}
+
+impl LuaValue {
+    pub fn is_table(&self) -> bool {
+        match self {
+            LuaValue::Object(o) => {
+                matches!(*o.read().unwrap(), LuaObject::Table(_))
+            }
+            _ => false,
         }
     }
 }

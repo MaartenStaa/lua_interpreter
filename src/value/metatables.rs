@@ -81,39 +81,39 @@ impl LuaObject {
 pub fn handle(
     vm: &mut VM,
     key: &LuaValue,
-    op_name: &'static str,
     input: Vec<LuaValue>,
-) -> crate::Result<LuaValue> {
+) -> Option<crate::Result<LuaValue>> {
     assert!(!input.is_empty());
 
     for value in input.iter() {
         if let Some(LuaValue::Object(o)) = value.get_metavalue(key) {
             match &*o.read().unwrap() {
                 LuaObject::Closure(c) => {
-                    let mut result = vm.run_closure(c.clone(), input)?;
-                    return Ok(if result.is_empty() {
+                    let mut result = match vm.run_closure(c.clone(), input) {
+                        Ok(value) => value,
+                        Err(e) => return Some(Err(e)),
+                    };
+                    return Some(Ok(if result.is_empty() {
                         LuaValue::Nil
                     } else {
                         result.swap_remove(0)
-                    });
+                    }));
                 }
                 LuaObject::NativeFunction(_, f) => {
-                    let mut result = f(vm, input)?;
-                    return Ok(if result.is_empty() {
+                    let mut result = match f(vm, input) {
+                        Ok(value) => value,
+                        Err(e) => return Some(Err(e)),
+                    };
+                    return Some(Ok(if result.is_empty() {
                         LuaValue::Nil
                     } else {
                         result.swap_remove(0)
-                    });
+                    }));
                 }
                 _ => {}
             }
         }
     }
 
-    let mut message = format!("cannot {} a '{}'", op_name, &input[0].type_name());
-    if let Some(b) = input.get(1) {
-        message.push_str(&format!(" and a '{}'", b.type_name()));
-    }
-
-    Err(lua_error!("{}", message))
+    None
 }

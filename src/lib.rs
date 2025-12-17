@@ -1,4 +1,6 @@
 pub mod ast;
+mod bytecode;
+mod chunk;
 pub mod compiler;
 pub mod debug;
 pub mod env;

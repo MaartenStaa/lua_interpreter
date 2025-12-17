@@ -79,7 +79,6 @@ impl From<UserData> for LuaValue {
 impl From<LuaConst> for LuaValue {
     fn from(constant: LuaConst) -> Self {
         match constant {
-            LuaConst::Marker => LuaValue::Marker,
             LuaConst::Nil => LuaValue::Nil,
             LuaConst::Boolean(b) => LuaValue::Boolean(b),
             LuaConst::Number(n) => LuaValue::Number(n),
@@ -91,6 +90,7 @@ impl From<LuaConst> for LuaValue {
                 upvalues,
                 num_params,
                 has_varargs,
+                max_registers,
             }) => LuaValue::Object(Arc::new(RwLock::new(LuaObject::Closure(LuaClosure {
                 name,
                 chunk,
@@ -98,6 +98,7 @@ impl From<LuaConst> for LuaValue {
                 upvalues: vec![None; upvalues],
                 num_params,
                 has_varargs,
+                max_registers,
             })))),
             LuaConst::Table(t) => LuaValue::Object(Arc::new(RwLock::new(LuaObject::Table(t)))),
         }

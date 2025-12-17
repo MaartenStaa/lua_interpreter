@@ -226,6 +226,7 @@ pub(crate) fn load(vm: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaVa
             name: Some(name.into_bytes().to_vec()),
             chunk: chunk_index,
             ip: 0,
+            max_registers: vm.get_chunk(chunk_index).unwrap().max_registers,
             upvalues: vec![],
             num_params: 0,
             has_varargs: false,

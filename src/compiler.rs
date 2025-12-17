@@ -11,17 +11,16 @@ use crate::{
         LocalAttribute, Name, Number, PrefixExpression, Statement, TableConstructor, TokenTree,
         UnaryOperator, Variable,
     },
-    error::{lua_error, RuntimeError},
-    instruction::Instruction,
+    bytecode::{Bytecode, JumpToUndecidedAddress},
+    chunk::Chunk,
+    error::{RuntimeError, lua_error},
     parser::Parser,
     token::Span,
     value::{
         LuaConst, LuaFunctionDefinition, LuaNumber, LuaObject, LuaTable, LuaVariableAttribute,
     },
-    vm::{Chunk, ConstIndex, JumpAddr, VM},
+    vm::{ConstIndex, JumpAddr, VM},
 };
-
-const VARARG_LOCAL_NAME: &[u8] = b"...";
 
 #[derive(Debug)]
 struct Goto {
@@ -36,22 +35,21 @@ struct Goto {
 #[derive(Debug)]
 struct Label {
     addr: JumpAddr,
-    locals: usize,
+    current_register: u8,
     depth: u8,
 }
 
 #[derive(Debug, Clone)]
 struct Local {
     name: Vec<u8>,
-    is_parameter: bool,
     depth: u8,
     span: Option<Span>,
 }
 
 #[derive(Debug, Clone)]
-struct Upvalue {
-    is_local: bool,
-    index: u8,
+pub(crate) struct Upvalue {
+    pub(crate) is_local: bool,
+    pub(crate) index: u8,
 }
 
 #[derive(Debug)]
@@ -64,7 +62,6 @@ struct BlockOptions {
 #[derive(Debug, Default)]
 struct BreakJump {
     addr: JumpAddr,
-    locals: usize,
 }
 
 #[derive(Debug, Default)]
@@ -81,7 +78,6 @@ struct NewLocalsAfterGoto {
 
 #[derive(Debug)]
 struct Frame {
-    ip: JumpAddr,
     name: Option<Vec<u8>>,
     method_name: Option<Vec<u8>>,
     locals: Vec<Local>,
@@ -91,12 +87,14 @@ struct Frame {
     scope_depth: u8,
     scope_id_counter: usize,
     scope_ids: Vec<usize>,
+    scope_starting_registers: Vec<u8>,
+    register_index: u8,
+    max_registers: u8,
 }
 
 impl Frame {
-    fn new(ip: JumpAddr, name: Option<Vec<u8>>, method_name: Option<Vec<u8>>) -> Self {
+    fn new(name: Option<Vec<u8>>, method_name: Option<Vec<u8>>) -> Self {
         Self {
-            ip,
             name,
             method_name,
             locals: vec![],
@@ -106,6 +104,9 @@ impl Frame {
             scope_depth: 0,
             scope_id_counter: 1,
             scope_ids: vec![0],
+            scope_starting_registers: vec![0],
+            register_index: 0,
+            max_registers: 0,
         }
     }
 
@@ -121,6 +122,51 @@ impl Frame {
                 None
             }
         })
+    }
+
+    fn take_register(&mut self, why: &str) -> u8 {
+        let reg = self.register_index;
+        eprintln!("Taking register R{reg} for {}", why);
+        self.register_index += 1;
+        if self.register_index > self.max_registers {
+            self.max_registers = self.register_index;
+        }
+        reg
+    }
+
+    fn reserve_register(&mut self, index: u8, why: &str) {
+        eprintln!("Reserving register R{index} for {}", why);
+        if index >= self.register_index {
+            self.register_index = index + 1;
+        }
+    }
+
+    fn release_register(&mut self, why: &str) {
+        eprintln!(
+            "Releasing register R{} for {}",
+            self.register_index - 1,
+            why
+        );
+        assert!(self.register_index > 0, "no registers to release");
+        self.register_index -= 1;
+    }
+
+    fn release_registers_from(&mut self, index: u8, why: &str) {
+        eprintln!("Releasing registers from R{index} for {}", why);
+        assert!(
+            index <= self.register_index,
+            "cannot reset registers to a higher index ({index} > {})",
+            self.register_index
+        );
+        self.register_index = index;
+    }
+
+    fn set_register_index(&mut self, index: u8, why: &str) {
+        eprintln!("Setting register index to R{index} for {}", why);
+        self.register_index = index;
+        if self.register_index > self.max_registers {
+            self.max_registers = self.register_index;
+        }
     }
 }
 
@@ -157,7 +203,7 @@ impl BlockResult {
         self
     }
 
-    fn assert_no_new_locals(&self) -> crate::Result<()> {
+    fn assert_no_new_locals(&self) -> crate::Result {
         if let Some(new_local) = &self.any_new_locals {
             let mut labels = vec![new_local.goto.1.labeled("this goto statement")];
             if let Some(span) = new_local.local.1 {
@@ -175,21 +221,75 @@ impl BlockResult {
 }
 
 enum VariableMode {
+    Ref,
     Read,
-    Write,
+    Write { value_register: u8 },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-enum ExpressionResult {
+pub enum ExpressionMode {
+    /// When possible, just return a register reference to the value. This will
+    /// mainly benefit references to variables, in usages like `SetTable`, where
+    /// you need the register holding the table value. Expressions such as
+    /// calls or operations that produce new values will always return a new
+    /// register.
+    Ref,
+    /// Always copy the value into a new register, even if we have a register
+    /// already holding the value. This is useful e.g. for function calls,
+    /// where the layout is expected to be [..., function, arg1, arg2, ...].
+    Copy,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ExpressionResultMode {
     Single,
     Multiple,
 }
 
+impl ExpressionResultMode {
+    fn into_result(self, register: u8) -> ExpressionResult {
+        match self {
+            ExpressionResultMode::Single => ExpressionResult::Single { register },
+            ExpressionResultMode::Multiple => ExpressionResult::Multiple {
+                from_register: register,
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ExpressionResult {
+    Single { register: u8 },
+    Multiple { from_register: u8 },
+}
+
+impl ExpressionResult {
+    pub fn get_register(&self) -> u8 {
+        match self {
+            ExpressionResult::Single { register } => *register,
+            ExpressionResult::Multiple { from_register } => *from_register,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum ExpressionListLength {
-    Constant,
+    Constant {
+        from_register: u8,
+    },
     /// Expression list ends in an expression that _may_ result in multiple values.
-    MultRes,
+    MultRes {
+        from_register: u8,
+    },
+}
+
+impl ExpressionListLength {
+    pub fn get_register(&self) -> u8 {
+        match self {
+            Self::Constant { from_register } => *from_register,
+            Self::MultRes { from_register } => *from_register,
+        }
+    }
 }
 
 impl<'a, 'source> Compiler<'a, 'source> {
@@ -210,7 +310,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
             chunk_index: vm.get_next_chunk_index(),
             vm,
             // Start at the root of the file.
-            frames: vec![Frame::new(0, None, None)],
+            frames: vec![Frame::new(None, None)],
         }
     }
 
@@ -234,7 +334,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
 
         if !has_return {
             // Add implicit final return
-            self.chunk.push_instruction(Instruction::Return0, None);
+            self.chunk.push_bytecode(Bytecode::Return0, None);
         }
 
         debug_assert!(
@@ -247,21 +347,27 @@ impl<'a, 'source> Compiler<'a, 'source> {
         );
 
         // Get rid of the root frame, to resolve any pending gotos and such.
-        self.end_frame()?;
+        let frame = self.end_frame()?;
+        self.chunk.max_registers = frame.max_registers;
 
         Ok(self.vm.add_chunk(self.chunk))
     }
 
-    fn push_load_marker(&mut self) {
-        let marker_const_index = self.get_const_index(LuaConst::Marker);
-        self.chunk.push_instruction(Instruction::LoadConst, None);
-        self.chunk.push_const_index(marker_const_index);
-    }
-
-    fn push_load_nil(&mut self, span: Option<Span>) {
-        let nil_const_index = self.get_const_index(LuaConst::Nil);
-        self.chunk.push_instruction(Instruction::LoadConst, span);
-        self.chunk.push_const_index(nil_const_index);
+    fn push_load_nil(&mut self, span: Option<Span>) -> u8 {
+        let const_index = self.get_const_index(LuaConst::Nil);
+        let register = self
+            .frames
+            .last_mut()
+            .unwrap()
+            .take_register("push_load_nil");
+        self.chunk.push_bytecode(
+            Bytecode::LoadConst {
+                register,
+                const_index,
+            },
+            span,
+        );
+        register
     }
 
     fn get_const_index(&mut self, lua_const: LuaConst) -> ConstIndex {
@@ -302,16 +408,14 @@ impl<'a, 'source> Compiler<'a, 'source> {
 
         if let Some(return_statement) = ast.node.return_statement {
             let mut handled_as_tail_call = false;
-            if return_statement.len() == 1 {
-                if let Expression::PrefixExpression(TokenTree {
+            if return_statement.len() == 1
+                && let Expression::PrefixExpression(TokenTree {
                     node: PrefixExpression::FunctionCall(function_call),
                     ..
                 }) = &return_statement[0].node
-                {
-                    if self.compile_tail_call(function_call.clone())? {
-                        handled_as_tail_call = true;
-                    }
-                }
+                && self.compile_tail_call(function_call.clone())?
+            {
+                handled_as_tail_call = true;
             }
 
             if !handled_as_tail_call {
@@ -334,73 +438,118 @@ impl<'a, 'source> Compiler<'a, 'source> {
         is_final_statement: bool,
     ) -> crate::Result<BlockResult> {
         let span = statement.span;
+        let current_register = self.frames.last().unwrap().register_index;
+        // dbg!(&statement);
+
         Ok(match statement.node {
             Statement::FunctionCall(function_call) => {
                 if is_final_statement && self.compile_tail_call(function_call.clone())? {
                     return Ok(BlockResult::new());
                 }
 
-                // Marker for the return values
-                self.push_load_marker();
-                self.compile_function_call(function_call, ExpressionResult::Multiple)?;
-                self.chunk.push_instruction(Instruction::Discard, None);
+                self.compile_function_call(function_call, ExpressionResultMode::Multiple)?;
+                self.frames
+                    .last_mut()
+                    .unwrap()
+                    .release_registers_from(current_register, "post-function-call cleanup");
                 BlockResult::new()
             }
             Statement::LocalDeclaraction(names, expressions) => {
-                let empty_expressions = expressions.is_empty();
-                let needs_alignment = !empty_expressions
-                    && (names.len() != expressions.len()
-                        || matches!(
-                            expressions.last().unwrap().node,
-                            Expression::PrefixExpression(TokenTree {
-                                // Function calls can produce multiple values
-                                node: PrefixExpression::FunctionCall(_),
-                                ..
-                            }) | Expression::Ellipsis
-                        ));
-
-                if needs_alignment {
-                    self.push_load_marker();
+                let num_names = names.len();
+                let num_expressions = expressions.len();
+                let expression_list_can_be_multres =
+                    Self::expression_list_can_be_multres(&expressions);
+                if expression_list_can_be_multres {
+                    // Pre-initialize any values beyond (num_expressions - 1 - num_names) to `nil`,
+                    // as they may end up never getting set. The `- 1` accounts for the last
+                    // variable expression.
+                    // For example, in `local a, b, c, d = 1, ...`, we'll:
+                    // - Initialize the registers for b, c, and d to nil.
+                    //   `LoadNil 0 Rb Rd`
+                    // - Then compile the expression list, which ends up loading the actual values.
+                    // - If `...` results in fewer than 3 values, c and d will still be correctly
+                    //   initialized.
+                    //
+                    // local a, b = 1, ...
+                    // exprs = 2, num_names = 2, from = 1
+                    // local a = ...
+                    // exprs = 1, num_names = 1, from = 0
+                    // local a = 1, 2, 3, ...
+                    // exprs = 4, num_names = 1, don't
+                    let num_non_multres_expressions = expressions.len() - 1;
+                    if num_non_multres_expressions < num_names {
+                        let preinit_from = (num_names - num_non_multres_expressions) as u8;
+                        let preinit_to = num_names as u8;
+                        self.chunk.push_bytecode(
+                            Bytecode::LoadNil {
+                                from_register: current_register + preinit_from,
+                                to_register: current_register + preinit_to - 1,
+                            },
+                            None,
+                        );
+                    }
+                } else if num_expressions == 0 {
+                    // Then just `LoadNil` all names.
+                    self.chunk.push_bytecode(
+                        Bytecode::LoadNil {
+                            from_register: current_register,
+                            to_register: current_register + num_names as u8 - 1,
+                        },
+                        None,
+                    );
                 }
 
                 self.compile_expression_list(expressions)?;
 
-                if needs_alignment {
-                    // Align number of values with number of variables
-                    let var_count = names.len();
-                    self.chunk.push_instruction(Instruction::Align, None);
-                    self.chunk.push_instruction(var_count as u8, None);
-                }
-
-                for name in names {
-                    if empty_expressions {
+                for (index, name) in names.into_iter().enumerate() {
+                    let name_register = current_register + index as u8;
+                    if index >= num_expressions
+                        && !expression_list_can_be_multres
+                        && num_expressions > 0
+                    {
+                        // Opposite of above, if it's not multres and we didn't pre-initialize `nil`
+                        // values, and there are fewer expressions than local names, set the value
+                        // here.
+                        // For example, in `local a, b = 1`:
+                        // - We compile the expression list, which loads `1` into `Ra`.
+                        // - Then for `b`, we need to set it to `nil`.
                         self.push_load_nil(Some(name.span));
                     }
-                    let local_index = self.add_local(name.node.name.node.0, Some(name.span));
+                    self.add_local(name.node.name.node.0, name_register, Some(name.span));
+
                     match name.node.attribute {
                         Some(TokenTree {
                             node: LocalAttribute::Const,
                             ..
                         }) => {
-                            self.chunk
-                                .push_instruction(Instruction::SetLocalAttr, Some(span));
-                            self.chunk.push_instruction(local_index, None);
-                            self.chunk
-                                .push_instruction(LuaVariableAttribute::Constant, None);
+                            self.chunk.push_bytecode(
+                                Bytecode::SetLocalAttr {
+                                    register: name_register,
+                                    attr_index: LuaVariableAttribute::Constant,
+                                },
+                                Some(span),
+                            );
                         }
                         Some(TokenTree {
                             node: LocalAttribute::Close,
                             ..
                         }) => {
-                            self.chunk
-                                .push_instruction(Instruction::SetLocalAttr, Some(span));
-                            self.chunk.push_instruction(local_index, None);
-                            self.chunk
-                                .push_instruction(LuaVariableAttribute::ToBeClosed, None);
+                            self.chunk.push_bytecode(
+                                Bytecode::SetLocalAttr {
+                                    register: name_register,
+                                    attr_index: LuaVariableAttribute::ToBeClosed,
+                                },
+                                Some(span),
+                            );
                         }
                         None => {}
                     }
                 }
+
+                self.frames.last_mut().unwrap().release_registers_from(
+                    current_register + num_names as u8,
+                    "extraneous local declaration registers",
+                );
 
                 BlockResult::new()
             }
@@ -408,51 +557,32 @@ impl<'a, 'source> Compiler<'a, 'source> {
                 // The statement `local function f () body end` translates to `local f; f =
                 // function () body end`, not to `local f = function () body end` (This only makes
                 // a difference when the body of the function contains references to f.)
-                self.push_load_nil(Some(name.span));
-                let local_index = self.add_local(name.node.0, Some(name.span));
+                let name_r = self.push_load_nil(Some(name.span));
+                self.add_local(name.node.0, name_r, Some(name.span));
 
-                self.compile_function_def(function_def)?;
-                self.chunk
-                    .push_instruction(Instruction::SetLocal, Some(span));
-                self.chunk.push_instruction(local_index, None);
+                self.compile_function_def(function_def, Some(name_r))?;
+
+                self.frames
+                    .last_mut()
+                    .unwrap()
+                    .release_registers_from(name_r + 1, "local function declaration cleanup");
 
                 BlockResult::new()
             }
             Statement::Assignment { varlist, explist } => {
-                let needs_alignment = varlist.len() != explist.len()
-                    || explist.last().is_some_and(|e| {
-                        matches!(
-                            e.node,
-                            Expression::PrefixExpression(TokenTree {
-                                // Function calls can produce multiple values
-                                node: PrefixExpression::FunctionCall(_),
-                                ..
-                            }) | Expression::Ellipsis
-                        )
-                    });
-
-                if needs_alignment {
-                    self.push_load_marker();
-                }
-
                 self.compile_expression_list(explist)?;
 
-                if needs_alignment {
-                    // Align number of values with number of variables
-                    let var_count = varlist.len();
-                    self.chunk.push_instruction(Instruction::Align, None);
-                    self.chunk.push_instruction(var_count as u8, None);
-                }
-
-                // NOTE: We need to iterate in reverse to handle chained assignments correctly. The
-                // top of the stack is the last value, so we need to assign the last variable
-                // first.
-                for variable in varlist.into_iter().rev() {
+                for (index, variable) in varlist.into_iter().enumerate() {
                     match variable.node {
                         Variable::Name(name) => {
-                            self.variable(name, VariableMode::Write);
+                            self.variable(
+                                name,
+                                VariableMode::Write {
+                                    value_register: current_register + index as u8,
+                                },
+                            );
                         }
-                        Variable::Indexed(target, index) => {
+                        Variable::Indexed(target, target_index) => {
                             // `SetTable` expects a stack head of:
                             // [table, index, value]
                             // We need to calculate the value first above, as it e.g. refer to the
@@ -462,30 +592,69 @@ impl<'a, 'source> Compiler<'a, 'source> {
                             // And then we swap the value and the table:
                             // SWAP 2
                             // [value, table, index]
-                            self.compile_expression(*index, ExpressionResult::Single)?;
-                            self.compile_prefix_expression(*target, ExpressionResult::Single)?;
-                            self.chunk.push_instruction(Instruction::Swap, None);
-                            self.chunk.push_instruction(2, None);
-                            self.chunk
-                                .push_instruction(Instruction::SetTable, Some(span));
-                            // SetTable keeps the table on the stack, so we need to pop it
-                            self.chunk.push_instruction(Instruction::Pop, Some(span))
+                            let target_r = self
+                                .compile_prefix_expression(
+                                    *target,
+                                    ExpressionMode::Ref,
+                                    ExpressionResultMode::Single,
+                                )?
+                                .get_register();
+                            let index_r = self
+                                .compile_expression(
+                                    *target_index,
+                                    ExpressionMode::Ref,
+                                    ExpressionResultMode::Single,
+                                )?
+                                .get_register();
+                            self.chunk.push_bytecode(
+                                Bytecode::SetTable {
+                                    table_register: target_r,
+                                    key_register: index_r,
+                                    value_register: current_register + index as u8,
+                                },
+                                Some(span),
+                            );
                         }
                         Variable::Field(target, name) => {
+                            dbg!(&target);
                             // Same story as above, but with a string key
+                            let target_r = self
+                                .compile_prefix_expression(
+                                    *target,
+                                    ExpressionMode::Ref,
+                                    ExpressionResultMode::Single,
+                                )?
+                                .get_register();
                             let const_index = self.get_const_index(LuaConst::String(name.node.0));
-                            self.chunk
-                                .push_instruction(Instruction::LoadConst, Some(span));
-                            self.chunk.push_const_index(const_index);
-                            self.compile_prefix_expression(*target, ExpressionResult::Single)?;
-                            self.chunk.push_instruction(Instruction::Swap, None);
-                            self.chunk.push_instruction(2, None);
-                            self.chunk
-                                .push_instruction(Instruction::SetTable, Some(span));
-                            self.chunk.push_instruction(Instruction::Pop, Some(span))
+                            let const_r = self
+                                .frames
+                                .last_mut()
+                                .unwrap()
+                                .take_register("assignment by field name");
+                            self.chunk.push_bytecode(
+                                Bytecode::LoadConst {
+                                    register: const_r,
+                                    const_index,
+                                },
+                                Some(span),
+                            );
+
+                            self.chunk.push_bytecode(
+                                Bytecode::SetTable {
+                                    table_register: target_r,
+                                    key_register: const_r,
+                                    value_register: current_register + index as u8,
+                                },
+                                Some(span),
+                            );
                         }
                     }
                 }
+
+                self.frames
+                    .last_mut()
+                    .unwrap()
+                    .release_registers_from(current_register, "post-assignment cleanup");
 
                 BlockResult::new()
             }
@@ -497,12 +666,28 @@ impl<'a, 'source> Compiler<'a, 'source> {
             } => {
                 let mut block_result = BlockResult::new();
                 // Push expression
-                self.compile_expression(condition, ExpressionResult::Single)?;
+                let condition_r = self
+                    .compile_expression(
+                        condition,
+                        ExpressionMode::Ref,
+                        ExpressionResultMode::Single,
+                    )?
+                    .get_register();
+
                 // Jump to the end of the block if the condition is false
-                self.chunk.push_instruction(Instruction::JmpFalse, None);
-                let jmp_false_addr = self.chunk.push_addr_placeholder();
-                // Pop the condition value
-                self.chunk.push_instruction(Instruction::Pop, None);
+                let jmp_false_addr = self.chunk.push_undecided_jump(
+                    JumpToUndecidedAddress::JmpFalse {
+                        condition_register: condition_r,
+                    },
+                    None,
+                );
+
+                // Release the condition register
+                self.frames
+                    .last_mut()
+                    .unwrap()
+                    .release_registers_from(current_register, "if condition");
+
                 // Compile the block
                 let block_has_return = block.node.return_statement.is_some();
                 block_result.extend(self.compile_block(
@@ -514,24 +699,39 @@ impl<'a, 'source> Compiler<'a, 'source> {
                         new_scope: true,
                     },
                 )?);
+
                 // Jump to the end of the if statement
                 let mut jmp_end_addrs = vec![];
-                if !block_has_return {
-                    self.chunk.push_instruction(Instruction::Jmp, None);
-                    jmp_end_addrs.push(self.chunk.push_addr_placeholder());
+                if !block_has_return && (!else_ifs.is_empty() || else_block.is_some()) {
+                    jmp_end_addrs.push(
+                        self.chunk
+                            .push_undecided_jump(JumpToUndecidedAddress::Jmp, None),
+                    );
                 }
+
                 // Right before the else/elseifs, go here if the condition was false
                 self.chunk.patch_addr_placeholder(jmp_false_addr);
                 for else_if in else_ifs {
-                    // Pop the initial condition
-                    self.chunk.push_instruction(Instruction::Pop, None);
                     // Push the new condition
-                    self.compile_expression(else_if.node.condition, ExpressionResult::Single)?;
+                    let condition_r = self
+                        .compile_expression(
+                            else_if.node.condition,
+                            ExpressionMode::Ref,
+                            ExpressionResultMode::Single,
+                        )?
+                        .get_register();
                     // Jump to the end of the block if the condition is false
-                    self.chunk.push_instruction(Instruction::JmpFalse, None);
-                    let jmp_false_addr = self.chunk.push_addr_placeholder();
-                    // Pop the condition value
-                    self.chunk.push_instruction(Instruction::Pop, None);
+                    let jmp_false_addr = self.chunk.push_undecided_jump(
+                        JumpToUndecidedAddress::JmpFalse {
+                            condition_register: condition_r,
+                        },
+                        None,
+                    );
+                    // Release the condition register
+                    self.frames
+                        .last_mut()
+                        .unwrap()
+                        .release_registers_from(condition_r, "else-if condition");
                     // Compile the block
                     let block_has_return = else_if.node.block.node.return_statement.is_some();
                     block_result.extend(self.compile_block(
@@ -545,15 +745,15 @@ impl<'a, 'source> Compiler<'a, 'source> {
                     )?);
                     // Jump to the end of the if statement
                     if !block_has_return {
-                        self.chunk.push_instruction(Instruction::Jmp, None);
-                        jmp_end_addrs.push(self.chunk.push_addr_placeholder());
+                        jmp_end_addrs.push(
+                            self.chunk
+                                .push_undecided_jump(JumpToUndecidedAddress::Jmp, None),
+                        );
                     }
                     // Right before the else/elseifs, go here if the condition was false
                     self.chunk.patch_addr_placeholder(jmp_false_addr);
                 }
                 let else_jump_addr = if let Some(else_block) = else_block {
-                    // Pop the initial condition
-                    self.chunk.push_instruction(Instruction::Pop, None);
                     let block_has_return = else_block.node.return_statement.is_some();
                     block_result.extend(self.compile_block(
                         else_block,
@@ -565,15 +765,16 @@ impl<'a, 'source> Compiler<'a, 'source> {
                         },
                     )?);
                     if !block_has_return {
-                        self.chunk.push_instruction(Instruction::Jmp, None);
-                        Some(self.chunk.push_addr_placeholder())
+                        Some(
+                            self.chunk
+                                .push_undecided_jump(JumpToUndecidedAddress::Jmp, None),
+                        )
                     } else {
                         None
                     }
                 } else {
                     None
                 };
-                self.chunk.push_instruction(Instruction::Pop, None);
                 for jmp_end_addr in jmp_end_addrs {
                     self.chunk.patch_addr_placeholder(jmp_end_addr);
                 }
@@ -591,35 +792,26 @@ impl<'a, 'source> Compiler<'a, 'source> {
                 }
 
                 // Check the number of locals defined so far.
-                let locals = self
-                    .frames
-                    .last()
-                    .expect("frames is not empty")
-                    .locals
-                    .iter()
-                    .filter(|local| local.depth >= options.loop_scope_depth)
-                    .count();
+                // let locals = self
+                //     .frames
+                //     .last()
+                //     .expect("frames is not empty")
+                //     .locals
+                //     .iter()
+                //     .filter(|local| local.depth >= options.loop_scope_depth)
+                //     .count();
 
                 // Jump past the rest of the loop (sort of, we do some intermediate jumps to clean
                 // up all locals along the way, both in the scope of the loop itself, and any
                 // underlying ones such as if statements).
-                self.chunk.push_instruction(Instruction::Jmp, Some(span));
-                let break_jump = self.chunk.push_addr_placeholder();
+                let break_jump = self
+                    .chunk
+                    .push_undecided_jump(JumpToUndecidedAddress::Jmp, Some(span));
 
-                BlockResult::new().with_breaks(vec![BreakJump {
-                    addr: break_jump,
-                    locals,
-                }])
+                BlockResult::new().with_breaks(vec![BreakJump { addr: break_jump }])
             }
             Statement::Repeat { block, condition } => {
-                // Jump into the block
-                self.chunk.push_instruction(Instruction::Jmp, None);
-                let inside_block_jump = self.chunk.push_addr_placeholder();
-
-                // Pop the condition value
                 let start_addr = self.chunk.get_current_addr();
-                self.chunk.push_instruction(Instruction::Pop, None);
-                self.chunk.patch_addr_placeholder(inside_block_jump);
 
                 let loop_scope_depth = self.begin_scope();
                 let block_result = self.compile_block(
@@ -634,42 +826,48 @@ impl<'a, 'source> Compiler<'a, 'source> {
 
                 block_result.assert_no_new_locals()?;
 
-                self.compile_expression(condition, ExpressionResult::Single)?;
-                self.chunk.push_instruction(Instruction::JmpFalse, None);
-                self.chunk.push_addr(start_addr);
-                self.chunk.push_instruction(Instruction::Pop, None);
+                let expr_r = self
+                    .compile_expression(
+                        condition,
+                        ExpressionMode::Ref,
+                        ExpressionResultMode::Single,
+                    )?
+                    .get_register();
+                self.chunk.push_bytecode(
+                    Bytecode::JmpFalse {
+                        condition_register: expr_r,
+                        address: start_addr,
+                    },
+                    None,
+                );
 
                 self.end_scope()?;
 
-                let jmps: Vec<_> = block_result
-                    .breaks
-                    .into_iter()
-                    .map(|jump| {
-                        // Skip over the extra pops here for non-breaks
-                        self.chunk.push_instruction(Instruction::Jmp, None);
-                        let jmp = self.chunk.push_addr_placeholder();
-
-                        // Pop the locals defined in the loop before the break
-                        self.chunk.patch_addr_placeholder(jump.addr);
-                        for _ in 0..jump.locals {
-                            self.chunk.push_instruction(Instruction::Pop, None);
-                        }
-
-                        jmp
-                    })
-                    .collect();
-                for addr in jmps {
-                    self.chunk.patch_addr_placeholder(addr);
+                for break_ in block_result.breaks {
+                    self.chunk.patch_addr_placeholder(break_.addr);
                 }
 
                 BlockResult::new()
             }
             Statement::While { condition, block } => {
                 let start_addr = self.chunk.get_current_addr();
-                self.compile_expression(condition, ExpressionResult::Single)?;
-                self.chunk.push_instruction(Instruction::JmpFalse, None);
-                let jmp_false_addr = self.chunk.push_addr_placeholder();
-                self.chunk.push_instruction(Instruction::Pop, None);
+                let expr_r = self
+                    .compile_expression(
+                        condition,
+                        ExpressionMode::Ref,
+                        ExpressionResultMode::Single,
+                    )?
+                    .get_register();
+                let jmp_false_addr = self.chunk.push_undecided_jump(
+                    JumpToUndecidedAddress::JmpFalse {
+                        condition_register: expr_r,
+                    },
+                    None,
+                );
+                self.frames
+                    .last_mut()
+                    .unwrap()
+                    .release_registers_from(current_register, "while loop condition");
 
                 let loop_scope_depth = self.begin_scope();
                 let block_result = self.compile_block(
@@ -683,22 +881,24 @@ impl<'a, 'source> Compiler<'a, 'source> {
                 )?;
                 self.end_scope()?;
 
-                self.chunk.push_instruction(Instruction::Jmp, None);
-                self.chunk.push_addr(start_addr);
+                self.chunk.push_bytecode(
+                    Bytecode::Jmp {
+                        address: start_addr,
+                    },
+                    None,
+                );
 
                 let jmps: Vec<_> = block_result
                     .breaks
                     .into_iter()
                     .map(|jump| {
                         // Skip over the extra pops here for non-breaks
-                        self.chunk.push_instruction(Instruction::Jmp, None);
-                        let jmp = self.chunk.push_addr_placeholder();
+                        let jmp = self
+                            .chunk
+                            .push_undecided_jump(JumpToUndecidedAddress::Jmp, None);
 
                         // Pop the locals defined in the loop before the break
                         self.chunk.patch_addr_placeholder(jump.addr);
-                        for _ in 0..jump.locals {
-                            self.chunk.push_instruction(Instruction::Pop, None);
-                        }
 
                         jmp
                     })
@@ -707,11 +907,12 @@ impl<'a, 'source> Compiler<'a, 'source> {
                     self.chunk.patch_addr_placeholder(addr);
                 }
 
-                self.chunk.push_instruction(Instruction::Jmp, None);
-                let jmp_exit_loop_addr = self.chunk.push_addr_placeholder();
+                let jmp_exit_loop_addr = self
+                    .chunk
+                    .push_undecided_jump(JumpToUndecidedAddress::Jmp, None);
                 self.chunk.patch_addr_placeholder(jmp_false_addr);
                 // Pop the loop condition value
-                self.chunk.push_instruction(Instruction::Pop, None);
+                // self.chunk.push_instruction(Instruction::Pop, None);
                 self.chunk.patch_addr_placeholder(jmp_exit_loop_addr);
 
                 BlockResult::new()
@@ -728,171 +929,307 @@ impl<'a, 'source> Compiler<'a, 'source> {
                     } => {
                         // FIXME: Coerce all to float if initial and step are floats
 
+                        // let limit_r = self.frames.last_mut().unwrap().take_register();
+                        // let step_r = self.frames.last_mut().unwrap().take_register();
+                        // let limit_r = self.frames.last_mut().unwrap().take_register();
+
                         // Define the initial value and variable
-                        self.compile_expression(initial, ExpressionResult::Single)?;
-                        let identifier_local = self.add_local(name.node.0, Some(name.span));
+                        let ident_r = self
+                            .compile_expression(
+                                initial,
+                                ExpressionMode::Copy,
+                                ExpressionResultMode::Single,
+                            )?
+                            .get_register();
+                        self.add_local(name.node.0, ident_r, Some(name.span));
 
                         // Create fake variables to hold the limit and step. Note that we use
                         // variable names that are invalid in Lua to avoid conflicts with user
                         // variables.
-                        self.compile_expression(limit, ExpressionResult::Single)?;
-                        let limit_local = self.add_local(b"#limit".to_vec(), None);
+                        let limit_r = self
+                            .compile_expression(
+                                limit,
+                                ExpressionMode::Copy,
+                                ExpressionResultMode::Single,
+                            )?
+                            .get_register();
+                        self.add_local(b"#limit".to_vec(), limit_r, None);
 
-                        let step_local = if let Some(step) = step {
+                        let step_r = if let Some(step) = step {
                             let step_span = step.span;
-                            self.compile_expression(step, ExpressionResult::Single)?;
-                            let step_local = self.add_local(b"#step".to_vec(), None);
+                            let step_r = self
+                                .compile_expression(
+                                    step,
+                                    ExpressionMode::Copy,
+                                    ExpressionResultMode::Single,
+                                )?
+                                .get_register();
+                            self.add_local(b"#step".to_vec(), step_r, None);
 
                             // Raise an error if the step value is equal to zero
-                            self.chunk.push_instruction(Instruction::GetLocal, None);
-                            self.chunk.push_instruction(step_local, None);
-                            self.compile_load_literal(Literal::Number(Number::Integer(0)), None);
-                            self.chunk.push_instruction(Instruction::Eq, None);
-                            self.chunk.push_instruction(Instruction::JmpFalse, None);
-                            let jmp_false_addr = self.chunk.push_addr_placeholder();
-                            self.chunk
-                                .push_instruction(Instruction::Error, Some(step_span));
-                            self.chunk
-                                .push_instruction(RuntimeError::ForLoopLimitIsZero, None);
+                            let zero_r = self
+                                .compile_load_literal(Literal::Number(Number::Integer(0)), None);
+                            self.chunk.push_bytecode(
+                                Bytecode::Eq {
+                                    dest_register: zero_r,
+                                    left_register: step_r,
+                                    right_register: zero_r,
+                                },
+                                None,
+                            );
+                            let jmp_false_addr = self.chunk.push_undecided_jump(
+                                JumpToUndecidedAddress::JmpFalse {
+                                    condition_register: zero_r,
+                                },
+                                None,
+                            );
 
                             // Raise error
-                            self.chunk.patch_addr_placeholder(jmp_false_addr);
-                            self.chunk.push_instruction(Instruction::Pop, None);
+                            self.chunk.push_bytecode(
+                                Bytecode::Error {
+                                    code: RuntimeError::ForLoopLimitIsZero,
+                                },
+                                Some(step_span),
+                            );
 
-                            step_local
+                            // Release `zero_r`.
+                            self.frames
+                                .last_mut()
+                                .unwrap()
+                                .release_register("numeric-for zero check");
+
+                            // Otherwise, move past it
+                            self.chunk.patch_addr_placeholder(jmp_false_addr);
+                            step_r
                         } else {
-                            self.compile_load_literal(Literal::Number(Number::Integer(1)), None);
-                            self.add_local(b"#step".to_vec(), None)
+                            let step_r = self
+                                .compile_load_literal(Literal::Number(Number::Integer(1)), None);
+                            self.add_local(b"#step".to_vec(), step_r, None);
+                            step_r
                         };
 
                         // Create a "variable" to remember whether this is a decreasing loop.
-                        self.chunk.push_instruction(Instruction::GetLocal, None);
-                        self.chunk.push_instruction(step_local, None);
-                        self.compile_load_literal(Literal::Number(Number::Integer(0)), None);
-                        self.chunk.push_instruction(Instruction::Lt, None);
-                        let decreasing_local = self.add_local(b"#decreasing".to_vec(), None);
+                        // TODO: Optimization, if the step is statically known (e.g. the default of
+                        // 1, or a constant integer value), we don't need to do any of this.
+                        let zero_r =
+                            self.compile_load_literal(Literal::Number(Number::Integer(0)), None);
+                        let decreasing_r = zero_r; // We can reuse this slot
+                        self.add_local(b"#decreasing".to_vec(), decreasing_r, None);
+                        self.chunk.push_bytecode(
+                            Bytecode::Lt {
+                                dest_register: decreasing_r,
+                                left_register: step_r,
+                                right_register: zero_r,
+                            },
+                            None,
+                        );
 
                         // Label to jump back to the start of the loop
                         let condition_addr = self.chunk.get_current_addr();
 
                         // Evaluate the limit
-                        self.chunk
-                            .push_instruction(Instruction::GetLocal, Some(name.span));
-                        self.chunk.push_instruction(identifier_local, None);
-                        self.chunk.push_instruction(Instruction::GetLocal, None);
-                        self.chunk.push_instruction(limit_local, None);
-
                         // Choose either "<=" or ">=" depending on whether the loop is increasing
                         // or decreasing.
-                        self.chunk.push_instruction(Instruction::GetLocal, None);
-                        self.chunk.push_instruction(decreasing_local, None);
-                        self.chunk.push_instruction(Instruction::JmpTrue, None);
-                        let jmp_decreasing = self.chunk.push_addr_placeholder();
-                        self.chunk.push_instruction(Instruction::Pop, None);
-                        self.chunk.push_instruction(Instruction::Le, None);
-                        self.chunk.push_instruction(Instruction::Jmp, None);
-                        let jmp_after_ge = self.chunk.push_addr_placeholder();
+                        let jmp_decreasing = self.chunk.push_undecided_jump(
+                            JumpToUndecidedAddress::JmpTrue {
+                                condition_register: decreasing_r,
+                            },
+                            None,
+                        );
+
+                        let limit_eval_r = self
+                            .frames
+                            .last_mut()
+                            .unwrap()
+                            .take_register("numeric-for limit evaluation");
+
+                        // Loop is increasing, check if ident <= limit
+                        self.chunk.push_bytecode(
+                            Bytecode::Le {
+                                dest_register: limit_eval_r,
+                                left_register: ident_r,
+                                right_register: limit_r,
+                            },
+                            None,
+                        );
+                        let jmp_after_le = self
+                            .chunk
+                            .push_undecided_jump(JumpToUndecidedAddress::Jmp, None);
+
                         self.chunk.patch_addr_placeholder(jmp_decreasing);
-                        self.chunk.push_instruction(Instruction::Pop, None);
-                        self.chunk.push_instruction(Instruction::Ge, None);
-                        self.chunk.patch_addr_placeholder(jmp_after_ge);
 
-                        self.chunk.push_instruction(Instruction::JmpFalse, None);
-                        let jmp_false_addr = self.chunk.push_addr_placeholder();
+                        // Loop is decreasing, check if limit <= ident
+                        self.chunk.push_bytecode(
+                            Bytecode::Le {
+                                dest_register: limit_eval_r,
+                                left_register: limit_r,
+                                right_register: ident_r,
+                            },
+                            None,
+                        );
 
-                        // Pop the condition value
-                        self.chunk.push_instruction(Instruction::Pop, None);
+                        self.chunk.patch_addr_placeholder(jmp_after_le);
+
+                        let jmp_false_addr = self.chunk.push_undecided_jump(
+                            JumpToUndecidedAddress::JmpFalse {
+                                condition_register: limit_eval_r,
+                            },
+                            None,
+                        );
 
                         // Jump into the loop
-                        self.chunk.push_instruction(Instruction::Jmp, None);
-                        let inside_block_jump = self.chunk.push_addr_placeholder();
+                        let inside_block_jump = self
+                            .chunk
+                            .push_undecided_jump(JumpToUndecidedAddress::Jmp, None);
 
                         // Compile the step
                         let step_addr = self.chunk.get_current_addr();
-                        self.chunk
-                            .push_instruction(Instruction::GetLocal, Some(name.span));
-                        self.chunk.push_instruction(identifier_local, None);
-                        self.chunk.push_instruction(Instruction::GetLocal, None);
-                        self.chunk.push_instruction(step_local, None);
-                        self.chunk.push_instruction(Instruction::Add, None);
-                        self.chunk.push_instruction(Instruction::SetLocal, None);
-                        self.chunk.push_instruction(identifier_local, None);
+                        self.chunk.push_bytecode(
+                            Bytecode::Add {
+                                dest_register: ident_r,
+                                left_register: ident_r,
+                                right_register: step_r,
+                            },
+                            None,
+                        );
 
                         // After step, jump to the condition
-                        self.chunk.push_instruction(Instruction::Jmp, None);
-                        self.chunk.push_addr(condition_addr);
+                        self.chunk.push_bytecode(
+                            Bytecode::Jmp {
+                                address: condition_addr,
+                            },
+                            None,
+                        );
 
                         // Path the inside block jump
                         self.chunk.patch_addr_placeholder(inside_block_jump);
 
+                        // Release the limit_eval_r register.
+                        self.frames
+                            .last_mut()
+                            .unwrap()
+                            .release_register("numeric-for limit evaluation");
+
                         (step_addr, jmp_false_addr)
                     }
                     ForCondition::GenericFor { names, expressions } => {
-                        // Evaluate the expressions and make sure there are three
-                        self.push_load_marker();
+                        // Evaluate the expressions and keep no more than 4
+                        // Pre-fill `nil` values as well
+                        self.chunk.push_bytecode(
+                            Bytecode::LoadNil {
+                                from_register: current_register,
+                                to_register: current_register + 3,
+                            },
+                            None,
+                        );
                         self.compile_expression_list(expressions)?;
-                        self.chunk.push_instruction(Instruction::Align, None);
-                        self.chunk.push_instruction(4, None);
+                        self.frames
+                            .last_mut()
+                            .unwrap()
+                            .set_register_index(current_register + 4, "generic for alignment");
 
                         // Save the result as locals: the iterator function, the state, the initial
                         // value for the control variable (which is the first name).
-                        let iterator_local = self.add_local(b"#iterator".to_vec(), None);
-                        let state_local = self.add_local(b"#state".to_vec(), None);
+                        let iterator_local = current_register;
+                        let state_local = current_register + 1;
+                        let control_local = current_register + 2;
+                        let closing_local = current_register + 3;
+                        self.add_local(b"#iterator".to_vec(), iterator_local, None);
+                        self.add_local(b"#state".to_vec(), state_local, None);
                         // NOTE: The syntax ensures there is at least one name
-                        let control_local =
-                            self.add_local(names[0].node.0.clone(), Some(names[0].span));
-                        let closing_local = self.add_local(b"#closing".to_vec(), None);
-                        self.chunk.push_instruction(Instruction::SetLocalAttr, None);
-                        self.chunk.push_instruction(closing_local, None);
-                        self.chunk
-                            .push_instruction(LuaVariableAttribute::ToBeClosed, None);
+                        self.add_local(names[0].node.0.clone(), control_local, Some(names[0].span));
+                        self.add_local(b"#closing".to_vec(), closing_local, None);
+                        self.chunk.push_bytecode(
+                            Bytecode::SetLocalAttr {
+                                register: closing_local,
+                                attr_index: LuaVariableAttribute::ToBeClosed,
+                            },
+                            None,
+                        );
 
                         // Initialize the other variables to nil
                         for name in &names[1..] {
-                            self.push_load_nil(Some(name.span));
-                            self.add_local(name.node.0.clone(), Some(name.span));
+                            let register = self.push_load_nil(Some(name.span));
+                            self.add_local(name.node.0.clone(), register, Some(name.span));
                         }
 
                         // Call the iterator function
                         let step_addr = self.chunk.get_current_addr();
-                        // Results marker
-                        self.push_load_marker();
-                        self.chunk.push_instruction(Instruction::GetLocal, None);
-                        self.chunk.push_instruction(state_local, None);
-                        self.chunk.push_instruction(Instruction::GetLocal, None);
-                        self.chunk.push_instruction(control_local, None);
-                        self.chunk.push_instruction(Instruction::GetLocal, None);
-                        self.chunk.push_instruction(iterator_local, None);
-                        self.chunk.push_instruction(Instruction::Call, None);
-                        self.chunk.push_instruction(0, None);
-                        self.chunk.push_instruction(2, None);
-                        // Align to number of names
-                        self.chunk.push_instruction(Instruction::Align, None);
-                        self.chunk.push_instruction(names.len() as u8, None);
+                        let frame = self.frames.last_mut().unwrap();
+                        let func_r = frame.take_register("generic for iterator call");
+                        let state_r = frame.take_register("generic for iterator call: state");
+                        let control_r = frame.take_register("generic for iterator call: control");
+                        self.chunk.push_bytecode(
+                            Bytecode::Mov {
+                                dest_register: func_r,
+                                src_register: iterator_local,
+                            },
+                            None,
+                        );
+                        self.chunk.push_bytecode(
+                            Bytecode::Mov {
+                                dest_register: state_r,
+                                src_register: state_local,
+                            },
+                            None,
+                        );
+                        self.chunk.push_bytecode(
+                            Bytecode::Mov {
+                                dest_register: control_r,
+                                src_register: control_local,
+                            },
+                            None,
+                        );
+                        self.chunk.push_bytecode(
+                            Bytecode::Call {
+                                func_register: func_r,
+                                result_mode: ExpressionResultMode::Multiple,
+                                num_args: 2,
+                            },
+                            None,
+                        );
+
                         // Then store each result in the corresponding local
-                        // NOTE: We need to iterate in reverse to handle chained assignments
-                        // correctly.
-                        for name in names.iter().rev() {
-                            self.chunk
-                                .push_instruction(Instruction::SetLocal, Some(span));
-                            let local_index = self
+                        for (index, name) in names.into_iter().enumerate() {
+                            let local_register = self
                                 .resolve_local(&name.node.0)
                                 .expect("parser ensures that variable is in scope");
-                            self.chunk.push_instruction(local_index, None);
+                            self.chunk.push_bytecode(
+                                Bytecode::Mov {
+                                    dest_register: local_register,
+                                    src_register: func_r + index as u8,
+                                },
+                                Some(span),
+                            );
                         }
+
+                        self.frames
+                            .last_mut()
+                            .unwrap()
+                            .release_registers_from(func_r, "generic for iterator call cleanup");
 
                         // Now we need to evaluate whether any value was returned. If not, we
                         // should break out of the loop.
-                        self.chunk
-                            .push_instruction(Instruction::GetLocal, Some(span));
-                        self.chunk.push_instruction(control_local, None);
-                        self.push_load_nil(None);
-                        self.chunk.push_instruction(Instruction::Eq, None);
-                        self.chunk.push_instruction(Instruction::JmpTrue, None);
-                        let jmp_true_addr = self.chunk.push_addr_placeholder();
+                        let nil_r = self.push_load_nil(None);
+                        self.chunk.push_bytecode(
+                            Bytecode::Eq {
+                                dest_register: nil_r,
+                                left_register: control_local,
+                                right_register: nil_r,
+                            },
+                            None,
+                        );
+                        let jmp_true_addr = self.chunk.push_undecided_jump(
+                            JumpToUndecidedAddress::JmpTrue {
+                                condition_register: nil_r,
+                            },
+                            None,
+                        );
 
-                        // Pop the condition value
-                        self.chunk.push_instruction(Instruction::Pop, None);
+                        self.frames
+                            .last_mut()
+                            .unwrap()
+                            .release_register("generic for nil check");
 
                         (step_addr, jmp_true_addr)
                     }
@@ -909,35 +1246,43 @@ impl<'a, 'source> Compiler<'a, 'source> {
                 )?;
 
                 // Jump back to the step evaluation
-                self.chunk.push_instruction(Instruction::Jmp, None);
-                self.chunk.push_addr(continue_addr);
+                self.chunk.push_bytecode(
+                    Bytecode::Jmp {
+                        address: continue_addr,
+                    },
+                    None,
+                );
 
                 // Patch the false condition jump
                 self.chunk.patch_addr_placeholder(jmp_exit_loop_addr);
-                self.chunk.push_instruction(Instruction::Pop, None);
 
                 self.end_scope()?;
 
                 // Patch any break jumps
-                let jmps: Vec<_> = block_result
-                    .breaks
-                    .into_iter()
-                    .map(|jump| {
-                        // Skip over the extra pops here for non-breaks
-                        self.chunk.push_instruction(Instruction::Jmp, None);
-                        let jmp = self.chunk.push_addr_placeholder();
+                // let jmps: Vec<_> = block_result
+                //     .breaks
+                //     .into_iter()
+                //     .map(|jump| {
+                //         // Skip over the extra pops here for non-breaks
+                //         self.chunk.push_instruction(Instruction::Jmp, None);
+                //         let jmp = self.chunk.push_addr_placeholder();
 
-                        // Pop the locals defined in the loop before the break
-                        self.chunk.patch_addr_placeholder(jump.addr);
-                        for _ in 0..jump.locals {
-                            self.chunk.push_instruction(Instruction::Pop, None);
-                        }
+                // // Pop the locals defined in the loop before the break
+                // self.chunk.patch_addr_placeholder(jump.addr);
+                // for _ in 0..jump.locals {
+                //     self.chunk.push_instruction(Instruction::Pop, None);
+                // }
 
-                        jmp
-                    })
-                    .collect();
-                for addr in jmps {
-                    self.chunk.patch_addr_placeholder(addr);
+                //         jmp
+                //     })
+                //     .collect();
+                // for addr in jmps {
+                //     self.chunk.patch_addr_placeholder(addr);
+                // }
+
+                // Patch any break jumps
+                for jump in block_result.breaks {
+                    self.chunk.patch_addr_placeholder(jump.addr);
                 }
 
                 BlockResult::new()
@@ -961,20 +1306,19 @@ impl<'a, 'source> Compiler<'a, 'source> {
                     .count();
                 match label {
                     Some(label) => {
-                        // Pop all locals that were defined in between
-                        if locals > label.locals {
-                            let intermediate_locals = locals - label.locals;
-                            for _ in 0..intermediate_locals {
-                                self.chunk.push_instruction(Instruction::Pop, None);
-                            }
-                        }
-                        self.chunk.push_instruction(Instruction::Jmp, Some(span));
-                        self.chunk.push_addr(label.addr);
+                        self.chunk.push_bytecode(
+                            Bytecode::JmpClose {
+                                address: label.addr,
+                                close_from_register: label.current_register,
+                            },
+                            Some(span),
+                        );
                     }
                     None => {
                         // Add to frame to resolve the jump later
-                        self.chunk.push_instruction(Instruction::Jmp, Some(span));
-                        let addr = self.chunk.push_addr_placeholder();
+                        let addr = self
+                            .chunk
+                            .push_undecided_jump(JumpToUndecidedAddress::Jmp, None);
 
                         let scope_id = frame.scope_id();
                         let goto = Goto {
@@ -1062,7 +1406,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                     label.node.0,
                     Label {
                         addr,
-                        locals,
+                        current_register: frame.register_index,
                         depth: frame.scope_depth,
                     },
                 );
@@ -1077,45 +1421,36 @@ impl<'a, 'source> Compiler<'a, 'source> {
         return_statement: Vec<TokenTree<Expression>>,
     ) -> crate::Result {
         if return_statement.is_empty() {
-            self.chunk.push_instruction(Instruction::Return0, None);
+            self.chunk.push_bytecode(Bytecode::Return0, None);
             return Ok(());
         }
 
-        let (num_returns, is_variable) = {
-            (
-                return_statement.len(),
-                // The number of return values is variable if the last expression is
-                // a function call or an ellipsis (things that can result in
-                // multiple values themselves).
-                matches!(
-                    return_statement.last(),
-                    Some(TokenTree {
-                        node: Expression::PrefixExpression(TokenTree {
-                            node: PrefixExpression::FunctionCall(..),
-                            ..
-                        }) | Expression::Ellipsis,
-                        ..
-                    })
-                ),
-            )
-        };
+        let (num_returns, is_variable) = (
+            return_statement.len(),
+            Self::expression_list_can_be_multres(&return_statement),
+        );
 
+        let register = self.frames.last().unwrap().register_index;
         let expression_list_length = self.compile_expression_list(return_statement)?;
 
         if num_returns == 1 && !is_variable {
-            self.chunk.push_instruction(Instruction::Return1, None);
-        } else {
-            self.chunk.push_instruction(
-                match expression_list_length {
-                    ExpressionListLength::Constant => Instruction::Return,
-                    ExpressionListLength::MultRes => Instruction::ReturnM,
+            self.chunk.push_bytecode(
+                Bytecode::Return1 {
+                    src_register: register,
                 },
                 None,
             );
-            self.chunk.push_instruction(
+        } else {
+            self.chunk.push_bytecode(
                 match expression_list_length {
-                    ExpressionListLength::Constant => num_returns as u8,
-                    ExpressionListLength::MultRes => (num_returns - 1) as u8,
+                    ExpressionListLength::Constant { from_register } => Bytecode::Return {
+                        from_register,
+                        num_values: num_returns as u8,
+                    },
+                    ExpressionListLength::MultRes { from_register } => Bytecode::ReturnM {
+                        from_register,
+                        num_fixed_values: num_returns as u8 - 1,
+                    },
                 },
                 None,
             );
@@ -1127,96 +1462,93 @@ impl<'a, 'source> Compiler<'a, 'source> {
     fn compile_function_call(
         &mut self,
         function_call: TokenTree<FunctionCall>,
-        result_mode: ExpressionResult,
-    ) -> crate::Result {
-        let num_args = function_call.node.args.node.len();
-
+        result_mode: ExpressionResultMode,
+    ) -> crate::Result<u8> {
         // If this is a method call, we need to push the object as the first argument
-        let expression_list_length = if let Some(method_name) = function_call.node.method_name {
-            self.compile_prefix_expression(*function_call.node.function, ExpressionResult::Single)?;
+        let (function_register, self_arg_n) =
+            if let Some(method_name) = function_call.node.method_name {
+                let func_r = self
+                    .frames
+                    .last_mut()
+                    .unwrap()
+                    .take_register("method call function");
+                let table_r = self
+                    .compile_prefix_expression(
+                        *function_call.node.function,
+                        ExpressionMode::Copy,
+                        ExpressionResultMode::Single,
+                    )?
+                    .get_register();
 
-            // It's unfortunate to duplicate the argument loop here with the else below, but this
-            // avoids the borrow checker complaining, and having to `clone()` the function call
-            // node above.
-            let expression_list_length =
-                self.compile_expression_list(function_call.node.args.node)?;
+                let method_name_const_index =
+                    self.get_const_index(LuaConst::String(method_name.node.0));
+                let method_name_r = self
+                    .frames
+                    .last_mut()
+                    .unwrap()
+                    .take_register("method call name");
+                self.chunk.push_bytecode(
+                    Bytecode::LoadConst {
+                        register: method_name_r,
+                        const_index: method_name_const_index,
+                    },
+                    Some(function_call.span),
+                );
 
-            // We'll look up the target object as the first item after the marker
-            // on the stack, and then retrieve the method as a field on that object.
-            self.chunk
-                .push_instruction(Instruction::DupFromMarker, None);
-            self.chunk.push_instruction(1, None);
+                self.chunk.push_bytecode(
+                    Bytecode::GetTable {
+                        dest_register: func_r,
+                        table_register: table_r,
+                        key_register: method_name_r,
+                    },
+                    Some(Span::new(function_call.span.start, method_name.span.end)),
+                );
 
-            let method_name_const_index =
-                self.get_const_index(LuaConst::String(method_name.node.0));
-            self.chunk
-                .push_instruction(Instruction::LoadConst, Some(function_call.span));
-            self.chunk.push_const_index(method_name_const_index);
+                self.frames
+                    .last_mut()
+                    .unwrap()
+                    .release_registers_from(method_name_r, "method call name");
 
-            self.chunk.push_instruction(
-                Instruction::GetTable,
-                Some(Span::new(function_call.span.start, method_name.span.end)),
-            );
+                // Account for one extra parameter (the `self` argument)
+                (func_r, 1)
+            } else {
+                let function_register = self
+                    .compile_prefix_expression(
+                        *function_call.node.function,
+                        ExpressionMode::Copy,
+                        ExpressionResultMode::Single,
+                    )?
+                    .get_register();
 
-            expression_list_length
-        } else {
-            let expression_list_length =
-                self.compile_expression_list(function_call.node.args.node)?;
+                (function_register, 0)
+            };
 
-            match *function_call.node.function {
-                TokenTree {
-                    node:
-                        PrefixExpression::Variable(TokenTree {
-                            node: Variable::Name(name),
-                            ..
-                        }),
-                    ..
-                } => {
-                    self.variable(name, VariableMode::Read);
-                }
-                prefix_expression => {
-                    self.compile_prefix_expression(prefix_expression, ExpressionResult::Single)?;
-                }
-            }
+        let num_args = function_call.node.args.node.len() + self_arg_n;
+        let expression_list_length = self.compile_expression_list(function_call.node.args.node)?;
 
-            expression_list_length
-        };
-
-        // Instruction: [CALL|CALLM] [NUM_RESULTS] [NUM_KNOWN_ARGUMENTS]
-        // CALL for regular calls, CALLM for calls with a multres expression at
-        // the end of its arguments.
-        // NUM_RESULTS is 1 for single result, 0 for multres.
-        // NUM_KNOWN_ARGUMENTS is the number of known arguments, not counting
-        // the multres at the end (if any), plus 1.
-        self.chunk.push_instruction(
+        self.chunk.push_call_instruction(
+            function_register,
+            matches!(expression_list_length, ExpressionListLength::MultRes { .. }),
+            result_mode,
             match expression_list_length {
-                ExpressionListLength::Constant => Instruction::Call,
-                ExpressionListLength::MultRes => Instruction::CallM,
+                ExpressionListLength::Constant { .. } => num_args as u8,
+                // Subtract one, because the last argument will be accounted for via multres
+                ExpressionListLength::MultRes { .. } => num_args as u8 - 1,
             },
             Some(function_call.span),
         );
-        self.chunk.push_instruction(
-            if result_mode == ExpressionResult::Single {
-                1
-            } else {
-                0
-            },
-            None,
-        );
-        self.chunk.push_instruction(
-            match expression_list_length {
-                ExpressionListLength::Constant => (num_args + 1) as u8,
-                ExpressionListLength::MultRes => num_args as u8,
-            },
-            None,
-        );
 
-        Ok(())
+        self.frames
+            .last_mut()
+            .unwrap()
+            .release_registers_from(function_register + 1, "function call cleanup");
+
+        Ok(function_register)
     }
 
     fn compile_tail_call(&mut self, function_call: TokenTree<FunctionCall>) -> crate::Result<bool> {
         // Check if this function call refers to the current function
-        let frame = self.frames.last().expect("frames is not empty");
+        let frame = self.frames.last_mut().expect("frames is not empty");
         let is_tail_call = match &function_call.node.function.node {
             PrefixExpression::Variable(TokenTree {
                 node: Variable::Name(name),
@@ -1234,79 +1566,77 @@ impl<'a, 'source> Compiler<'a, 'source> {
             return Ok(false);
         }
 
-        let is_method = frame.method_name.is_some();
-        let parameter_offset = if is_method { 1 } else { 0 };
-        let num_parameters = frame
-            .locals
-            .iter()
-            .filter(|local| local.is_parameter)
-            .count()
-            - parameter_offset;
-        let function_has_varargs = frame
-            .locals
-            .iter()
-            .any(|local| local.is_parameter && local.name == VARARG_LOCAL_NAME);
-        let num_locals = frame.locals.len();
-        let frame_ip = frame.ip;
-
-        self.push_load_marker();
-        self.compile_expression_list(function_call.node.args.node)?;
-
-        if function_has_varargs {
-            self.chunk.push_instruction(Instruction::AlignVararg, None);
+        let mut num_args = function_call.node.args.node.len();
+        let (parameters_register, is_self_call) = if frame.method_name.is_some() {
+            // Load the `self` argument into the first parameter register.
+            let register = frame.take_register("tail call self parameter");
+            self.chunk.push_bytecode(
+                Bytecode::Mov {
+                    dest_register: register,
+                    // NOTE: `self` is always in the first register of method-style functions.
+                    src_register: 0,
+                },
+                Some(function_call.span),
+            );
+            num_args += 1;
+            (register, true)
         } else {
-            self.chunk.push_instruction(Instruction::Align, None);
-        }
-        self.chunk.push_instruction(num_parameters as u8, None);
-
-        // Now we just need to overwrite the current frame's local parameters with the new
-        // values, and then jump back to the start of the function.
-        if function_has_varargs {
-            self.chunk.push_instruction(Instruction::SetLocal, None);
-            self.chunk
-                .push_instruction((num_parameters + parameter_offset) as u8, None);
-        }
-        for i in 0..num_parameters {
-            self.chunk.push_instruction(Instruction::SetLocal, None);
-            self.chunk
-                .push_instruction((num_parameters - i - 1 + parameter_offset) as u8, None);
+            (frame.register_index, false)
+        };
+        let expression_list_length = self.compile_expression_list(function_call.node.args.node)?;
+        if !is_self_call {
+            debug_assert_eq!(parameters_register, expression_list_length.get_register());
         }
 
-        // Pop off the rest of the stack
-        let extraneous_locals = num_locals
-            - num_parameters
-            - if function_has_varargs { 1 } else { 0 }
-            - parameter_offset;
-        for _ in 0..extraneous_locals {
-            self.chunk.push_instruction(Instruction::Pop, None);
-        }
+        let parameters_register = if is_self_call {
+            parameters_register
+        } else {
+            expression_list_length.get_register()
+        };
 
-        self.chunk.push_instruction(Instruction::Jmp, None);
-        // We don't have to do the alignment, since we already ensured the correct number of
-        // arguments above.
-        self.chunk.push_addr(frame_ip + 2);
+        self.chunk.push_callt_instruction(
+            parameters_register,
+            matches!(expression_list_length, ExpressionListLength::MultRes { .. }),
+            // TODO: Is this right? Does it matter?
+            ExpressionResultMode::Multiple,
+            match expression_list_length {
+                ExpressionListLength::Constant { .. } => num_args as u8,
+                // Subtract one, because the last argument will be accounted for via multres
+                ExpressionListLength::MultRes { .. } => num_args as u8 - 1,
+            },
+            Some(function_call.span),
+        );
 
         Ok(true)
     }
 
-    fn compile_function_def(&mut self, function_def: TokenTree<FunctionDef>) -> crate::Result<()> {
+    fn compile_function_def(
+        &mut self,
+        function_def: TokenTree<FunctionDef>,
+        closure_r: Option<u8>,
+    ) -> crate::Result<u8> {
         // We'll issue the bytecode inline here, but jump over it at runtime
-        self.chunk.push_instruction(Instruction::Jmp, None);
-        let jmp_over_func_addr = self.chunk.push_addr_placeholder();
+        let jmp_over_func_addr = self
+            .chunk
+            .push_undecided_jump(JumpToUndecidedAddress::Jmp, None);
 
         // Compile the function
         let func_addr = self.chunk.get_current_addr();
         self.begin_frame(
-            self.chunk.get_current_addr(),
             function_def.node.name.clone(),
-            function_def.node.method_name,
+            function_def.node.method_name.clone(),
         );
         self.begin_scope();
 
         // Define the function arguments
+        // dbg!(
+        //     "Defining {} parameters: {:?}",
+        //     function_def.node.parameters.len(),
+        //     &function_def.node.parameters
+        // );
         let parameter_count = function_def.node.parameters.len();
-        for parameter in function_def.node.parameters {
-            self.add_parameter(parameter.node.0, Some(parameter.span));
+        for (index, parameter) in function_def.node.parameters.into_iter().enumerate() {
+            self.add_local(parameter.node.0, index as u8, Some(parameter.span));
         }
 
         let has_return = function_def.node.block.node.return_statement.is_some();
@@ -1326,7 +1656,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
         let frame = self.end_frame()?;
 
         if !has_return {
-            self.chunk.push_instruction(Instruction::Return0, None);
+            self.chunk.push_bytecode(Bytecode::Return0, None);
         }
 
         // Jump over the function
@@ -1336,22 +1666,37 @@ impl<'a, 'source> Compiler<'a, 'source> {
         let const_index = self
             .vm
             .register_const(LuaConst::Function(LuaFunctionDefinition {
-                name: function_def.node.name,
+                name: function_def
+                    .node
+                    .method_name
+                    .or(function_def.node.name)
+                    .map(|mut name| {
+                        name.extend_from_slice(b"()");
+                        name
+                    }),
                 chunk: self.chunk_index,
                 ip: func_addr,
                 upvalues: frame.upvalues.len(),
                 num_params: parameter_count as u8,
                 has_varargs: function_def.node.varargs.is_some(),
+                max_registers: frame.max_registers,
             }));
-        self.chunk
-            .push_instruction(Instruction::LoadClosure, Some(function_def.span));
-        self.chunk.push_const_index(const_index);
-        for upvalue in frame.upvalues {
-            self.chunk.push_instruction(upvalue.is_local, None);
-            self.chunk.push_instruction(upvalue.index, None);
-        }
+        let closure_r = closure_r.unwrap_or_else(|| {
+            self.frames
+                .last_mut()
+                .unwrap()
+                .take_register("loading closure")
+        });
+        self.chunk.push_bytecode(
+            Bytecode::LoadClosure {
+                register: closure_r,
+                const_index,
+                upvalues: frame.upvalues,
+            },
+            Some(function_def.span),
+        );
 
-        Ok(())
+        Ok(closure_r)
     }
 
     fn compile_expression_list(
@@ -1359,102 +1704,189 @@ impl<'a, 'source> Compiler<'a, 'source> {
         expressions: Vec<TokenTree<Expression>>,
     ) -> crate::Result<ExpressionListLength> {
         let num_expressions = expressions.len();
+        let from_register = self.frames.last().unwrap().register_index;
         let mut multres = false;
         for (i, expression) in expressions.into_iter().enumerate() {
             let is_last = i == num_expressions - 1;
             if matches!(
                 self.compile_expression(
                     expression,
+                    ExpressionMode::Copy,
                     if is_last {
-                        ExpressionResult::Multiple
+                        ExpressionResultMode::Multiple
                     } else {
-                        ExpressionResult::Single
+                        ExpressionResultMode::Single
                     },
                 )?,
-                ExpressionResult::Multiple
+                ExpressionResult::Multiple { .. }
             ) {
                 multres = true;
             }
         }
 
         Ok(if multres {
-            ExpressionListLength::MultRes
+            ExpressionListLength::MultRes { from_register }
         } else {
-            ExpressionListLength::Constant
+            ExpressionListLength::Constant { from_register }
         })
     }
 
     fn compile_expression(
         &mut self,
         expression: TokenTree<Expression>,
-        result_mode: ExpressionResult,
+        expression_mode: ExpressionMode,
+        result_mode: ExpressionResultMode,
     ) -> crate::Result<ExpressionResult> {
-        let span = expression.span;
         Ok(match expression.node {
             Expression::Literal(literal) => {
-                self.compile_load_literal(literal.node, Some(literal.span));
+                let register = self.compile_load_literal(literal.node, Some(literal.span));
 
-                ExpressionResult::Single
+                ExpressionResult::Single { register }
             }
             Expression::BinaryOp { op, lhs, rhs } => {
-                match &op.node {
+                let register = match &op.node {
                     BinaryOperator::And => {
-                        self.compile_expression(*lhs, ExpressionResult::Single)?;
-                        self.chunk.push_instruction(Instruction::JmpFalse, None);
-                        let jmp_false_addr = self.chunk.push_addr_placeholder();
-                        self.compile_expression(*rhs, ExpressionResult::Single)?;
-                        self.chunk.push_instruction(Instruction::And, Some(span));
-                        self.chunk.patch_addr_placeholder(jmp_false_addr)
+                        let lhs_r = self
+                            .compile_expression(
+                                *lhs,
+                                ExpressionMode::Copy,
+                                ExpressionResultMode::Single,
+                            )?
+                            .get_register();
+                        let jmp_false_addr = self.chunk.push_undecided_jump(
+                            JumpToUndecidedAddress::JmpFalse {
+                                condition_register: lhs_r,
+                            },
+                            None,
+                        );
+
+                        self.frames
+                            .last_mut()
+                            .unwrap()
+                            .release_registers_from(lhs_r, "binary and lhs");
+
+                        let rhs_r = self
+                            .compile_expression(
+                                *rhs,
+                                ExpressionMode::Copy,
+                                ExpressionResultMode::Single,
+                            )?
+                            .get_register();
+                        self.chunk.patch_addr_placeholder(jmp_false_addr);
+
+                        debug_assert_eq!(lhs_r, rhs_r, "AND rhs must reuse lhs register");
+
+                        lhs_r
                     }
                     BinaryOperator::Or => {
-                        self.compile_expression(*lhs, ExpressionResult::Single)?;
-                        self.chunk.push_instruction(Instruction::JmpTrue, None);
-                        let jmp_true_addr = self.chunk.push_addr_placeholder();
-                        self.compile_expression(*rhs, ExpressionResult::Single)?;
-                        self.chunk.push_instruction(Instruction::Or, Some(span));
+                        let lhs_r = self
+                            .compile_expression(
+                                *lhs,
+                                ExpressionMode::Copy,
+                                ExpressionResultMode::Single,
+                            )?
+                            .get_register();
+                        let jmp_true_addr = self.chunk.push_undecided_jump(
+                            JumpToUndecidedAddress::JmpTrue {
+                                condition_register: lhs_r,
+                            },
+                            None,
+                        );
+
+                        self.frames
+                            .last_mut()
+                            .unwrap()
+                            .release_registers_from(lhs_r, "binary or lhs");
+
+                        let rhs_r = self
+                            .compile_expression(
+                                *rhs,
+                                ExpressionMode::Copy,
+                                ExpressionResultMode::Single,
+                            )?
+                            .get_register();
                         self.chunk.patch_addr_placeholder(jmp_true_addr);
+
+                        debug_assert_eq!(lhs_r, rhs_r, "OR rhs must reuse lhs register");
+
+                        lhs_r
                     }
                     _ => {
-                        self.compile_expression(*lhs, ExpressionResult::Single)?;
-                        self.compile_expression(*rhs, ExpressionResult::Single)?;
-                        self.compile_binary_operator(op, expression.span);
-                    }
-                }
+                        let dest_r = self
+                            .frames
+                            .last_mut()
+                            .unwrap()
+                            .take_register("binary op destination");
+                        let lhs_r = self
+                            .compile_expression(
+                                *lhs,
+                                ExpressionMode::Ref,
+                                ExpressionResultMode::Single,
+                            )?
+                            .get_register();
+                        let rhs_r = self
+                            .compile_expression(
+                                *rhs,
+                                ExpressionMode::Ref,
+                                ExpressionResultMode::Single,
+                            )?
+                            .get_register();
+                        self.compile_binary_operator(op, dest_r, lhs_r, rhs_r, expression.span);
 
-                ExpressionResult::Single
+                        // dbg!(dest_r, lhs_r, rhs_r, self.frames.last().unwrap());
+
+                        self.frames
+                            .last_mut()
+                            .unwrap()
+                            .release_registers_from(dest_r + 1, "binary op operands");
+
+                        dest_r
+                    }
+                };
+
+                ExpressionResult::Single { register }
             }
-            Expression::PrefixExpression(function_call) => {
-                self.compile_prefix_expression(function_call, result_mode)?
+            Expression::PrefixExpression(prefix_expression) => {
+                self.compile_prefix_expression(prefix_expression, expression_mode, result_mode)?
             }
             Expression::UnaryOp { op, rhs } => {
-                self.compile_expression(*rhs, ExpressionResult::Single)?;
-                self.compile_unary_operator(op, expression.span);
+                let current_r = self.frames.last().unwrap().register_index;
+                let expr_r = self
+                    .compile_expression(*rhs, ExpressionMode::Ref, ExpressionResultMode::Single)?
+                    .get_register();
+                let dest_r = if current_r == expr_r {
+                    expr_r
+                } else {
+                    self.frames
+                        .last_mut()
+                        .unwrap()
+                        .take_register("unary operator destination")
+                };
+                self.compile_unary_operator(op, expression.span, dest_r, expr_r);
 
-                ExpressionResult::Single
+                ExpressionResult::Single { register: dest_r }
             }
             Expression::FunctionDef(function_def) => {
-                self.compile_function_def(function_def)?;
+                let register = self.compile_function_def(function_def, None)?;
 
-                ExpressionResult::Single
+                ExpressionResult::Single { register }
             }
             Expression::TableConstructor(table) => {
-                self.compile_table_constructor(table)?;
+                let register = self.compile_table_constructor(table)?;
 
-                ExpressionResult::Single
+                ExpressionResult::Single { register }
             }
             Expression::Ellipsis => {
-                self.chunk
-                    .push_instruction(Instruction::LoadVararg, Some(expression.span));
-                self.chunk.push_instruction(
-                    if result_mode == ExpressionResult::Single {
-                        1
-                    } else {
-                        0
+                let register = self.frames.last_mut().unwrap().take_register("ellipsis");
+                self.chunk.push_bytecode(
+                    Bytecode::LoadVararg {
+                        dest_register: register,
+                        single_value: matches!(result_mode, ExpressionResultMode::Single),
                     },
-                    None,
+                    Some(expression.span),
                 );
 
-                result_mode
+                result_mode.into_result(register)
             }
         })
     }
@@ -1462,40 +1894,109 @@ impl<'a, 'source> Compiler<'a, 'source> {
     fn compile_prefix_expression(
         &mut self,
         prefix_expression: TokenTree<PrefixExpression>,
-        result_mode: ExpressionResult,
+        expression_mode: ExpressionMode,
+        result_mode: ExpressionResultMode,
     ) -> crate::Result<ExpressionResult> {
         Ok(match prefix_expression.node {
             PrefixExpression::FunctionCall(function_call) => {
-                self.compile_function_call(function_call, result_mode)?;
+                let register = self.compile_function_call(function_call, result_mode)?;
 
-                result_mode
+                result_mode.into_result(register)
             }
             PrefixExpression::Parenthesized(expression) => {
-                self.compile_expression(*expression, ExpressionResult::Single)?;
-
-                ExpressionResult::Single
+                self.compile_expression(*expression, expression_mode, ExpressionResultMode::Single)?
             }
             PrefixExpression::Variable(variable) => {
-                match variable.node {
-                    Variable::Name(name) => self.variable(name, VariableMode::Read),
+                let register = match variable.node {
+                    Variable::Name(name) => self.variable(
+                        name,
+                        match expression_mode {
+                            ExpressionMode::Ref => VariableMode::Ref,
+                            ExpressionMode::Copy => VariableMode::Read,
+                        },
+                    ),
                     Variable::Indexed(prefix, index) => {
-                        self.compile_prefix_expression(*prefix, ExpressionResult::Single)?;
-                        self.compile_expression(*index, ExpressionResult::Single)?;
-                        self.chunk
-                            .push_instruction(Instruction::GetTable, Some(prefix_expression.span));
+                        let dest_r = self
+                            .frames
+                            .last_mut()
+                            .unwrap()
+                            .take_register("indexed variable destination");
+                        let table_r = self
+                            .compile_prefix_expression(
+                                *prefix,
+                                ExpressionMode::Ref,
+                                ExpressionResultMode::Single,
+                            )?
+                            .get_register();
+                        let index_r = self
+                            .compile_expression(
+                                *index,
+                                ExpressionMode::Ref,
+                                ExpressionResultMode::Single,
+                            )?
+                            .get_register();
+                        self.chunk.push_bytecode(
+                            Bytecode::GetTable {
+                                dest_register: dest_r,
+                                table_register: table_r,
+                                key_register: index_r,
+                            },
+                            Some(prefix_expression.span),
+                        );
+                        self.frames
+                            .last_mut()
+                            .unwrap()
+                            .release_registers_from(dest_r + 1, "indexed variable operands");
+
+                        dest_r
                     }
                     Variable::Field(prefix, name) => {
-                        self.compile_prefix_expression(*prefix, ExpressionResult::Single)?;
-                        let const_index = self.get_const_index(LuaConst::String(name.node.0));
-                        self.chunk
-                            .push_instruction(Instruction::LoadConst, Some(prefix_expression.span));
-                        self.chunk.push_const_index(const_index);
-                        self.chunk
-                            .push_instruction(Instruction::GetTable, Some(prefix_expression.span));
-                    }
-                }
+                        let current_r = self.frames.last().unwrap().register_index;
+                        let table_r = self
+                            .compile_prefix_expression(
+                                *prefix,
+                                ExpressionMode::Ref,
+                                ExpressionResultMode::Single,
+                            )?
+                            .get_register();
 
-                ExpressionResult::Single
+                        let const_index = self.get_const_index(LuaConst::String(name.node.0));
+                        let name_r = self
+                            .frames
+                            .last_mut()
+                            .unwrap()
+                            .take_register("field variable name");
+                        self.chunk.push_bytecode(
+                            Bytecode::LoadConst {
+                                register: name_r,
+                                const_index,
+                            },
+                            Some(name.span),
+                        );
+                        let dest_r = if table_r == current_r {
+                            table_r
+                        } else {
+                            name_r
+                        };
+                        self.chunk.push_bytecode(
+                            Bytecode::GetTable {
+                                dest_register: dest_r,
+                                table_register: table_r,
+                                key_register: name_r,
+                            },
+                            Some(prefix_expression.span),
+                        );
+
+                        self.frames
+                            .last_mut()
+                            .unwrap()
+                            .release_registers_from(dest_r + 1, "field variable operands");
+
+                        dest_r
+                    }
+                };
+
+                ExpressionResult::Single { register }
             }
         })
     }
@@ -1503,7 +2004,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
     fn compile_table_constructor(
         &mut self,
         table: TokenTree<TableConstructor>,
-    ) -> crate::Result<()> {
+    ) -> crate::Result<u8> {
         // Optimization: if all of the fields are literals, we can just create the table here and
         // load it as a constant.
         if table.node.fields.iter().all(|field| match &field.node {
@@ -1546,15 +2047,29 @@ impl<'a, 'source> Compiler<'a, 'source> {
             }
 
             let const_index = self.get_const_index(LuaConst::Table(new_table));
-            self.chunk
-                .push_instruction(Instruction::LoadConst, Some(table.span));
-            self.chunk.push_const_index(const_index);
+            let table_r = self
+                .frames
+                .last_mut()
+                .unwrap()
+                .take_register("table constant");
+            self.chunk.push_bytecode(
+                Bytecode::LoadConst {
+                    register: table_r,
+                    const_index,
+                },
+                Some(table.span),
+            );
 
-            return Ok(());
+            return Ok(table_r);
         }
 
-        self.chunk
-            .push_instruction(Instruction::NewTable, Some(table.span));
+        let table_r = self.frames.last_mut().unwrap().take_register("table");
+        self.chunk.push_bytecode(
+            Bytecode::NewTable {
+                dest_register: table_r,
+            },
+            Some(table.span),
+        );
 
         let num_fields = table.node.fields.len();
         let mut previous_was_value_field = false;
@@ -1562,15 +2077,22 @@ impl<'a, 'source> Compiler<'a, 'source> {
         let mut previous_was_multires = false;
         for (i, field) in table.node.fields.into_iter().enumerate() {
             if previous_was_value_field && !matches!(&field.node, Field::Value(_)) {
-                self.chunk.push_instruction(
+                // TODO: Do we specify the starting register here for the values? Or is it ALWAYS
+                // table_r + 1?
+                self.chunk.push_bytecode(
                     if !previous_was_multires {
-                        Instruction::AppendToTable
+                        Bytecode::AppendToTable {
+                            table_register: table_r,
+                            num_values,
+                        }
                     } else {
-                        Instruction::AppendToTableM
+                        Bytecode::AppendToTableM {
+                            table_register: table_r,
+                            num_values,
+                        }
                     },
                     Some(field.span),
                 );
-                self.chunk.push_instruction(num_values, None);
                 previous_was_value_field = false;
                 previous_was_multires = false;
             }
@@ -1578,18 +2100,67 @@ impl<'a, 'source> Compiler<'a, 'source> {
             match field.node {
                 Field::Named(name, value) => {
                     let const_index = self.get_const_index(LuaConst::String(name.node.0));
-                    self.chunk
-                        .push_instruction(Instruction::LoadConst, Some(field.span));
-                    self.chunk.push_const_index(const_index);
-                    self.compile_expression(value, ExpressionResult::Single)?;
-                    self.chunk
-                        .push_instruction(Instruction::SetTable, Some(field.span));
+                    let const_r = self
+                        .frames
+                        .last_mut()
+                        .unwrap()
+                        .take_register("table field name");
+                    self.chunk.push_bytecode(
+                        Bytecode::LoadConst {
+                            register: const_r,
+                            const_index,
+                        },
+                        Some(field.span),
+                    );
+                    let value_r = self
+                        .compile_expression(
+                            value,
+                            ExpressionMode::Ref,
+                            ExpressionResultMode::Single,
+                        )?
+                        .get_register();
+                    self.chunk.push_bytecode(
+                        Bytecode::SetTable {
+                            table_register: table_r,
+                            key_register: const_r,
+                            value_register: value_r,
+                        },
+                        Some(field.span),
+                    );
+
+                    self.frames
+                        .last_mut()
+                        .unwrap()
+                        .release_registers_from(const_r, "table field assignment cleanup");
                 }
                 Field::Indexed(index_expression, value) => {
-                    self.compile_expression(index_expression, ExpressionResult::Single)?;
-                    self.compile_expression(value, ExpressionResult::Single)?;
-                    self.chunk
-                        .push_instruction(Instruction::SetTable, Some(field.span));
+                    let index_r = self
+                        .compile_expression(
+                            index_expression,
+                            ExpressionMode::Ref,
+                            ExpressionResultMode::Single,
+                        )?
+                        .get_register();
+                    let value_r = self
+                        .compile_expression(
+                            value,
+                            ExpressionMode::Ref,
+                            ExpressionResultMode::Single,
+                        )?
+                        .get_register();
+                    self.chunk.push_bytecode(
+                        Bytecode::SetTable {
+                            table_register: table_r,
+                            key_register: index_r,
+                            value_register: value_r,
+                        },
+                        Some(field.span),
+                    );
+
+                    self.frames.last_mut().unwrap().release_registers_from(
+                        table_r + 1,
+                        "table indexed field assignment cleanup",
+                    );
                 }
                 Field::Value(value) => {
                     previous_was_value_field = true;
@@ -1598,13 +2169,14 @@ impl<'a, 'source> Compiler<'a, 'source> {
                     if matches!(
                         self.compile_expression(
                             value,
+                            ExpressionMode::Copy,
                             if is_last_field {
-                                ExpressionResult::Multiple
+                                ExpressionResultMode::Multiple
                             } else {
-                                ExpressionResult::Single
+                                ExpressionResultMode::Single
                             },
                         )?,
-                        ExpressionResult::Multiple
+                        ExpressionResult::Multiple { .. }
                     ) {
                         previous_was_multires = true;
                     } else {
@@ -1615,21 +2187,36 @@ impl<'a, 'source> Compiler<'a, 'source> {
         }
 
         if previous_was_value_field {
-            self.chunk.push_instruction(
+            self.chunk.push_bytecode(
                 if !previous_was_multires {
-                    Instruction::AppendToTable
+                    Bytecode::AppendToTable {
+                        table_register: table_r,
+                        num_values,
+                    }
                 } else {
-                    Instruction::AppendToTableM
+                    Bytecode::AppendToTableM {
+                        table_register: table_r,
+                        num_values,
+                    }
                 },
                 None,
             );
-            self.chunk.push_instruction(num_values, None);
         }
 
-        Ok(())
+        self.frames
+            .last_mut()
+            .unwrap()
+            .release_registers_from(table_r + 1, "table constructor cleanup");
+
+        Ok(table_r)
     }
 
-    fn compile_load_literal(&mut self, literal: Literal, span: Option<Span>) {
+    fn compile_load_literal(&mut self, literal: Literal, span: Option<Span>) -> u8 {
+        let register = self
+            .frames
+            .last_mut()
+            .unwrap()
+            .take_register(&format!("literal {literal:?}"));
         let const_index = match literal {
             Literal::Nil => self.get_const_index(LuaConst::Nil),
             Literal::Boolean(b) => self.get_const_index(LuaConst::Boolean(b)),
@@ -1642,97 +2229,277 @@ impl<'a, 'source> Compiler<'a, 'source> {
             Literal::String(s) => self.get_const_index(LuaConst::String(s)),
         };
 
-        self.chunk.push_instruction(Instruction::LoadConst, span);
-        self.chunk.push_const_index(const_index);
+        self.chunk.push_bytecode(
+            Bytecode::LoadConst {
+                register,
+                const_index,
+            },
+            span,
+        );
+
+        register
     }
 
-    fn compile_binary_operator(&mut self, op: TokenTree<BinaryOperator>, span: Span) {
-        match op.node {
-            // Arithmetic
-            BinaryOperator::Add => self.chunk.push_instruction(Instruction::Add, Some(span)),
-            BinaryOperator::Sub => self.chunk.push_instruction(Instruction::Sub, Some(span)),
-            BinaryOperator::Mul => self.chunk.push_instruction(Instruction::Mul, Some(span)),
-            BinaryOperator::Div => self.chunk.push_instruction(Instruction::Div, Some(span)),
-            BinaryOperator::Mod => self.chunk.push_instruction(Instruction::Mod, Some(span)),
-            BinaryOperator::Pow => self.chunk.push_instruction(Instruction::Pow, Some(span)),
-            BinaryOperator::FloorDiv => self.chunk.push_instruction(Instruction::IDiv, Some(span)),
-            BinaryOperator::BitwiseAnd => {
-                self.chunk.push_instruction(Instruction::Band, Some(span))
-            }
-            BinaryOperator::BitwiseOr => self.chunk.push_instruction(Instruction::Bor, Some(span)),
-            BinaryOperator::BitwiseXor => {
-                self.chunk.push_instruction(Instruction::Bxor, Some(span))
-            }
-            BinaryOperator::ShiftLeft => self.chunk.push_instruction(Instruction::Shl, Some(span)),
-            BinaryOperator::ShiftRight => self.chunk.push_instruction(Instruction::Shr, Some(span)),
-
-            // Comparison
-            BinaryOperator::Equal => self.chunk.push_instruction(Instruction::Eq, Some(span)),
-            BinaryOperator::NotEqual => self.chunk.push_instruction(Instruction::Ne, Some(span)),
-            BinaryOperator::LessThan => self.chunk.push_instruction(Instruction::Lt, Some(span)),
-            BinaryOperator::LessThanOrEqual => {
-                self.chunk.push_instruction(Instruction::Le, Some(span))
-            }
-            BinaryOperator::GreaterThan => self.chunk.push_instruction(Instruction::Gt, Some(span)),
-            BinaryOperator::GreaterThanOrEqual => {
-                self.chunk.push_instruction(Instruction::Ge, Some(span))
-            }
-
-            // Strings
-            BinaryOperator::Concat => self.chunk.push_instruction(Instruction::Concat, Some(span)),
-
-            // Logical
-            BinaryOperator::And | BinaryOperator::Or => {
-                unreachable!(
-                    "short-circuiting logical operators should be handled in compile_expression"
-                );
-            }
-        }
-    }
-
-    fn compile_unary_operator(&mut self, op: TokenTree<UnaryOperator>, span: Span) {
-        match op.node {
-            UnaryOperator::Neg => self.chunk.push_instruction(Instruction::Neg, Some(span)),
-            UnaryOperator::Not => self.chunk.push_instruction(Instruction::Not, Some(span)),
-            UnaryOperator::Length => self.chunk.push_instruction(Instruction::Len, Some(span)),
-            UnaryOperator::BitwiseNot => self.chunk.push_instruction(Instruction::BNot, Some(span)),
-        }
-    }
-
-    fn variable(&mut self, name: TokenTree<Name>, mode: VariableMode) {
-        if let Some(local) = self.resolve_local(&name.node.0) {
-            self.chunk.push_instruction(
-                match mode {
-                    VariableMode::Read => Instruction::GetLocal,
-                    VariableMode::Write => Instruction::SetLocal,
+    fn compile_binary_operator(
+        &mut self,
+        op: TokenTree<BinaryOperator>,
+        dest_register: u8,
+        left_register: u8,
+        right_register: u8,
+        span: Span,
+    ) {
+        self.chunk.push_bytecode(
+            match op.node {
+                // Arithmetic
+                BinaryOperator::Add => Bytecode::Add {
+                    dest_register,
+                    left_register,
+                    right_register,
                 },
-                Some(name.span),
-            );
-            self.chunk.push_instruction(local, None);
+                BinaryOperator::Sub => Bytecode::Sub {
+                    dest_register,
+                    left_register,
+                    right_register,
+                },
+                BinaryOperator::Mul => Bytecode::Mul {
+                    dest_register,
+                    left_register,
+                    right_register,
+                },
+                BinaryOperator::Div => Bytecode::Div {
+                    dest_register,
+                    left_register,
+                    right_register,
+                },
+                BinaryOperator::Mod => Bytecode::Mod {
+                    dest_register,
+                    left_register,
+                    right_register,
+                },
+                BinaryOperator::Pow => Bytecode::Pow {
+                    dest_register,
+                    left_register,
+                    right_register,
+                },
+                BinaryOperator::FloorDiv => Bytecode::IDiv {
+                    dest_register,
+                    left_register,
+                    right_register,
+                },
+                BinaryOperator::BitwiseAnd => Bytecode::Band {
+                    dest_register,
+                    left_register,
+                    right_register,
+                },
+                BinaryOperator::BitwiseOr => Bytecode::Bor {
+                    dest_register,
+                    left_register,
+                    right_register,
+                },
+                BinaryOperator::BitwiseXor => Bytecode::Bxor {
+                    dest_register,
+                    left_register,
+                    right_register,
+                },
+                BinaryOperator::ShiftLeft => Bytecode::Shl {
+                    dest_register,
+                    left_register,
+                    right_register,
+                },
+                BinaryOperator::ShiftRight => Bytecode::Shr {
+                    dest_register,
+                    left_register,
+                    right_register,
+                },
+
+                // Comparison
+                BinaryOperator::Equal => Bytecode::Eq {
+                    dest_register,
+                    left_register,
+                    right_register,
+                },
+                BinaryOperator::NotEqual => Bytecode::Ne {
+                    dest_register,
+                    left_register,
+                    right_register,
+                },
+                BinaryOperator::LessThan => Bytecode::Lt {
+                    dest_register,
+                    left_register,
+                    right_register,
+                },
+                BinaryOperator::LessThanOrEqual => Bytecode::Le {
+                    dest_register,
+                    left_register,
+                    right_register,
+                },
+                // https://www.lua.org/manual/5.4/manual.html#3.4.4
+                // A comparison a > b is translated to b < a and a >= b is translated to b <= a.
+                BinaryOperator::GreaterThan => {
+                    // std::mem::swap(&mut left_register, &mut right_register);
+                    // self.chunk.push_instruction(Instruction::Lt, Some(span));
+                    Bytecode::Lt {
+                        dest_register,
+                        left_register: right_register,
+                        right_register: left_register,
+                    }
+                }
+                BinaryOperator::GreaterThanOrEqual => {
+                    // self.chunk.push_instruction(Instruction::Le, Some(span));
+                    // std::mem::swap(&mut left_register, &mut right_register);
+                    Bytecode::Le {
+                        dest_register,
+                        left_register: right_register,
+                        right_register: left_register,
+                    }
+                }
+
+                // Strings
+                BinaryOperator::Concat => Bytecode::Concat {
+                    dest_register,
+                    left_register,
+                    right_register,
+                },
+
+                // Logical
+                BinaryOperator::And | BinaryOperator::Or => {
+                    unreachable!(
+                        "short-circuiting logical operators should be handled in compile_expression"
+                    );
+                }
+            },
+            Some(span),
+        );
+    }
+
+    fn compile_unary_operator(
+        &mut self,
+        op: TokenTree<UnaryOperator>,
+        span: Span,
+        dest_register: u8,
+        src_register: u8,
+    ) {
+        self.chunk.push_bytecode(
+            match op.node {
+                UnaryOperator::Neg => Bytecode::Neg {
+                    dest_register,
+                    src_register,
+                },
+                UnaryOperator::Not => Bytecode::Not {
+                    dest_register,
+                    src_register,
+                },
+                UnaryOperator::Length => Bytecode::Len {
+                    dest_register,
+                    src_register,
+                },
+                UnaryOperator::BitwiseNot => Bytecode::BNot {
+                    dest_register,
+                    src_register,
+                },
+            },
+            Some(span),
+        );
+    }
+
+    /// Check if the list of expressions could be "multres", i.e. result in a variable
+    /// amount of values produced.
+    fn expression_list_can_be_multres(expressions: &[TokenTree<Expression>]) -> bool {
+        // The number of return values is variable if the last expression is
+        // a function call or an ellipsis (things that can result in
+        // multiple values themselves).
+        expressions.last().is_some_and(|expr| match &expr.node {
+            Expression::PrefixExpression(prefix_expr) => {
+                matches!(&prefix_expr.node, PrefixExpression::FunctionCall(_))
+            }
+            Expression::Ellipsis => true,
+            _ => false,
+        })
+    }
+
+    fn variable(&mut self, name: TokenTree<Name>, mode: VariableMode) -> u8 {
+        let span = name.span;
+        let (bytecode, register) = if let Some(local) = self.resolve_local(&name.node.0) {
+            match mode {
+                VariableMode::Ref => {
+                    return local;
+                }
+                VariableMode::Read => {
+                    let register = self.frames.last_mut().unwrap().take_register(&format!(
+                        "reading variable {}",
+                        String::from_utf8_lossy(&name.node.0)
+                    ));
+                    (
+                        Bytecode::Mov {
+                            dest_register: register,
+                            src_register: local,
+                        },
+                        register,
+                    )
+                }
+                VariableMode::Write { value_register } => (
+                    Bytecode::Mov {
+                        dest_register: local,
+                        src_register: value_register,
+                    },
+                    0,
+                ),
+            }
         } else if let Some(upvalue) = self.resolve_upvalue(&name.node.0) {
-            self.chunk.push_instruction(
-                match mode {
-                    VariableMode::Read => Instruction::GetUpval,
-                    VariableMode::Write => Instruction::SetUpval,
-                },
-                Some(name.span),
-            );
-            self.chunk.push_instruction(upvalue, None);
+            match mode {
+                VariableMode::Read | VariableMode::Ref => {
+                    let register = self.frames.last_mut().unwrap().take_register(&format!(
+                        "reading upvalue {}",
+                        String::from_utf8_lossy(&name.node.0)
+                    ));
+                    (
+                        Bytecode::GetUpval {
+                            dest_register: register,
+                            upval_index: upvalue,
+                        },
+                        register,
+                    )
+                }
+                VariableMode::Write { value_register } => (
+                    Bytecode::SetUpval {
+                        upval_index: upvalue,
+                        src_register: value_register,
+                    },
+                    0,
+                ),
+            }
         } else {
-            self.chunk.push_instruction(
-                match mode {
-                    VariableMode::Read => Instruction::GetGlobal,
-                    VariableMode::Write => Instruction::SetGlobal,
-                },
-                Some(name.span),
-            );
-            let const_index = self.get_global_name_index(name.node.0);
-            self.chunk.push_const_index(const_index);
-        }
+            let const_index = self.get_global_name_index(name.node.0.clone());
+            match mode {
+                VariableMode::Read | VariableMode::Ref => {
+                    let register = self.frames.last_mut().unwrap().take_register(&format!(
+                        "reading global '{}'",
+                        String::from_utf8_lossy(&name.node.0)
+                    ));
+                    (
+                        Bytecode::GetGlobal {
+                            dest_register: register,
+                            name_index: const_index,
+                        },
+                        register,
+                    )
+                }
+                VariableMode::Write { value_register } => (
+                    Bytecode::SetGlobal {
+                        src_register: value_register,
+                        name_index: const_index,
+                    },
+                    0,
+                ),
+            }
+        };
+
+        self.chunk.push_bytecode(bytecode, Some(span));
+        register
     }
 
-    fn begin_frame(&mut self, ip: JumpAddr, name: Option<Vec<u8>>, method_name: Option<Vec<u8>>) {
-        self.frames.push(Frame::new(ip, name, method_name));
+    fn begin_frame(&mut self, name: Option<Vec<u8>>, method_name: Option<Vec<u8>>) {
+        self.frames.push(Frame::new(name, method_name));
     }
 
     fn end_frame(&mut self) -> crate::Result<Frame> {
@@ -1758,16 +2525,24 @@ impl<'a, 'source> Compiler<'a, 'source> {
         let current_frame = self.frames.last_mut().unwrap();
         current_frame.scope_depth += 1;
         current_frame.scope_ids.push(current_frame.scope_id_counter);
+        current_frame
+            .scope_starting_registers
+            .push(current_frame.register_index);
         current_frame.scope_id_counter += 1;
         current_frame.scope_depth
     }
 
-    fn end_scope(&mut self) -> crate::Result<()> {
+    fn end_scope(&mut self) -> crate::Result {
         let current_frame = self.frames.last_mut().unwrap();
         let scope_id = current_frame.scope_id();
         current_frame.scope_ids.pop();
         let parent_scope_id = current_frame.scope_id();
         current_frame.scope_depth -= 1;
+        let starting_register = current_frame
+            .scope_starting_registers
+            .pop()
+            .expect("there should be a starting register for the scope");
+        current_frame.release_registers_from(starting_register, "ending scope");
 
         while !current_frame.locals.is_empty()
             && current_frame
@@ -1777,7 +2552,6 @@ impl<'a, 'source> Compiler<'a, 'source> {
                 .is_some_and(|local| local.depth > current_frame.scope_depth)
         {
             current_frame.locals.pop();
-            self.chunk.push_instruction(Instruction::Pop, None);
         }
 
         // Remove any labels that are no longer in scope
@@ -1829,18 +2603,15 @@ impl<'a, 'source> Compiler<'a, 'source> {
             for goto in gotos.iter_mut() {
                 if goto.scope_id == scope_id || goto.to_end_of_scope {
                     if goto.locals > 0 {
-                        self.chunk.push_instruction(Instruction::Jmp, None);
-                        let after_goto_pops = self.chunk.push_addr_placeholder();
+                        // FIXME: This doesn't need to `pop` anything, but if any locals of this
+                        // scope have the `ToBeClosed` attribute, we need to call their __close
+                        // metamethod.
                         self.chunk.patch_addr_placeholder(goto.addr);
-                        let locals_to_pop = goto.locals - current_frame.locals.len();
-                        for _ in 0..locals_to_pop {
-                            self.chunk.push_instruction(Instruction::Pop, None);
-                        }
                         if !goto.to_end_of_scope {
-                            self.chunk.push_instruction(Instruction::Jmp, None);
-                            goto.addr = self.chunk.push_addr_placeholder();
+                            goto.addr = self
+                                .chunk
+                                .push_undecided_jump(JumpToUndecidedAddress::Jmp, None);
                         }
-                        self.chunk.patch_addr_placeholder(after_goto_pops);
                     } else if goto.to_end_of_scope {
                         self.chunk.patch_addr_placeholder(goto.addr);
                     }
@@ -1862,27 +2633,25 @@ impl<'a, 'source> Compiler<'a, 'source> {
         Ok(())
     }
 
-    fn add_parameter(&mut self, name: Vec<u8>, span: Option<Span>) -> u8 {
-        self.add_local_inner(name, true, span)
-    }
-
-    fn add_local(&mut self, name: Vec<u8>, span: Option<Span>) -> u8 {
-        self.add_local_inner(name, false, span)
-    }
-
-    fn add_local_inner(&mut self, name: Vec<u8>, is_parameter: bool, span: Option<Span>) -> u8 {
+    fn add_local(&mut self, name: Vec<u8>, register: u8, span: Option<Span>) {
         let current_frame = self.frames.last_mut().unwrap();
+        current_frame.reserve_register(
+            register,
+            &format!("adding local {}", String::from_utf8_lossy(&name)),
+        );
         let local = Local {
             name: name.clone(),
-            is_parameter,
             depth: current_frame.scope_depth,
             span,
         };
 
         let index = current_frame.locals.len() as u8;
+        debug_assert!(
+            index == register,
+            "registers must be allocated sequentially (index: {index}, register: {register}), when adding local {}",
+            String::from_utf8_lossy(&name),
+        );
         current_frame.locals.push(local);
-
-        index
     }
 
     fn resolve_local(&mut self, name: &[u8]) -> Option<u8> {
