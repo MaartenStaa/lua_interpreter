@@ -344,6 +344,17 @@ pub(crate) fn print(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaVa
     Ok(vec![LuaValue::Nil])
 }
 
+pub(crate) fn rawequal(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
+    let lhs = input
+        .first()
+        .ok_or_else(|| lua_error!("bad argument #1 to 'rawequal' (value expected)"))?;
+    let rhs = input
+        .get(1)
+        .ok_or_else(|| lua_error!("bad argument #2 to 'rawequal' (value expected)"))?;
+
+    Ok(vec![LuaValue::Boolean(lhs == rhs)])
+}
+
 pub(crate) fn rawget(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     require_table!(input, "rawget", 0, table, {
         let key = input
