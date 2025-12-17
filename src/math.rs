@@ -5,7 +5,7 @@ use std::{
 
 use crate::{
     ast,
-    error::{lua_error, Context, LuaError},
+    error::{Context, LuaError, lua_error},
     value::{LuaNumber, LuaObject, LuaValue},
 };
 
@@ -277,7 +277,7 @@ impl PartialOrd for LuaValue {
 }
 
 impl LuaValue {
-    pub fn concat(self, other: Self) -> Result<Self, (LuaError, LuaValue, LuaValue)> {
+    pub fn concat(self, other: Self) -> Result<Self, Box<(LuaError, LuaValue, LuaValue)>> {
         match (self, other) {
             (LuaValue::String(mut a), LuaValue::String(b)) => {
                 a.extend(b);
@@ -300,7 +300,7 @@ impl LuaValue {
                 let left_type = self_.type_name();
                 let right_type = other.type_name();
 
-                Err((
+                Err(Box::new((
                     lua_error!(
                         "cannot concatenate a '{}' with a '{}'",
                         left_type,
@@ -308,7 +308,7 @@ impl LuaValue {
                     ),
                     self_,
                     other,
-                ))
+                )))
             }
         }
     }

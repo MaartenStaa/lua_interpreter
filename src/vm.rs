@@ -775,7 +775,8 @@ impl<'source> VM<'source> {
                     let b = self.get(rhs_r);
                     match a.concat(b) {
                         Ok(value) => self.set(dest_r, value),
-                        Err((e, a, b)) => {
+                        Err(err) => {
+                            let (e, a, b) = *err;
                             match metatables::handle(
                                 self,
                                 &metatables::CONCAT_KEY,

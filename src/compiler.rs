@@ -8,8 +8,8 @@ use std::{
 use crate::{
     ast::{
         BinaryOperator, Block, Expression, Field, ForCondition, FunctionCall, FunctionDef, Literal,
-        LocalAttribute, Name, Number, PrefixExpression, Statement, TableConstructor, TokenTree,
-        UnaryOperator, Variable,
+        LocalAttribute, Name, Number, NumericFor, PrefixExpression, Statement, TableConstructor,
+        TokenTree, UnaryOperator, Variable,
     },
     bytecode::{Bytecode, JumpToUndecidedAddress},
     chunk::Chunk,
@@ -921,12 +921,14 @@ impl<'a, 'source> Compiler<'a, 'source> {
                 let loop_scope_depth = self.begin_scope();
 
                 let (continue_addr, jmp_exit_loop_addr) = match condition.node {
-                    ForCondition::NumericFor {
-                        name,
-                        initial,
-                        limit,
-                        step,
-                    } => {
+                    ForCondition::NumericFor(numeric_for) => {
+                        let NumericFor {
+                            name,
+                            initial,
+                            limit,
+                            step,
+                        } = *numeric_for;
+
                         // FIXME: Coerce all to float if initial and step are floats
 
                         // let limit_r = self.frames.last_mut().unwrap().take_register();

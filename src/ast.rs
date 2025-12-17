@@ -83,16 +83,19 @@ pub struct ElseIf {
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum ForCondition {
-    NumericFor {
-        name: TokenTree<Name>,
-        initial: TokenTree<Expression>,
-        limit: TokenTree<Expression>,
-        step: Option<TokenTree<Expression>>,
-    },
+    NumericFor(Box<NumericFor>),
     GenericFor {
         names: Vec<TokenTree<Name>>,
         expressions: Vec<TokenTree<Expression>>,
     },
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub struct NumericFor {
+    pub name: TokenTree<Name>,
+    pub initial: TokenTree<Expression>,
+    pub limit: TokenTree<Expression>,
+    pub step: Option<TokenTree<Expression>>,
 }
 
 #[derive(Debug, PartialEq, Clone)]

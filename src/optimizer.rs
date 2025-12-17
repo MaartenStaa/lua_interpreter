@@ -88,17 +88,14 @@ fn optimize_for_condition(condition: TokenTree<ForCondition>) -> TokenTree<ForCo
     let span = condition.span;
     TokenTree::new(
         match condition.node {
-            ForCondition::NumericFor {
-                name,
-                initial,
-                step,
-                limit,
-            } => ForCondition::NumericFor {
-                name,
-                initial: optimize_expression(initial),
-                step: step.map(optimize_expression),
-                limit: optimize_expression(limit),
-            },
+            ForCondition::NumericFor(numeric_for) => {
+                ForCondition::NumericFor(Box::new(NumericFor {
+                    name: numeric_for.name,
+                    initial: optimize_expression(numeric_for.initial),
+                    step: numeric_for.step.map(optimize_expression),
+                    limit: optimize_expression(numeric_for.limit),
+                }))
+            }
             ForCondition::GenericFor { names, expressions } => ForCondition::GenericFor {
                 names,
                 expressions: expressions.into_iter().map(optimize_expression).collect(),

@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use crate::ast::*;
-use crate::error::{lua_error, Context, LuaError};
+use crate::error::{Context, LuaError, lua_error};
 use crate::lexer::Lexer;
 use crate::token::{Span, Token, TokenKind};
 use miette::LabeledSpan;
@@ -410,7 +410,7 @@ impl<'path, 'source> Parser<'path, 'source> {
                     return Err(lua_error!(
                         labels = vec![next_token.unwrap().span.labeled("this is not a statement")],
                         "expected a statement"
-                    ))
+                    ));
                 }
 
                 // Reached the end of the input
@@ -481,11 +481,11 @@ impl<'path, 'source> Parser<'path, 'source> {
                                 b"close" => LocalAttribute::Close,
                                 _ => {
                                     return Err(lua_error!(
-                                        labels = vec![attr_token
-                                            .span
-                                            .labeled("expected 'const' or 'close'")],
+                                        labels = vec![
+                                            attr_token.span.labeled("expected 'const' or 'close'")
+                                        ],
                                         "unexpected token"
-                                    ))
+                                    ));
                                 }
                             },
                             attr_token.span,
@@ -594,12 +594,12 @@ impl<'path, 'source> Parser<'path, 'source> {
                 let end = step.as_ref().map_or(limit.span.end, |s| s.span.end);
 
                 TokenTree::new(
-                    ForCondition::NumericFor {
+                    ForCondition::NumericFor(Box::new(NumericFor {
                         name,
                         initial,
                         limit,
                         step,
-                    },
+                    })),
                     Span::new(start_position, end),
                 )
             }
@@ -645,7 +645,7 @@ impl<'path, 'source> Parser<'path, 'source> {
                 return Err(lua_error!(
                     labels = vec![token.span.labeled("expected '=', ',', or 'in'")],
                     "unexpected token"
-                ))
+                ));
             }
             _ => {
                 return Err(lua_error!(
@@ -654,7 +654,7 @@ impl<'path, 'source> Parser<'path, 'source> {
                         "expected '=', ',', or 'in'"
                     )],
                     "unexpected end of input"
-                ))
+                ));
             }
         };
 
@@ -811,7 +811,7 @@ impl<'path, 'source> Parser<'path, 'source> {
                         "expected prefix expression"
                     )],
                     "unexpected token"
-                ))
+                ));
             }
             None => {
                 return Err(lua_error!(
@@ -820,7 +820,7 @@ impl<'path, 'source> Parser<'path, 'source> {
                         "expected prefix expression"
                     )],
                     "unexpected end of input"
-                ))
+                ));
             }
         };
 
@@ -1088,11 +1088,11 @@ impl<'path, 'source> Parser<'path, 'source> {
                         Some(expression) => (None, expression),
                         None => {
                             return Err(lua_error!(
-                                labels = vec![self
-                                    .lexer
-                                    .label_at_current_position("expected table field")],
+                                labels = vec![
+                                    self.lexer.label_at_current_position("expected table field")
+                                ],
                                 "unexpected token"
-                            ))
+                            ));
                         }
                     };
 
@@ -1140,7 +1140,7 @@ impl<'path, 'source> Parser<'path, 'source> {
                             "expected table field"
                         )],
                         "unexpected end of input"
-                    ))
+                    ));
                 }
             }
         };
@@ -1503,7 +1503,7 @@ impl<'path, 'source> Parser<'path, 'source> {
                     return Err(lua_error!(
                         labels = vec![token.span.labeled("expected parameter name")],
                         "unexpected token"
-                    ))
+                    ));
                 }
                 None => {
                     return Err(lua_error!(
@@ -1512,7 +1512,7 @@ impl<'path, 'source> Parser<'path, 'source> {
                             "expected function signature"
                         )],
                         "unexpected end of input"
-                    ))
+                    ));
                 }
             }
         }
