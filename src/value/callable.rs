@@ -1,6 +1,6 @@
 use crate::vm::VM;
 
-use super::{metatables, LuaClosure, LuaObject, LuaValue};
+use super::{LuaClosure, LuaObject, LuaValue, metatables};
 
 #[derive(Debug)]
 pub(crate) struct Callable {
@@ -31,6 +31,7 @@ impl TryFrom<&LuaValue> for Callable {
     fn try_from(value: &LuaValue) -> Result<Self, Self::Error> {
         let result = match value {
             LuaValue::Object(o) => (&*o.read().unwrap()).try_into(),
+            LuaValue::UpValue(u) => (&u.read().unwrap().0).try_into(),
             _ => Err("expected closure or native function"),
         };
 
