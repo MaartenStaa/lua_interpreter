@@ -39,6 +39,7 @@ pub struct LuaError {
     pub source_code: Option<Box<LuaSourceCode>>,
     pub labels: Option<Vec<LabeledSpan>>,
     pub source: Option<Box<LuaError>>,
+    pub chunk: Option<usize>,
 }
 
 impl Debug for LuaError {
@@ -56,25 +57,26 @@ impl From<RuntimeError> for LuaError {
             source_code: None,
             source: None,
             labels: None,
+            chunk: None,
         }
     }
 }
 
 #[derive(Debug, Clone)]
 pub enum LuaSourceCode {
-    Named(NamedSource<String>),
-    Unnamed(String),
+    Named(NamedSource<Vec<u8>>),
+    Unnamed(Vec<u8>),
 }
 
-impl From<NamedSource<String>> for LuaSourceCode {
-    fn from(ns: NamedSource<String>) -> Self {
+impl From<NamedSource<Vec<u8>>> for LuaSourceCode {
+    fn from(ns: NamedSource<Vec<u8>>) -> Self {
         LuaSourceCode::Named(ns)
     }
 }
 
-impl From<String> for LuaSourceCode {
-    fn from(s: String) -> Self {
-        LuaSourceCode::Unnamed(s)
+impl From<Vec<u8>> for LuaSourceCode {
+    fn from(v: Vec<u8>) -> Self {
+        LuaSourceCode::Unnamed(v)
     }
 }
 
@@ -128,6 +130,7 @@ impl LuaError {
             source_code: None,
             labels: None,
             source: None,
+            chunk: None,
         }
     }
 
@@ -138,7 +141,13 @@ impl LuaError {
             source_code: None,
             labels: None,
             source: Some(Box::new(self)),
+            chunk: None,
         }
+    }
+
+    pub fn with_source(&mut self, source: Self) -> &mut Self {
+        self.source = Some(Box::new(source));
+        self.source.as_deref_mut().unwrap()
     }
 
     pub fn with_source_code(mut self, src: impl Into<LuaSourceCode>) -> Self {

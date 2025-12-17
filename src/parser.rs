@@ -42,13 +42,13 @@ impl<'path, 'source> Parser<'path, 'source> {
     }
 
     fn with_source_code(&self, report: LuaError) -> LuaError {
-        let source = String::from_utf8_lossy(self.source).into_owned();
         if let Some(filename) = self.filename {
             report.with_source_code(
-                miette::NamedSource::new(filename.to_string_lossy(), source).with_language("lua"),
+                miette::NamedSource::new(filename.to_string_lossy(), self.source.to_vec())
+                    .with_language("lua"),
             )
         } else {
-            report.with_source_code(source)
+            report.with_source_code(self.source.to_vec())
         }
     }
 

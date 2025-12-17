@@ -288,15 +288,10 @@ impl<'source> VM<'source> {
                 .rev()
                 .enumerate()
             {
-                // let parent = &frame[1];
-                // let frame = &frame[0];
-
                 let mut frame_err = LuaError::new(format!(
                     "#{i} {}",
                     String::from_utf8_lossy(frame.name.as_deref().unwrap_or(b"<anonymous>")),
                 ));
-                // err = err.wrap_err();
-                // .with_source_code(source);
 
                 // The initial error should already have a span attached, beyond
                 // that we want to ensure that we attach labels for every frame
@@ -314,8 +309,6 @@ impl<'source> VM<'source> {
                     let source = chunk.named_source();
                     let span = chunk.instruction_spans.get(&frame.caller_addr);
                     if let Some(span) = span {
-                        // current.source_code = Some(Box::new(source.into()));
-                        // current.labels = Some((*span).into());
                         frame_err = frame_err.with_source_code(source).with_labels(*span);
                     }
                 }
@@ -1435,9 +1428,8 @@ impl<'source> VM<'source> {
     pub(crate) fn err<T: std::fmt::Display>(&self, message: T) -> LuaError {
         let frame = &self.call_stack[self.call_stack_index - 1];
         let chunk = &self.chunks[frame.chunk];
-        let source = chunk.named_source();
 
-        let mut error = LuaError::new(message.to_string()); //.with_source_code(source);
+        let mut error = LuaError::new(message.to_string());
         error.chunk = Some(frame.chunk);
         if let Some(span) = chunk.instruction_spans.get(&chunk.ip) {
             error.with_labels(*span)

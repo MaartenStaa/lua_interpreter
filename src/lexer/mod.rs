@@ -7,7 +7,7 @@ use miette::LabeledSpan;
 use numbers::{NumberParser, ParsedNumber};
 use subslice::SubsliceExt;
 
-use crate::error::{lua_error, Context, LuaError};
+use crate::error::{Context, LuaError, lua_error};
 use crate::token::{Span, Token, TokenKind};
 use compat::ByteCharExt;
 
@@ -40,13 +40,13 @@ impl<'path, 'source> Lexer<'path, 'source> {
     }
 
     pub fn with_source_code(&self, report: LuaError) -> LuaError {
-        let source = String::from_utf8_lossy(self.source).into_owned();
         if let Some(filename) = self.filename {
             report.with_source_code(
-                miette::NamedSource::new(filename.to_string_lossy(), source).with_language("lua"),
+                miette::NamedSource::new(filename.to_string_lossy(), self.source.to_vec())
+                    .with_language("lua"),
             )
         } else {
-            report.with_source_code(source)
+            report.with_source_code(self.source.to_vec())
         }
     }
 }
@@ -242,7 +242,7 @@ impl<'path, 'source> Iterator for Lexer<'path, 'source> {
                             "unexpected character"
                         )],
                         "unexpected token {c}"
-                    ))))
+                    ))));
                 }
             };
 
