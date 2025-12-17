@@ -36,17 +36,12 @@ fn concat(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
             temp = Some(n.to_string());
             temp.as_ref().map(|s| s.as_bytes())
         }
-        Some(LuaValue::Nil) => None,
+        Some(LuaValue::Nil) | None => None,
         Some(v) => {
             return Err(lua_error!(
                 "bad argument #1 to 'table.concat' (string expected, got {type_name})",
                 type_name = v.type_name()
-            ))
-        }
-        None => {
-            return Err(lua_error!(
-                "bad argument #1 to 'table.concat' (value expected)"
-            ))
+            ));
         }
     };
     let i = match input.get(2) {
@@ -55,7 +50,7 @@ fn concat(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
             return Err(lua_error!(
                 "bad argument #2 to 'table.concat' (number expected, got {type_name})",
                 type_name = v.type_name()
-            ))
+            ));
         }
         None => 1,
     };
@@ -65,7 +60,7 @@ fn concat(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
             return Err(lua_error!(
                 "bad argument #3 to 'table.concat' (number expected, got {type_name})",
                 type_name = v.type_name()
-            ))
+            ));
         }
         None => None,
     };
@@ -88,10 +83,10 @@ fn concat(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
                         LuaValue::Number(n) => result.extend(n.to_string().as_bytes()),
                         v => {
                             return Err(lua_error!(
-                            "invalid value ({type_name}) at index {index} in table for 'table.concat'",
-                            type_name = v.type_name(),
-                            index = k
-                        ))
+                                "invalid value ({type_name}) at index {index} in table for 'table.concat'",
+                                type_name = v.type_name(),
+                                index = k
+                            ));
                         }
                     }
                 }
@@ -99,19 +94,19 @@ fn concat(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
             _ => {
                 return Err(lua_error!(
                     "bad argument #1 to 'table.concat' (table expected)"
-                ))
+                ));
             }
         },
         Some(v) => {
             return Err(lua_error!(
                 "bad argument #1 to 'table.concat' (table expected, got {type_name})",
                 type_name = v.type_name()
-            ))
+            ));
         }
         None => {
             return Err(lua_error!(
                 "bad argument #1 to 'table.concat' (value expected)"
-            ))
+            ));
         }
     }
 
