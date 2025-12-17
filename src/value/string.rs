@@ -138,7 +138,7 @@ fn unm(_: &mut VM, mut values: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
 fn idiv(_: &mut VM, values: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     let (a, b) = value_numbers(values)?;
 
-    Ok(vec![LuaValue::Number(a.idiv(b))])
+    Ok(vec![LuaValue::Number(a.idiv(&b))])
 }
 
 fn band(_: &mut VM, values: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {

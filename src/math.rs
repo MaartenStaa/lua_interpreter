@@ -5,7 +5,7 @@ use std::{
 
 use crate::{
     ast,
-    error::{lua_error, Context},
+    error::{lua_error, Context, LuaError},
     value::{LuaNumber, LuaObject, LuaValue},
 };
 
@@ -226,11 +226,11 @@ impl ops::Not for &LuaValue {
     }
 }
 
-impl ops::Shl for LuaValue {
-    type Output = crate::Result<Self>;
+impl ops::Shl for &LuaValue {
+    type Output = crate::Result<LuaValue>;
 
-    fn shl(self, other: Self) -> crate::Result<Self> {
-        match (&self, &other) {
+    fn shl(self, other: Self) -> Self::Output {
+        match (self, &other) {
             (LuaValue::Number(a), LuaValue::Number(b)) => Ok(LuaValue::Number((a << b)?)),
             _ => {
                 let left_type = self.type_name();
@@ -246,11 +246,11 @@ impl ops::Shl for LuaValue {
     }
 }
 
-impl ops::Shr for LuaValue {
-    type Output = crate::Result<Self>;
+impl ops::Shr for &LuaValue {
+    type Output = crate::Result<LuaValue>;
 
-    fn shr(self, other: Self) -> crate::Result<Self> {
-        match (&self, &other) {
+    fn shr(self, other: Self) -> Self::Output {
+        match (self, &other) {
             (LuaValue::Number(a), LuaValue::Number(b)) => Ok(LuaValue::Number((a >> b)?)),
             _ => {
                 let left_type = self.type_name();
@@ -277,7 +277,7 @@ impl PartialOrd for LuaValue {
 }
 
 impl LuaValue {
-    pub fn concat(self, other: Self) -> crate::Result<Self> {
+    pub fn concat(self, other: Self) -> Result<Self, (LuaError, LuaValue, LuaValue)> {
         match (self, other) {
             (LuaValue::String(mut a), LuaValue::String(b)) => {
                 a.extend(b);
@@ -287,12 +287,9 @@ impl LuaValue {
                 a.extend(b.to_string().as_bytes());
                 Ok(LuaValue::String(a))
             }
-            (LuaValue::Number(a), LuaValue::String(b)) => {
-                // b.insert_str(0, &a.to_string());
-                Ok(LuaValue::String(Vec::from_iter(
-                    a.to_string().into_bytes().into_iter().chain(b),
-                )))
-            }
+            (LuaValue::Number(a), LuaValue::String(b)) => Ok(LuaValue::String(Vec::from_iter(
+                a.to_string().into_bytes().into_iter().chain(b),
+            ))),
             (LuaValue::Number(a), LuaValue::Number(b)) => Ok(LuaValue::String(Vec::from_iter(
                 a.to_string()
                     .into_bytes()
@@ -303,10 +300,14 @@ impl LuaValue {
                 let left_type = self_.type_name();
                 let right_type = other.type_name();
 
-                Err(lua_error!(
-                    "cannot concatenate a '{}' with a '{}'",
-                    left_type,
-                    right_type
+                Err((
+                    lua_error!(
+                        "cannot concatenate a '{}' with a '{}'",
+                        left_type,
+                        right_type
+                    ),
+                    self_,
+                    other,
                 ))
             }
         }
@@ -549,6 +550,21 @@ impl ops::BitXor for &LuaNumber {
     }
 }
 
+impl ops::Shl for LuaNumber {
+    type Output = crate::Result<LuaNumber>;
+
+    fn shl(self, other: Self) -> Self::Output {
+        match (self.integer_repr(), other.integer_repr()) {
+            (Ok(a), Ok(b)) => Ok(LuaNumber::Integer(if b >= 0 {
+                a.checked_shl(b as u32).unwrap_or(0)
+            } else {
+                a.checked_shr(-b as u32).unwrap_or(0)
+            })),
+            (Err(e), _) | (_, Err(e)) => Err(e).wrap_err("during bitwise shift left"),
+        }
+    }
+}
+
 impl ops::Shl for &LuaNumber {
     type Output = crate::Result<LuaNumber>;
 
@@ -564,6 +580,21 @@ impl ops::Shl for &LuaNumber {
     }
 }
 
+impl ops::Shr for LuaNumber {
+    type Output = crate::Result<LuaNumber>;
+
+    fn shr(self, other: Self) -> Self::Output {
+        match (self.integer_repr(), other.integer_repr()) {
+            (Ok(a), Ok(b)) => Ok(LuaNumber::Integer(if b >= 0 {
+                a.checked_shr(b as u32).unwrap_or(0)
+            } else {
+                a.checked_shl(-b as u32).unwrap_or(0)
+            })),
+            (Err(e), _) | (_, Err(e)) => Err(e).wrap_err("during bitwise shift right"),
+        }
+    }
+}
+
 impl ops::Shr for &LuaNumber {
     type Output = crate::Result<LuaNumber>;
 
@@ -575,6 +606,17 @@ impl ops::Shr for &LuaNumber {
                 a.checked_shl(-b as u32).unwrap_or(0)
             })),
             (Err(e), _) | (_, Err(e)) => Err(e).wrap_err("during bitwise shift right"),
+        }
+    }
+}
+
+impl ops::Not for LuaNumber {
+    type Output = crate::Result<LuaNumber>;
+
+    fn not(self) -> crate::Result<LuaNumber> {
+        match self.integer_repr() {
+            Ok(a) => Ok(LuaNumber::Integer(!a)),
+            Err(e) => Err(e).wrap_err("during bitwise not"),
         }
     }
 }
@@ -613,7 +655,7 @@ impl LuaNumber {
         }
     }
 
-    pub fn idiv(self, other: Self) -> Self {
+    pub fn idiv(&self, other: &Self) -> Self {
         (self / other).floor()
     }
 
