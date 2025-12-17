@@ -57,14 +57,22 @@ impl Debug for LuaValue {
 
 impl PartialEq for LuaValue {
     fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (LuaValue::Marker, LuaValue::Marker) => true,
+        let lhs = match self {
+            LuaValue::UpValue(u) => &*u.read().unwrap(),
+            v => v,
+        };
+        let rhs = match other {
+            LuaValue::UpValue(u) => &*u.read().unwrap(),
+            v => v,
+        };
+
+        match (lhs, rhs) {
             (LuaValue::Nil, LuaValue::Nil) => true,
             (LuaValue::Boolean(a), LuaValue::Boolean(b)) => a == b,
             (LuaValue::Number(a), LuaValue::Number(b)) => a == b,
             (LuaValue::String(a), LuaValue::String(b)) => a == b,
             (LuaValue::Object(a), LuaValue::Object(b)) => *a.read().unwrap() == *b.read().unwrap(),
-            (LuaValue::UpValue(a), LuaValue::UpValue(b)) => Arc::ptr_eq(a, b),
+            // NOTE: Don't need to account for upvalues here since they are dereferenced above.
             _ => false,
         }
     }
