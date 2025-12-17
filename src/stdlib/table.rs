@@ -77,10 +77,10 @@ fn concat(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
             LuaObject::Table(t) => {
                 let j = j.unwrap_or_else(|| t.len() as i64);
                 for k in i..=j {
-                    if k > i {
-                        if let Some(sep) = sep.as_ref() {
-                            result.extend(*sep);
-                        }
+                    if k > i
+                        && let Some(sep) = sep.as_ref()
+                    {
+                        result.extend(*sep);
                     }
 
                     match t.get(&k.into()).unwrap_or(&LuaValue::Nil) {

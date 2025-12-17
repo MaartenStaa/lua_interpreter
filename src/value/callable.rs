@@ -34,15 +34,15 @@ impl TryFrom<&LuaValue> for Callable {
             _ => Err("expected closure or native function"),
         };
 
-        if result.is_err() {
-            if let Some(__call) = value.get_metavalue(&metatables::CALL_KEY) {
-                let __call: Result<Callable, _> = __call.try_into();
-                if let Ok(callable) = __call {
-                    return Ok(Callable {
-                        method: callable.method,
-                        is_metamethod: true,
-                    });
-                }
+        if result.is_err()
+            && let Some(__call) = value.get_metavalue(&metatables::CALL_KEY)
+        {
+            let __call: Result<Callable, _> = __call.try_into();
+            if let Ok(callable) = __call {
+                return Ok(Callable {
+                    method: callable.method,
+                    is_metamethod: true,
+                });
             }
         }
 

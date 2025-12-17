@@ -412,11 +412,11 @@ impl<'path, 'source> Lexer<'path, 'source> {
 
         let mut chars = self.rest.iter().peekable();
         // Long-form string: newline immediately after the starting character is ignored
-        if long_form.is_some() {
-            if let Some(b'\n') = chars.peek() {
-                chars.next();
-                self.position += 1;
-            }
+        if long_form.is_some()
+            && let Some(b'\n') = chars.peek()
+        {
+            chars.next();
+            self.position += 1;
         }
 
         let mut escape = false;
