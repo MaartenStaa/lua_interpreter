@@ -43,14 +43,22 @@ impl Debug for LuaValue {
             LuaValue::Boolean(b) => write!(f, "{}", b),
             LuaValue::Number(n) => write!(f, "{}", n),
             LuaValue::String(s) => write!(f, "{:?}", String::from_utf8_lossy(s)),
-            LuaValue::Object(o) => {
-                let o = o.read().unwrap();
-                write!(f, "{:?}", o)
-            }
-            LuaValue::UpValue(u) => {
-                let inner = u.read().unwrap();
-                write!(f, "upvalue<0x{:x}>: {:?}", u as *const _ as usize, inner)
-            }
+            // NOTE: Here and for UpValue, lock by write to prevent deadlock/stack overflow, in the
+            // case where values are self-referential.
+            LuaValue::Object(o) => match o.try_write() {
+                Ok(o) => {
+                    write!(f, "{:?}", o)
+                }
+                Err(e) => {
+                    write!(f, "object<0x{:x}>: <locked: {e}>", o as *const _ as usize)
+                }
+            },
+            LuaValue::UpValue(u) => match u.try_write() {
+                Ok(inner) => write!(f, "upvalue<0x{:x}>: {:?}", u as *const _ as usize, inner),
+                Err(e) => {
+                    write!(f, "upvalue<0x{:x}>: <locked: {e}>", u as *const _ as usize)
+                }
+            },
         }
     }
 }
