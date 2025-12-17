@@ -1,6 +1,6 @@
 use std::sync::LazyLock;
 
-use crate::{error::lua_error, macros::assert_table, vm::VM};
+use crate::{macros::assert_table, vm::VM};
 
 use super::{LuaObject, LuaTable, LuaValue, UserData};
 
