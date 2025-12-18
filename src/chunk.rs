@@ -93,9 +93,6 @@ impl<'source> Chunk<'source> {
         num_args: u8,
         span: Option<Span>,
     ) {
-        eprintln!(
-            "PUSH CALL INSTRUCTION: func_register={function_register} args_multres={args_multres} result_mode={result_mode:?} num_args={num_args}"
-        );
         // Instruction: [CALL|CALLM] [NUM_RESULTS] [NUM_KNOWN_ARGUMENTS]
         // CALL for regular calls, CALLM for calls with a multres expression at
         // the end of its arguments.

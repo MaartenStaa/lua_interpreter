@@ -124,9 +124,8 @@ impl Frame {
         })
     }
 
-    fn take_register(&mut self, why: &str) -> u8 {
+    fn take_register(&mut self) -> u8 {
         let reg = self.register_index;
-        eprintln!("Taking register R{reg} for {}", why);
         self.register_index += 1;
         if self.register_index > self.max_registers {
             self.max_registers = self.register_index;
@@ -134,25 +133,18 @@ impl Frame {
         reg
     }
 
-    fn reserve_register(&mut self, index: u8, why: &str) {
-        eprintln!("Reserving register R{index} for {}", why);
+    fn reserve_register(&mut self, index: u8) {
         if index >= self.register_index {
             self.register_index = index + 1;
         }
     }
 
-    fn release_register(&mut self, why: &str) {
-        eprintln!(
-            "Releasing register R{} for {}",
-            self.register_index - 1,
-            why
-        );
+    fn release_register(&mut self) {
         assert!(self.register_index > 0, "no registers to release");
         self.register_index -= 1;
     }
 
-    fn release_registers_from(&mut self, index: u8, why: &str) {
-        eprintln!("Releasing registers from R{index} for {}", why);
+    fn release_registers_from(&mut self, index: u8) {
         assert!(
             index <= self.register_index,
             "cannot reset registers to a higher index ({index} > {})",
@@ -161,8 +153,7 @@ impl Frame {
         self.register_index = index;
     }
 
-    fn set_register_index(&mut self, index: u8, why: &str) {
-        eprintln!("Setting register index to R{index} for {}", why);
+    fn set_register_index(&mut self, index: u8) {
         self.register_index = index;
         if self.register_index > self.max_registers {
             self.max_registers = self.register_index;
@@ -355,11 +346,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
 
     fn push_load_nil(&mut self, span: Option<Span>) -> u8 {
         let const_index = self.get_const_index(LuaConst::Nil);
-        let register = self
-            .frames
-            .last_mut()
-            .unwrap()
-            .take_register("push_load_nil");
+        let register = self.frames.last_mut().unwrap().take_register();
         self.chunk.push_bytecode(
             Bytecode::LoadConst {
                 register,
@@ -439,7 +426,6 @@ impl<'a, 'source> Compiler<'a, 'source> {
     ) -> crate::Result<BlockResult> {
         let span = statement.span;
         let current_register = self.frames.last().unwrap().register_index;
-        // dbg!(&statement);
 
         Ok(match statement.node {
             Statement::FunctionCall(function_call) => {
@@ -451,7 +437,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                 self.frames
                     .last_mut()
                     .unwrap()
-                    .release_registers_from(current_register, "post-function-call cleanup");
+                    .release_registers_from(current_register);
                 BlockResult::new()
             }
             Statement::LocalDeclaraction(names, expressions) => {
@@ -546,10 +532,10 @@ impl<'a, 'source> Compiler<'a, 'source> {
                     }
                 }
 
-                self.frames.last_mut().unwrap().release_registers_from(
-                    current_register + num_names as u8,
-                    "extraneous local declaration registers",
-                );
+                self.frames
+                    .last_mut()
+                    .unwrap()
+                    .release_registers_from(current_register + num_names as u8);
 
                 BlockResult::new()
             }
@@ -565,7 +551,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                 self.frames
                     .last_mut()
                     .unwrap()
-                    .release_registers_from(name_r + 1, "local function declaration cleanup");
+                    .release_registers_from(name_r + 1);
 
                 BlockResult::new()
             }
@@ -616,7 +602,6 @@ impl<'a, 'source> Compiler<'a, 'source> {
                             );
                         }
                         Variable::Field(target, name) => {
-                            dbg!(&target);
                             // Same story as above, but with a string key
                             let target_r = self
                                 .compile_prefix_expression(
@@ -626,11 +611,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                                 )?
                                 .get_register();
                             let const_index = self.get_const_index(LuaConst::String(name.node.0));
-                            let const_r = self
-                                .frames
-                                .last_mut()
-                                .unwrap()
-                                .take_register("assignment by field name");
+                            let const_r = self.frames.last_mut().unwrap().take_register();
                             self.chunk.push_bytecode(
                                 Bytecode::LoadConst {
                                     register: const_r,
@@ -654,7 +635,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                 self.frames
                     .last_mut()
                     .unwrap()
-                    .release_registers_from(current_register, "post-assignment cleanup");
+                    .release_registers_from(current_register);
 
                 BlockResult::new()
             }
@@ -686,7 +667,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                 self.frames
                     .last_mut()
                     .unwrap()
-                    .release_registers_from(current_register, "if condition");
+                    .release_registers_from(current_register);
 
                 // Compile the block
                 let block_has_return = block.node.return_statement.is_some();
@@ -731,7 +712,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                     self.frames
                         .last_mut()
                         .unwrap()
-                        .release_registers_from(condition_r, "else-if condition");
+                        .release_registers_from(condition_r);
                     // Compile the block
                     let block_has_return = else_if.node.block.node.return_statement.is_some();
                     block_result.extend(self.compile_block(
@@ -867,7 +848,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                 self.frames
                     .last_mut()
                     .unwrap()
-                    .release_registers_from(current_register, "while loop condition");
+                    .release_registers_from(current_register);
 
                 let loop_scope_depth = self.begin_scope();
                 let block_result = self.compile_block(
@@ -995,10 +976,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                             );
 
                             // Release `zero_r`.
-                            self.frames
-                                .last_mut()
-                                .unwrap()
-                                .release_register("numeric-for zero check");
+                            self.frames.last_mut().unwrap().release_register();
 
                             // Otherwise, move past it
                             self.chunk.patch_addr_placeholder(jmp_false_addr);
@@ -1039,11 +1017,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                             None,
                         );
 
-                        let limit_eval_r = self
-                            .frames
-                            .last_mut()
-                            .unwrap()
-                            .take_register("numeric-for limit evaluation");
+                        let limit_eval_r = self.frames.last_mut().unwrap().take_register();
 
                         // Loop is increasing, check if ident <= limit
                         self.chunk.push_bytecode(
@@ -1107,10 +1081,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                         self.chunk.patch_addr_placeholder(inside_block_jump);
 
                         // Release the limit_eval_r register.
-                        self.frames
-                            .last_mut()
-                            .unwrap()
-                            .release_register("numeric-for limit evaluation");
+                        self.frames.last_mut().unwrap().release_register();
 
                         (step_addr, jmp_false_addr)
                     }
@@ -1128,7 +1099,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                         self.frames
                             .last_mut()
                             .unwrap()
-                            .set_register_index(current_register + 4, "generic for alignment");
+                            .set_register_index(current_register + 4);
 
                         // Save the result as locals: the iterator function, the state, the initial
                         // value for the control variable (which is the first name).
@@ -1158,9 +1129,9 @@ impl<'a, 'source> Compiler<'a, 'source> {
                         // Call the iterator function
                         let step_addr = self.chunk.get_current_addr();
                         let frame = self.frames.last_mut().unwrap();
-                        let func_r = frame.take_register("generic for iterator call");
-                        let state_r = frame.take_register("generic for iterator call: state");
-                        let control_r = frame.take_register("generic for iterator call: control");
+                        let func_r = frame.take_register();
+                        let state_r = frame.take_register();
+                        let control_r = frame.take_register();
                         self.chunk.push_bytecode(
                             Bytecode::Mov {
                                 dest_register: func_r,
@@ -1208,7 +1179,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                         self.frames
                             .last_mut()
                             .unwrap()
-                            .release_registers_from(func_r, "generic for iterator call cleanup");
+                            .release_registers_from(func_r);
 
                         // Now we need to evaluate whether any value was returned. If not, we
                         // should break out of the loop.
@@ -1228,10 +1199,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                             None,
                         );
 
-                        self.frames
-                            .last_mut()
-                            .unwrap()
-                            .release_register("generic for nil check");
+                        self.frames.last_mut().unwrap().release_register();
 
                         (step_addr, jmp_true_addr)
                     }
@@ -1469,11 +1437,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
         // If this is a method call, we need to push the object as the first argument
         let (function_register, self_arg_n) =
             if let Some(method_name) = function_call.node.method_name {
-                let func_r = self
-                    .frames
-                    .last_mut()
-                    .unwrap()
-                    .take_register("method call function");
+                let func_r = self.frames.last_mut().unwrap().take_register();
                 let table_r = self
                     .compile_prefix_expression(
                         *function_call.node.function,
@@ -1484,11 +1448,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
 
                 let method_name_const_index =
                     self.get_const_index(LuaConst::String(method_name.node.0));
-                let method_name_r = self
-                    .frames
-                    .last_mut()
-                    .unwrap()
-                    .take_register("method call name");
+                let method_name_r = self.frames.last_mut().unwrap().take_register();
                 self.chunk.push_bytecode(
                     Bytecode::LoadConst {
                         register: method_name_r,
@@ -1509,7 +1469,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                 self.frames
                     .last_mut()
                     .unwrap()
-                    .release_registers_from(method_name_r, "method call name");
+                    .release_registers_from(method_name_r);
 
                 // Account for one extra parameter (the `self` argument)
                 (func_r, 1)
@@ -1543,7 +1503,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
         self.frames
             .last_mut()
             .unwrap()
-            .release_registers_from(function_register + 1, "function call cleanup");
+            .release_registers_from(function_register + 1);
 
         Ok(function_register)
     }
@@ -1571,7 +1531,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
         let mut num_args = function_call.node.args.node.len();
         let (parameters_register, is_self_call) = if frame.method_name.is_some() {
             // Load the `self` argument into the first parameter register.
-            let register = frame.take_register("tail call self parameter");
+            let register = frame.take_register();
             self.chunk.push_bytecode(
                 Bytecode::Mov {
                     dest_register: register,
@@ -1631,11 +1591,6 @@ impl<'a, 'source> Compiler<'a, 'source> {
         self.begin_scope();
 
         // Define the function arguments
-        // dbg!(
-        //     "Defining {} parameters: {:?}",
-        //     function_def.node.parameters.len(),
-        //     &function_def.node.parameters
-        // );
         let parameter_count = function_def.node.parameters.len();
         for (index, parameter) in function_def.node.parameters.into_iter().enumerate() {
             self.add_local(parameter.node.0, index as u8, Some(parameter.span));
@@ -1683,12 +1638,8 @@ impl<'a, 'source> Compiler<'a, 'source> {
                 has_varargs: function_def.node.varargs.is_some(),
                 max_registers: frame.max_registers,
             }));
-        let closure_r = closure_r.unwrap_or_else(|| {
-            self.frames
-                .last_mut()
-                .unwrap()
-                .take_register("loading closure")
-        });
+        let closure_r =
+            closure_r.unwrap_or_else(|| self.frames.last_mut().unwrap().take_register());
         self.chunk.push_bytecode(
             Bytecode::LoadClosure {
                 register: closure_r,
@@ -1765,7 +1716,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                         self.frames
                             .last_mut()
                             .unwrap()
-                            .release_registers_from(lhs_r, "binary and lhs");
+                            .release_registers_from(lhs_r);
 
                         let rhs_r = self
                             .compile_expression(
@@ -1798,7 +1749,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                         self.frames
                             .last_mut()
                             .unwrap()
-                            .release_registers_from(lhs_r, "binary or lhs");
+                            .release_registers_from(lhs_r);
 
                         let rhs_r = self
                             .compile_expression(
@@ -1814,11 +1765,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                         lhs_r
                     }
                     _ => {
-                        let dest_r = self
-                            .frames
-                            .last_mut()
-                            .unwrap()
-                            .take_register("binary op destination");
+                        let dest_r = self.frames.last_mut().unwrap().take_register();
                         let lhs_r = self
                             .compile_expression(
                                 *lhs,
@@ -1835,12 +1782,10 @@ impl<'a, 'source> Compiler<'a, 'source> {
                             .get_register();
                         self.compile_binary_operator(op, dest_r, lhs_r, rhs_r, expression.span);
 
-                        // dbg!(dest_r, lhs_r, rhs_r, self.frames.last().unwrap());
-
                         self.frames
                             .last_mut()
                             .unwrap()
-                            .release_registers_from(dest_r + 1, "binary op operands");
+                            .release_registers_from(dest_r + 1);
 
                         dest_r
                     }
@@ -1859,10 +1804,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                 let dest_r = if current_r == expr_r {
                     expr_r
                 } else {
-                    self.frames
-                        .last_mut()
-                        .unwrap()
-                        .take_register("unary operator destination")
+                    self.frames.last_mut().unwrap().take_register()
                 };
                 self.compile_unary_operator(op, expression.span, dest_r, expr_r);
 
@@ -1879,7 +1821,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                 ExpressionResult::Single { register }
             }
             Expression::Ellipsis => {
-                let register = self.frames.last_mut().unwrap().take_register("ellipsis");
+                let register = self.frames.last_mut().unwrap().take_register();
                 self.chunk.push_bytecode(
                     Bytecode::LoadVararg {
                         dest_register: register,
@@ -1918,11 +1860,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                         },
                     ),
                     Variable::Indexed(prefix, index) => {
-                        let dest_r = self
-                            .frames
-                            .last_mut()
-                            .unwrap()
-                            .take_register("indexed variable destination");
+                        let dest_r = self.frames.last_mut().unwrap().take_register();
                         let table_r = self
                             .compile_prefix_expression(
                                 *prefix,
@@ -1948,7 +1886,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                         self.frames
                             .last_mut()
                             .unwrap()
-                            .release_registers_from(dest_r + 1, "indexed variable operands");
+                            .release_registers_from(dest_r + 1);
 
                         dest_r
                     }
@@ -1963,11 +1901,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                             .get_register();
 
                         let const_index = self.get_const_index(LuaConst::String(name.node.0));
-                        let name_r = self
-                            .frames
-                            .last_mut()
-                            .unwrap()
-                            .take_register("field variable name");
+                        let name_r = self.frames.last_mut().unwrap().take_register();
                         self.chunk.push_bytecode(
                             Bytecode::LoadConst {
                                 register: name_r,
@@ -1992,7 +1926,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                         self.frames
                             .last_mut()
                             .unwrap()
-                            .release_registers_from(dest_r + 1, "field variable operands");
+                            .release_registers_from(dest_r + 1);
 
                         dest_r
                     }
@@ -2049,11 +1983,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
             }
 
             let const_index = self.get_const_index(LuaConst::Table(new_table));
-            let table_r = self
-                .frames
-                .last_mut()
-                .unwrap()
-                .take_register("table constant");
+            let table_r = self.frames.last_mut().unwrap().take_register();
             self.chunk.push_bytecode(
                 Bytecode::LoadConst {
                     register: table_r,
@@ -2065,7 +1995,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
             return Ok(table_r);
         }
 
-        let table_r = self.frames.last_mut().unwrap().take_register("table");
+        let table_r = self.frames.last_mut().unwrap().take_register();
         self.chunk.push_bytecode(
             Bytecode::NewTable {
                 dest_register: table_r,
@@ -2102,11 +2032,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
             match field.node {
                 Field::Named(name, value) => {
                     let const_index = self.get_const_index(LuaConst::String(name.node.0));
-                    let const_r = self
-                        .frames
-                        .last_mut()
-                        .unwrap()
-                        .take_register("table field name");
+                    let const_r = self.frames.last_mut().unwrap().take_register();
                     self.chunk.push_bytecode(
                         Bytecode::LoadConst {
                             register: const_r,
@@ -2133,7 +2059,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                     self.frames
                         .last_mut()
                         .unwrap()
-                        .release_registers_from(const_r, "table field assignment cleanup");
+                        .release_registers_from(const_r);
                 }
                 Field::Indexed(index_expression, value) => {
                     let index_r = self
@@ -2159,10 +2085,10 @@ impl<'a, 'source> Compiler<'a, 'source> {
                         Some(field.span),
                     );
 
-                    self.frames.last_mut().unwrap().release_registers_from(
-                        table_r + 1,
-                        "table indexed field assignment cleanup",
-                    );
+                    self.frames
+                        .last_mut()
+                        .unwrap()
+                        .release_registers_from(table_r + 1);
                 }
                 Field::Value(value) => {
                     previous_was_value_field = true;
@@ -2208,17 +2134,13 @@ impl<'a, 'source> Compiler<'a, 'source> {
         self.frames
             .last_mut()
             .unwrap()
-            .release_registers_from(table_r + 1, "table constructor cleanup");
+            .release_registers_from(table_r + 1);
 
         Ok(table_r)
     }
 
     fn compile_load_literal(&mut self, literal: Literal, span: Option<Span>) -> u8 {
-        let register = self
-            .frames
-            .last_mut()
-            .unwrap()
-            .take_register(&format!("literal {literal:?}"));
+        let register = self.frames.last_mut().unwrap().take_register();
         let const_index = match literal {
             Literal::Nil => self.get_const_index(LuaConst::Nil),
             Literal::Boolean(b) => self.get_const_index(LuaConst::Boolean(b)),
@@ -2427,10 +2349,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                     return local;
                 }
                 VariableMode::Read => {
-                    let register = self.frames.last_mut().unwrap().take_register(&format!(
-                        "reading variable {}",
-                        String::from_utf8_lossy(&name.node.0)
-                    ));
+                    let register = self.frames.last_mut().unwrap().take_register();
                     (
                         Bytecode::Mov {
                             dest_register: register,
@@ -2450,10 +2369,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
         } else if let Some(upvalue) = self.resolve_upvalue(&name.node.0) {
             match mode {
                 VariableMode::Read | VariableMode::Ref => {
-                    let register = self.frames.last_mut().unwrap().take_register(&format!(
-                        "reading upvalue {}",
-                        String::from_utf8_lossy(&name.node.0)
-                    ));
+                    let register = self.frames.last_mut().unwrap().take_register();
                     (
                         Bytecode::GetUpval {
                             dest_register: register,
@@ -2474,10 +2390,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
             let const_index = self.get_global_name_index(name.node.0.clone());
             match mode {
                 VariableMode::Read | VariableMode::Ref => {
-                    let register = self.frames.last_mut().unwrap().take_register(&format!(
-                        "reading global '{}'",
-                        String::from_utf8_lossy(&name.node.0)
-                    ));
+                    let register = self.frames.last_mut().unwrap().take_register();
                     (
                         Bytecode::GetGlobal {
                             dest_register: register,
@@ -2544,7 +2457,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
             .scope_starting_registers
             .pop()
             .expect("there should be a starting register for the scope");
-        current_frame.release_registers_from(starting_register, "ending scope");
+        current_frame.release_registers_from(starting_register);
 
         while !current_frame.locals.is_empty()
             && current_frame
@@ -2637,10 +2550,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
 
     fn add_local(&mut self, name: Vec<u8>, register: u8, span: Option<Span>) {
         let current_frame = self.frames.last_mut().unwrap();
-        current_frame.reserve_register(
-            register,
-            &format!("adding local {}", String::from_utf8_lossy(&name)),
-        );
+        current_frame.reserve_register(register);
         let local = Local {
             name: name.clone(),
             depth: current_frame.scope_depth,
