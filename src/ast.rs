@@ -1,11 +1,22 @@
 // Reference: https://www.lua.org/manual/5.4/manual.html#9
 
+use std::fmt::Debug;
+
 use crate::token::Span;
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(PartialEq, Clone)]
 pub struct TokenTree<T> {
     pub node: T,
     pub span: Span,
+}
+
+impl<T> Debug for TokenTree<T>
+where
+    T: Debug,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?} - {:?}", self.span, self.node)
+    }
 }
 
 impl<T> TokenTree<T> {
