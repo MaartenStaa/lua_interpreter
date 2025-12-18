@@ -484,7 +484,8 @@ impl<'path, 'source> Parser<'path, 'source> {
                                         labels = vec![
                                             attr_token.span.labeled("expected 'const' or 'close'")
                                         ],
-                                        "unexpected token"
+                                        "unknown attribute '{}'",
+                                        String::from_utf8_lossy(attr_str)
                                     ));
                                 }
                             },

@@ -102,7 +102,11 @@ pub type Result<T = ()> = std::result::Result<T, LuaError>;
 
 impl Display for LuaError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.message)
+        let mut target = self;
+        while let Some(source) = target.source.as_deref() {
+            target = source;
+        }
+        write!(f, "{}", target.message)
     }
 }
 
