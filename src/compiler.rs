@@ -44,12 +44,26 @@ struct Local {
     name: Vec<u8>,
     depth: u8,
     span: Option<Span>,
+    attributes: u8,
 }
 
-#[derive(Debug, Clone)]
+impl Local {
+    fn is_constant(&self) -> bool {
+        self.attributes & (LuaVariableAttribute::Constant as u8) != 0
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
 pub(crate) struct Upvalue {
     pub(crate) is_local: bool,
     pub(crate) index: u8,
+    pub(crate) attributes: u8,
+}
+
+impl Upvalue {
+    fn is_constant(&self) -> bool {
+        self.attributes & (LuaVariableAttribute::Constant as u8) != 0
+    }
 }
 
 #[derive(Debug)]
@@ -114,10 +128,10 @@ impl Frame {
         *self.scope_ids.last().expect("scope_ids is not empty")
     }
 
-    fn resolve_local(&self, name: &[u8]) -> Option<u8> {
+    fn resolve_local(&self, name: &[u8]) -> Option<(u8, &Local)> {
         self.locals.iter().enumerate().rev().find_map(|(i, local)| {
             if local.name == name {
-                Some(i as u8)
+                Some((i as u8, local))
             } else {
                 None
             }
@@ -501,25 +515,22 @@ impl<'a, 'source> Compiler<'a, 'source> {
                         // - Then for `b`, we need to set it to `nil`.
                         self.push_load_nil(Some(name.span));
                     }
-                    self.add_local(name.node.name.node.0, name_register, Some(name.span));
 
+                    let mut attributes = 0;
                     match name.node.attribute {
                         Some(TokenTree {
                             node: LocalAttribute::Const,
                             ..
                         }) => {
-                            self.chunk.push_bytecode(
-                                Bytecode::SetLocalAttr {
-                                    register: name_register,
-                                    attr_index: LuaVariableAttribute::Constant,
-                                },
-                                Some(span),
-                            );
+                            attributes |= LuaVariableAttribute::Constant as u8;
                         }
                         Some(TokenTree {
                             node: LocalAttribute::Close,
                             ..
                         }) => {
+                            // `<close>` implies `<const>`
+                            attributes |= LuaVariableAttribute::Constant as u8;
+                            attributes |= LuaVariableAttribute::ToBeClosed as u8;
                             self.chunk.push_bytecode(
                                 Bytecode::SetLocalAttr {
                                     register: name_register,
@@ -530,6 +541,13 @@ impl<'a, 'source> Compiler<'a, 'source> {
                         }
                         None => {}
                     }
+
+                    self.add_local(
+                        name.node.name.node.0,
+                        name_register,
+                        attributes,
+                        Some(name.span),
+                    );
                 }
 
                 self.frames
@@ -544,7 +562,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                 // function () body end`, not to `local f = function () body end` (This only makes
                 // a difference when the body of the function contains references to f.)
                 let name_r = self.push_load_nil(Some(name.span));
-                self.add_local(name.node.0, name_r, Some(name.span));
+                self.add_local(name.node.0, name_r, 0, Some(name.span));
 
                 self.compile_function_def(function_def, Some(name_r))?;
 
@@ -566,7 +584,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                                 VariableMode::Write {
                                     value_register: current_register + index as u8,
                                 },
-                            );
+                            )?;
                         }
                         Variable::Indexed(target, target_index) => {
                             // `SetTable` expects a stack head of:
@@ -924,7 +942,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                                 ExpressionResultMode::Single,
                             )?
                             .get_register();
-                        self.add_local(name.node.0, ident_r, Some(name.span));
+                        self.add_local(name.node.0, ident_r, 0, Some(name.span));
 
                         // Create fake variables to hold the limit and step. Note that we use
                         // variable names that are invalid in Lua to avoid conflicts with user
@@ -936,7 +954,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                                 ExpressionResultMode::Single,
                             )?
                             .get_register();
-                        self.add_local(b"#limit".to_vec(), limit_r, None);
+                        self.add_local(b"#limit".to_vec(), limit_r, 0, None);
 
                         let step_r = if let Some(step) = step {
                             let step_span = step.span;
@@ -947,7 +965,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                                     ExpressionResultMode::Single,
                                 )?
                                 .get_register();
-                            self.add_local(b"#step".to_vec(), step_r, None);
+                            self.add_local(b"#step".to_vec(), step_r, 0, None);
 
                             // Raise an error if the step value is equal to zero
                             let zero_r = self
@@ -984,7 +1002,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                         } else {
                             let step_r = self
                                 .compile_load_literal(Literal::Number(Number::Integer(1)), None);
-                            self.add_local(b"#step".to_vec(), step_r, None);
+                            self.add_local(b"#step".to_vec(), step_r, 0, None);
                             step_r
                         };
 
@@ -994,7 +1012,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                         let zero_r =
                             self.compile_load_literal(Literal::Number(Number::Integer(0)), None);
                         let decreasing_r = zero_r; // We can reuse this slot
-                        self.add_local(b"#decreasing".to_vec(), decreasing_r, None);
+                        self.add_local(b"#decreasing".to_vec(), decreasing_r, 0, None);
                         self.chunk.push_bytecode(
                             Bytecode::Lt {
                                 dest_register: decreasing_r,
@@ -1107,11 +1125,21 @@ impl<'a, 'source> Compiler<'a, 'source> {
                         let state_local = current_register + 1;
                         let control_local = current_register + 2;
                         let closing_local = current_register + 3;
-                        self.add_local(b"#iterator".to_vec(), iterator_local, None);
-                        self.add_local(b"#state".to_vec(), state_local, None);
+                        self.add_local(b"#iterator".to_vec(), iterator_local, 0, None);
+                        self.add_local(b"#state".to_vec(), state_local, 0, None);
                         // NOTE: The syntax ensures there is at least one name
-                        self.add_local(names[0].node.0.clone(), control_local, Some(names[0].span));
-                        self.add_local(b"#closing".to_vec(), closing_local, None);
+                        self.add_local(
+                            names[0].node.0.clone(),
+                            control_local,
+                            0,
+                            Some(names[0].span),
+                        );
+                        self.add_local(
+                            b"#closing".to_vec(),
+                            closing_local,
+                            LuaVariableAttribute::ToBeClosed.into(),
+                            None,
+                        );
                         self.chunk.push_bytecode(
                             Bytecode::SetLocalAttr {
                                 register: closing_local,
@@ -1123,7 +1151,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                         // Initialize the other variables to nil
                         for name in &names[1..] {
                             let register = self.push_load_nil(Some(name.span));
-                            self.add_local(name.node.0.clone(), register, Some(name.span));
+                            self.add_local(name.node.0.clone(), register, 0, Some(name.span));
                         }
 
                         // Call the iterator function
@@ -1164,7 +1192,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
 
                         // Then store each result in the corresponding local
                         for (index, name) in names.into_iter().enumerate() {
-                            let local_register = self
+                            let (local_register, _) = self
                                 .resolve_local(&name.node.0)
                                 .expect("parser ensures that variable is in scope");
                             self.chunk.push_bytecode(
@@ -1593,7 +1621,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
         // Define the function arguments
         let parameter_count = function_def.node.parameters.len();
         for (index, parameter) in function_def.node.parameters.into_iter().enumerate() {
-            self.add_local(parameter.node.0, index as u8, Some(parameter.span));
+            self.add_local(parameter.node.0, index as u8, 0, Some(parameter.span));
         }
 
         let has_return = function_def.node.block.node.return_statement.is_some();
@@ -1858,7 +1886,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                             ExpressionMode::Ref => VariableMode::Ref,
                             ExpressionMode::Copy => VariableMode::Read,
                         },
-                    ),
+                    )?,
                     Variable::Indexed(prefix, index) => {
                         let dest_r = self.frames.last_mut().unwrap().take_register();
                         let table_r = self
@@ -2341,76 +2369,95 @@ impl<'a, 'source> Compiler<'a, 'source> {
         })
     }
 
-    fn variable(&mut self, name: TokenTree<Name>, mode: VariableMode) -> u8 {
+    fn variable(&mut self, name: TokenTree<Name>, mode: VariableMode) -> crate::Result<u8> {
         let span = name.span;
-        let (bytecode, register) = if let Some(local) = self.resolve_local(&name.node.0) {
-            match mode {
-                VariableMode::Ref => {
-                    return local;
+        let (bytecode, register) =
+            if let Some((local_register, local)) = self.resolve_local(&name.node.0) {
+                match mode {
+                    VariableMode::Ref => {
+                        return Ok(local_register);
+                    }
+                    VariableMode::Read => {
+                        let register = self.frames.last_mut().unwrap().take_register();
+                        (
+                            Bytecode::Mov {
+                                dest_register: register,
+                                src_register: local_register,
+                            },
+                            register,
+                        )
+                    }
+                    VariableMode::Write { value_register } => {
+                        if local.is_constant() {
+                            return Err(lua_error!(
+                                "attempt to assign to const variable '{}'",
+                                String::from_utf8_lossy(&name.node.0)
+                            ));
+                        }
+
+                        (
+                            Bytecode::Mov {
+                                dest_register: local_register,
+                                src_register: value_register,
+                            },
+                            0,
+                        )
+                    }
                 }
-                VariableMode::Read => {
-                    let register = self.frames.last_mut().unwrap().take_register();
-                    (
-                        Bytecode::Mov {
-                            dest_register: register,
-                            src_register: local,
-                        },
-                        register,
-                    )
+            } else if let Some((upval_index, upvalue)) = self.resolve_upvalue(&name.node.0) {
+                match mode {
+                    VariableMode::Read | VariableMode::Ref => {
+                        let register = self.frames.last_mut().unwrap().take_register();
+                        (
+                            Bytecode::GetUpval {
+                                dest_register: register,
+                                upval_index,
+                            },
+                            register,
+                        )
+                    }
+                    VariableMode::Write { value_register } => {
+                        if upvalue.is_constant() {
+                            return Err(lua_error!(
+                                "attempt to assign to const variable '{}'",
+                                String::from_utf8_lossy(&name.node.0)
+                            ));
+                        }
+
+                        (
+                            Bytecode::SetUpval {
+                                upval_index,
+                                src_register: value_register,
+                            },
+                            0,
+                        )
+                    }
                 }
-                VariableMode::Write { value_register } => (
-                    Bytecode::Mov {
-                        dest_register: local,
-                        src_register: value_register,
-                    },
-                    0,
-                ),
-            }
-        } else if let Some(upvalue) = self.resolve_upvalue(&name.node.0) {
-            match mode {
-                VariableMode::Read | VariableMode::Ref => {
-                    let register = self.frames.last_mut().unwrap().take_register();
-                    (
-                        Bytecode::GetUpval {
-                            dest_register: register,
-                            upval_index: upvalue,
-                        },
-                        register,
-                    )
-                }
-                VariableMode::Write { value_register } => (
-                    Bytecode::SetUpval {
-                        upval_index: upvalue,
-                        src_register: value_register,
-                    },
-                    0,
-                ),
-            }
-        } else {
-            let const_index = self.get_global_name_index(name.node.0.clone());
-            match mode {
-                VariableMode::Read | VariableMode::Ref => {
-                    let register = self.frames.last_mut().unwrap().take_register();
-                    (
-                        Bytecode::GetGlobal {
-                            dest_register: register,
+            } else {
+                let const_index = self.get_global_name_index(name.node.0.clone());
+                match mode {
+                    VariableMode::Read | VariableMode::Ref => {
+                        let register = self.frames.last_mut().unwrap().take_register();
+                        (
+                            Bytecode::GetGlobal {
+                                dest_register: register,
+                                name_index: const_index,
+                            },
+                            register,
+                        )
+                    }
+                    VariableMode::Write { value_register } => (
+                        Bytecode::SetGlobal {
+                            src_register: value_register,
                             name_index: const_index,
                         },
-                        register,
-                    )
+                        0,
+                    ),
                 }
-                VariableMode::Write { value_register } => (
-                    Bytecode::SetGlobal {
-                        src_register: value_register,
-                        name_index: const_index,
-                    },
-                    0,
-                ),
-            }
-        };
+            };
 
         self.chunk.push_bytecode(bytecode, Some(span));
-        register
+        Ok(register)
     }
 
     fn begin_frame(&mut self, name: Option<Vec<u8>>, method_name: Option<Vec<u8>>) {
@@ -2548,13 +2595,14 @@ impl<'a, 'source> Compiler<'a, 'source> {
         Ok(())
     }
 
-    fn add_local(&mut self, name: Vec<u8>, register: u8, span: Option<Span>) {
+    fn add_local(&mut self, name: Vec<u8>, register: u8, attributes: u8, span: Option<Span>) {
         let current_frame = self.frames.last_mut().unwrap();
         current_frame.reserve_register(register);
         let local = Local {
             name: name.clone(),
             depth: current_frame.scope_depth,
             span,
+            attributes,
         };
 
         let index = current_frame.locals.len() as u8;
@@ -2566,41 +2614,62 @@ impl<'a, 'source> Compiler<'a, 'source> {
         current_frame.locals.push(local);
     }
 
-    fn resolve_local(&mut self, name: &[u8]) -> Option<u8> {
+    fn resolve_local(&mut self, name: &[u8]) -> Option<(u8, &Local)> {
         self.frames
             .last()
             .expect("there should always be at least one frame")
             .resolve_local(name)
     }
 
-    fn resolve_upvalue(&mut self, name: &[u8]) -> Option<u8> {
+    fn resolve_upvalue(&mut self, name: &[u8]) -> Option<(u8, Upvalue)> {
         self.resolve_upvalue_inner(name, self.frames.len() - 1)
     }
 
-    fn resolve_upvalue_inner(&mut self, name: &[u8], frame_index: usize) -> Option<u8> {
+    fn resolve_upvalue_inner(&mut self, name: &[u8], frame_index: usize) -> Option<(u8, Upvalue)> {
         if frame_index < 1 {
             return None;
         }
 
         match self.frames[frame_index - 1].resolve_local(name) {
-            Some(local) => Some(self.add_upvalue(frame_index, local, true)),
-            None => self
-                .resolve_upvalue_inner(name, frame_index - 1)
-                .map(|upvalue_index| self.add_upvalue(frame_index, upvalue_index, false)),
+            Some((local_register, local)) => {
+                Some(self.add_upvalue(frame_index, local_register, local.attributes, true))
+            }
+            None => {
+                if let Some((upvalue_index, upvalue)) =
+                    self.resolve_upvalue_inner(name, frame_index - 1)
+                {
+                    let attributes = upvalue.attributes;
+                    Some(self.add_upvalue(frame_index, upvalue_index, attributes, false))
+                } else {
+                    None
+                }
+            }
         }
     }
 
-    fn add_upvalue(&mut self, frame_index: usize, index: u8, is_local: bool) -> u8 {
+    fn add_upvalue(
+        &mut self,
+        frame_index: usize,
+        index: u8,
+        attributes: u8,
+        is_local: bool,
+    ) -> (u8, Upvalue) {
         let frame = self.frames.get_mut(frame_index).expect("frame exists");
-        if let Some(i) = frame
+        if let Some((i, upvalue)) = frame
             .upvalues
             .iter()
-            .position(|upvalue| upvalue.is_local == is_local && upvalue.index == index)
+            .enumerate()
+            .find(|(_, upvalue)| upvalue.is_local == is_local && upvalue.index == index)
         {
-            return i as u8;
+            return (i as u8, *upvalue);
         }
 
-        frame.upvalues.push(Upvalue { is_local, index });
-        frame.upvalues.len() as u8 - 1
+        frame.upvalues.push(Upvalue {
+            is_local,
+            index,
+            attributes,
+        });
+        let index = frame.upvalues.len() as u8 - 1;
+        (index, frame.upvalues[index as usize])
     }
 }

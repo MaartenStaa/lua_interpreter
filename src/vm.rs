@@ -880,13 +880,6 @@ impl<'source> VM<'source> {
                     let src = register!(2);
 
                     let frame_pointer = self.call_stack[self.call_stack_index - 1].frame_pointer;
-                    if self.stack_attrs[frame_pointer + dest as usize]
-                        & (LuaVariableAttribute::Constant as u8)
-                        == 1
-                    {
-                        return Err(self.err("attempt to modify a constant"));
-                    }
-
                     let value = self.get(src);
                     if let LuaValue::UpValue(upval) = &self.stack[frame_pointer + dest as usize] {
                         let mut upval = upval.write().unwrap();
