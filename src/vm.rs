@@ -329,7 +329,7 @@ impl<'source> VM<'source> {
         }
     }
 
-    pub(crate) fn run_chunk(&mut self, chunk_index: usize) -> crate::Result<Vec<LuaValue>> {
+    pub fn run_chunk(&mut self, chunk_index: usize) -> crate::Result<Vec<LuaValue>> {
         if self.print_bytecode {
             debug::print_instructions(self, &self.chunks[chunk_index]);
         }
