@@ -1207,6 +1207,12 @@ impl<'source> VM<'source> {
                             }
 
                             let result = self.run_native_function(&name, f, args)?;
+                            let value_slots_needed = match (is_single_return, result.len()) {
+                                (true, 0) => 1,
+                                (true, n) => n.min(1),
+                                (false, n) => n,
+                            };
+                            self.ensure_stack_space(func_r + value_slots_needed as u8);
 
                             if result.is_empty() && is_single_return {
                                 self.set(func_r, LuaValue::Nil);
