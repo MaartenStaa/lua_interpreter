@@ -16,3 +16,23 @@ local function f(a, b, c, d, ...)
 end
 
 call(f, a)
+
+-- pushing the limits of number of varargs
+-- "There is a system-dependent limit on the number of values that a function may return. This limit is guaranteed to be greater than 1000."
+local function g(...)
+	local args = { ... }
+	assert(#args == 1001)
+	for i = 1, 1001 do
+		assert(args[i] == i)
+	end
+	return ...
+end
+
+local args = {}
+for i = 1, 1001 do
+	args[i] = i
+end
+
+assert(#args == 1001)
+assert(select("#", g(table.unpack(args))) == 1001)
+assert(select(1000, g(table.unpack(args))) == 1000)

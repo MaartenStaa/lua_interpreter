@@ -145,27 +145,32 @@ impl<'source> VM<'source> {
             .map(|i| i as ConstIndex)
     }
 
-    fn get(&self, register: u8) -> LuaValue {
+    pub fn get_stack(&self) -> &[LuaValue] {
+        &self.stack
+    }
+
+    #[inline]
+    fn get(&self, register: impl Into<usize>) -> LuaValue {
         let frame_pointer = self.call_stack[self.call_stack_index - 1].frame_pointer;
-        match &self.stack[frame_pointer + register as usize] {
+        match &self.stack[frame_pointer + register.into()] {
             LuaValue::UpValue(upvalue) => upvalue.read().unwrap().0.clone(),
             value => value.clone(),
         }
     }
 
-    fn get_ref(&self, register: u8) -> Cow<'_, LuaValue> {
+    #[inline]
+    fn get_ref(&self, register: impl Into<usize>) -> Cow<'_, LuaValue> {
         let frame_pointer = self.call_stack[self.call_stack_index - 1].frame_pointer;
-        match &self.stack[frame_pointer + register as usize] {
+        match &self.stack[frame_pointer + register.into()] {
             LuaValue::UpValue(upvalue) => Cow::Owned(upvalue.read().unwrap().0.clone()),
             value => Cow::Borrowed(value),
         }
     }
 
-    fn set(&mut self, register: u8, value: LuaValue) {
-        // let ip = self.chunks[self.call_stack[self.call_stack_index - 1].chunk].ip;
-        // eprintln!("{ip:04}  SET R{register} = {value:?}");
+    #[inline]
+    fn set(&mut self, register: impl Into<usize>, value: LuaValue) {
         let frame_pointer = self.call_stack[self.call_stack_index - 1].frame_pointer;
-        self.stack[frame_pointer + register as usize] = value;
+        self.stack[frame_pointer + register.into()] = value;
     }
 
     pub fn get_consts(&self) -> &[LuaConst] {
@@ -231,15 +236,15 @@ impl<'source> VM<'source> {
         Ok(())
     }
 
-    fn ensure_stack_space(&mut self, max_registers: u8) {
+    fn ensure_stack_space(&mut self, max_registers: impl Into<usize>) {
         let frame_pointer = self.call_stack[self.call_stack_index - 1].frame_pointer;
-        let required_stack_size = frame_pointer + max_registers as usize;
-        if required_stack_size > self.stack.len() {
+        let max_registers = max_registers.into();
+        let required_stack_size = frame_pointer + max_registers;
+        if required_stack_size >= self.stack.len() {
             self.stack
-                .resize(frame_pointer + max_registers as usize, LuaValue::Nil);
+                .resize(frame_pointer + max_registers, LuaValue::Nil);
             // NOTE: `stack` and `stack_attrs` are always the same size
-            self.stack_attrs
-                .resize(frame_pointer + max_registers as usize, 0);
+            self.stack_attrs.resize(frame_pointer + max_registers, 0);
         }
 
         // FIXME: If the stack is already big enough, we might need to
@@ -384,10 +389,10 @@ impl<'source> VM<'source> {
 
         let num_args = args.len();
         for (index, arg) in args.into_iter().enumerate() {
-            self.set(index as u8, arg);
+            self.set(index, arg);
         }
 
-        self.align_closure_args(value.num_params, num_args as u8, value.has_varargs);
+        self.align_closure_args(value.num_params, num_args, value.has_varargs);
 
         let result = self.run_inner();
         if result.is_err() {
@@ -407,7 +412,14 @@ impl<'source> VM<'source> {
     /// any varargs in the frame's varargs field, and trim any extraneous values
     /// from the stack if `has_varargs = false`.
     /// Call this after pushing the call frame.
-    fn align_closure_args(&mut self, num_params: u8, num_passed_params: u8, has_varargs: bool) {
+    fn align_closure_args(
+        &mut self,
+        num_params: impl Into<usize>,
+        num_passed_params: impl Into<usize>,
+        has_varargs: bool,
+    ) {
+        let num_params = num_params.into();
+        let num_passed_params = num_passed_params.into();
         if num_passed_params > num_params && has_varargs {
             // TODO: Can just copy these once we have static stack access.
             let num_varargs = num_passed_params - num_params;
@@ -422,9 +434,9 @@ impl<'source> VM<'source> {
         self.clear_registers_from(num_params.min(num_passed_params));
     }
 
-    fn clear_registers_from(&mut self, from_register: u8) {
+    fn clear_registers_from(&mut self, from_register: impl Into<usize>) {
         let frame_pointer = self.call_stack[self.call_stack_index - 1].frame_pointer;
-        self.stack[frame_pointer + from_register as usize..].fill(LuaValue::Nil);
+        self.stack[frame_pointer + from_register.into()..].fill(LuaValue::Nil);
     }
 
     fn clear_registers_between(&mut self, from_register: u8, to_register: u8) {
@@ -946,10 +958,10 @@ impl<'source> VM<'source> {
                         // Ensure we'll have enough space on the stack.
                         let varargs = self.call_stack[self.call_stack_index - 1].varargs.clone();
                         self.multres = varargs.len();
-                        self.ensure_stack_space(register + varargs.len() as u8);
+                        self.ensure_stack_space(register as usize + varargs.len());
 
                         for (i, value) in varargs.into_iter().enumerate() {
-                            self.set(register + i as u8, value);
+                            self.set(register as usize + i, value);
                         }
                     }
                     3
@@ -1076,7 +1088,7 @@ impl<'source> VM<'source> {
                                         self.chunks[closure.chunk].ip = closure.ip as usize;
                                         self.align_closure_args(
                                             closure.num_params,
-                                            1,
+                                            1usize,
                                             closure.has_varargs,
                                         );
                                         continue 'main;
@@ -1125,7 +1137,7 @@ impl<'source> VM<'source> {
                         LuaValue::Object(o) => match &mut *o.write().unwrap() {
                             LuaObject::Table(t) => {
                                 for i in 0..num_values {
-                                    let value = self.get(table_r + 1 + i as u8);
+                                    let value = self.get(table_r as usize + 1 + i);
                                     let index = (i + 1) as i64;
                                     t.insert(index.into(), value);
                                 }
@@ -1194,7 +1206,7 @@ impl<'source> VM<'source> {
                             self.chunks[closure.chunk].ip = closure.ip as usize;
                             self.align_closure_args(
                                 closure.num_params,
-                                num_args as u8,
+                                num_args,
                                 closure.has_varargs,
                             );
 
@@ -1203,7 +1215,7 @@ impl<'source> VM<'source> {
                         Some(Method::NativeFunction(name, f)) => {
                             let mut args = Vec::with_capacity(num_args);
                             for i in 0..num_args {
-                                args.push(self.get(params_r + i as u8));
+                                args.push(self.get(params_r as usize + i));
                             }
 
                             let result = self.run_native_function(&name, f, args)?;
@@ -1212,7 +1224,7 @@ impl<'source> VM<'source> {
                                 (true, n) => n.min(1),
                                 (false, n) => n,
                             };
-                            self.ensure_stack_space(func_r + value_slots_needed as u8);
+                            self.ensure_stack_space(func_r as usize + value_slots_needed);
 
                             if result.is_empty() && is_single_return {
                                 self.set(func_r, LuaValue::Nil);
@@ -1220,7 +1232,7 @@ impl<'source> VM<'source> {
                             } else {
                                 self.multres = result.len();
                                 for (index, value) in result.into_iter().enumerate() {
-                                    self.set(func_r + index as u8, value);
+                                    self.set(func_r as usize + index, value);
                                     if is_single_return {
                                         self.multres = 1;
                                         break;
@@ -1254,11 +1266,11 @@ impl<'source> VM<'source> {
 
                     // Copy over the args to the start of the frame pointer
                     for i in 0..num_passed_args {
-                        let value = self.get(args_r + i as u8);
-                        self.set(i as u8, value);
+                        let value = self.get(args_r as usize + i);
+                        self.set(i, value);
                     }
 
-                    self.align_closure_args(num_args, num_passed_args as u8, takes_varargs);
+                    self.align_closure_args(num_args, num_passed_args, takes_varargs);
 
                     // Then just jump back to the start of this closure.
                     self.chunks[chunk_index].ip = start_ip as usize;
@@ -1270,8 +1282,10 @@ impl<'source> VM<'source> {
                 | instr @ Instruction::ReturnM => {
                     // Find the marker indicating the start of the return values
                     let (values_starting_register, num_return_values) = match instr {
-                        Instruction::Return => (register!(), instr_param!(2)),
-                        Instruction::ReturnM => (register!(), instr_param!(2) + self.multres as u8),
+                        Instruction::Return => (register!(), instr_param!(2) as usize),
+                        Instruction::ReturnM => {
+                            (register!(), instr_param!(2) as usize + self.multres)
+                        }
                         Instruction::Return1 => (register!(), 1),
                         // NOTE: Register doesn't matter for Return0, as the iterator below to
                         // collect return values won't run.
@@ -1279,17 +1293,21 @@ impl<'source> VM<'source> {
                         _ => unreachable!(),
                     };
 
-                    self.multres = num_return_values as usize;
-
                     // Collect the return values
                     let mut return_values: Vec<_> = (0..num_return_values)
-                        .map(|i| self.get(values_starting_register + i))
+                        .map(|i| self.get(values_starting_register as usize + i))
                         .collect();
 
                     let frame = self.pop_call_frame();
                     if return_values.is_empty() && !frame.allow_multi_return_values {
                         return_values.push(LuaValue::Nil);
                     }
+
+                    self.multres = if frame.allow_multi_return_values {
+                        num_return_values
+                    } else {
+                        1
+                    };
 
                     // Check if this is the root frame, or if we're leaving this chunk
                     if frame.border_frame {
@@ -1300,12 +1318,12 @@ impl<'source> VM<'source> {
                     self.chunks[parent_call_frame.chunk].ip = frame.return_addr;
 
                     self.ensure_stack_space(
-                        frame.return_value_register + return_values.len() as u8,
+                        frame.return_value_register as usize + return_values.len(),
                     );
 
                     // Put the return values back
                     for (i, value) in return_values.into_iter().enumerate() {
-                        self.set(frame.return_value_register + i as u8, value);
+                        self.set(frame.return_value_register as usize + i, value);
                         if !frame.allow_multi_return_values {
                             break;
                         }
@@ -1313,9 +1331,9 @@ impl<'source> VM<'source> {
 
                     // Clear out any stale values after the last return value
                     let clear_registers_from = if frame.allow_multi_return_values {
-                        frame.return_value_register + num_return_values
+                        frame.return_value_register as usize + num_return_values
                     } else {
-                        frame.return_value_register + 1
+                        frame.return_value_register as usize + 1
                     };
                     self.clear_registers_from(clear_registers_from);
 
