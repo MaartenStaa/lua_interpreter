@@ -963,6 +963,9 @@ impl<'source> VM<'source> {
                         for (i, value) in varargs.into_iter().enumerate() {
                             self.set(register as usize + i, value);
                         }
+
+                        // Clear out extraneous registers
+                        self.clear_registers_from(register as usize + self.multres);
                     }
                     3
                 }

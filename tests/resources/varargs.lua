@@ -36,3 +36,16 @@ end
 assert(#args == 1001)
 assert(select("#", g(table.unpack(args))) == 1001)
 assert(select(1000, g(table.unpack(args))) == 1000)
+
+-- loading varargs should clear extra registers
+local function h(n, ...)
+	if n == 0 then
+		-- the comparison above uses a register, ensure it doesn't pollute the locals below
+		local b, c, d = ...
+		return b, c, d
+	else
+		return h(n - 1, ...)
+	end
+end
+local a, b, c = h(3)
+assert(a == nil and b == nil and c == nil)
