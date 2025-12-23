@@ -1,5 +1,5 @@
 use std::{
-    any::{type_name_of_val, Any},
+    any::{Any, type_name_of_val},
     fmt::Display,
     sync::{Arc, RwLock},
 };

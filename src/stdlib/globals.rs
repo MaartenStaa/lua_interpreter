@@ -2,8 +2,8 @@ use std::{
     fs,
     path::Path,
     sync::{
+        Arc, LazyLock, RwLock,
         atomic::{AtomicBool, Ordering},
-        Arc, RwLock,
     },
 };
 
@@ -13,8 +13,9 @@ use crate::{
     macros::{assert_string, assert_table, require_string, require_table},
     stdlib::package,
     value::{
+        LuaClosure, LuaNumber, LuaObject, LuaValue,
         callable::{Callable, Method},
-        metatables, LuaClosure, LuaNumber, LuaObject, LuaValue,
+        metatables,
     },
     vm::VM,
 };
@@ -494,7 +495,10 @@ pub(crate) fn require(vm: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<Lu
             return Err(lua_error!(
                 "error loading module '{name_str}' from file '{source}': cannot read '{dir_name}': is a directory",
                 source = "<unknown>",
-                dir_name = path.file_name().map(|s| s.to_string_lossy()).unwrap_or_else(|| "<unknown>".into())
+                dir_name = path
+                    .file_name()
+                    .map(|s| s.to_string_lossy())
+                    .unwrap_or_else(|| "<unknown>".into())
             ));
         }
 
@@ -720,7 +724,7 @@ pub(crate) fn xpcall(vm: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<Lua
         None => {
             return Err(lua_error!(
                 "bad argument #2 to 'xpcall' (function expected, got no value)"
-            ))
+            ));
         }
     };
 

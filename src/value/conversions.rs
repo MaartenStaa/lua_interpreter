@@ -3,12 +3,12 @@ use std::sync::{Arc, RwLock};
 use crate::ast;
 
 use super::{
+    LuaValue, UserData,
     closure::LuaClosure,
     constant::{LuaConst, LuaFunctionDefinition},
     number::LuaNumber,
     object::LuaObject,
     table::LuaTable,
-    LuaValue, UserData,
 };
 
 impl From<ast::Literal> for LuaValue {

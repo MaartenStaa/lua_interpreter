@@ -1,10 +1,10 @@
 use std::{
-    io::{stderr, stdin, stdout, Write},
+    io::{Write, stderr, stdin, stdout},
     sync::LazyLock,
 };
 
 use crate::{
-    error::{lua_error, IntoLuaError},
+    error::{IntoLuaError, lua_error},
     macros::{require_userdata, require_userdata_type},
     value::{LuaObject, LuaTable, LuaValue, UserData},
     vm::VM,
@@ -74,11 +74,12 @@ fn create_file(handle: FileHandle) -> LuaValue {
 fn file_index(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     require_userdata!(input, "file:__index", 0, userdata, {
         require_userdata_type!(userdata, "file:__index", 0, File, file, _metatable, {
-            Ok(vec![file
-                .methods
-                .get(input.get(1).unwrap_or(&LuaValue::Nil))
-                .cloned()
-                .unwrap_or(LuaValue::Nil)])
+            Ok(vec![
+                file.methods
+                    .get(input.get(1).unwrap_or(&LuaValue::Nil))
+                    .cloned()
+                    .unwrap_or(LuaValue::Nil),
+            ])
         })
     })
 }

@@ -205,7 +205,7 @@ fn max(_: &mut VM, values: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
                     "bad argument #{} to 'math.max', expected number, got {}",
                     i + 1,
                     v.type_name()
-                ))
+                ));
             }
         };
 
@@ -252,7 +252,7 @@ fn min(_: &mut VM, values: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
                     "bad argument #{}, expected number, got {}",
                     i + 1,
                     v.type_name()
-                ))
+                ));
             }
         };
 

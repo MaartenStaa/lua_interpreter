@@ -1,7 +1,7 @@
 use crate::vm::VM;
 use std::{fmt::Display, hash::Hash};
 
-use super::{closure::LuaClosure, table::LuaTable, LuaValue, UserData};
+use super::{LuaValue, UserData, closure::LuaClosure, table::LuaTable};
 
 #[derive(Debug)]
 pub enum LuaObject {

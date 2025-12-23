@@ -278,13 +278,16 @@ macro_rules! require_table {
     };
 }
 
+// Disable formatting here, rustfmt insists on removing the braces around `$tt`
+// which is invalid.
+#[rustfmt::skip]
 macro_rules! require_userdata {
     (read, $values:expr, $name:expr, $index:expr, $userdata:ident, $tt:stmt) => {
         match $values.get($index) {
             Some(LuaValue::Object(o)) => match &*o.read().unwrap() {
                 LuaObject::UserData($userdata) => {
-                   $tt
-                },
+                    $tt
+                }
                 _ => {
                     return Err($crate::error::lua_error!(
                         "bad argument #{n} to '{name}' ({type_name} expected, got {actual_type})",
@@ -318,7 +321,7 @@ macro_rules! require_userdata {
         match $values.get($index) {
             Some(LuaValue::Object(o)) => match &mut *o.write().unwrap() {
                 LuaObject::UserData($userdata) => {
-                   $tt
+                    $tt
                 },
                 _ => {
                     return Err($crate::error::lua_error!(
@@ -414,7 +417,9 @@ macro_rules! require_userdata_type {
         }
     };
     ($userdata:ident, $name:expr, $index:expr, $type:ty, $value:ident, $metatable:ident, $tt:stmt) => {
-        require_userdata_type!(read, $userdata, $name, $index, $type, $value, $metatable, $tt)
+        require_userdata_type!(
+            read, $userdata, $name, $index, $type, $value, $metatable, $tt
+        )
     };
 }
 

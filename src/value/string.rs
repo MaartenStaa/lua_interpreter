@@ -1,6 +1,6 @@
 use crate::{error::lua_error, stdlib, vm::VM};
 
-use super::{metatables, LuaNumber, LuaObject, LuaTable, LuaValue};
+use super::{LuaNumber, LuaObject, LuaTable, LuaValue, metatables};
 
 pub(crate) fn get_string_metatable() -> LuaTable {
     let mut metatable = LuaTable::new();
