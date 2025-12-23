@@ -33,6 +33,10 @@ pub static STRING: LazyLock<LuaValue> = LazyLock::new(|| {
     );
     string.insert("len".into(), LuaObject::NativeFunction("len", len).into());
     string.insert(
+        "lower".into(),
+        LuaObject::NativeFunction("lower", lower).into(),
+    );
+    string.insert(
         "match".into(),
         LuaObject::NativeFunction("match", r#match).into(),
     );
@@ -53,6 +57,10 @@ pub static STRING: LazyLock<LuaValue> = LazyLock::new(|| {
     string.insert(
         "unpack".into(),
         LuaObject::NativeFunction("unpack", unpack).into(),
+    );
+    string.insert(
+        "upper".into(),
+        LuaObject::NativeFunction("upper", upper).into(),
     );
 
     string.into()
@@ -356,6 +364,14 @@ fn len(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     Ok(vec![LuaValue::Number(LuaNumber::Integer(
         input.len() as i64
     ))])
+}
+
+fn lower(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
+    let input = require_string!(input, "string.lower");
+    let string = String::from_utf8_lossy(input);
+    let lower = string.to_lowercase();
+
+    Ok(vec![LuaValue::String(lower.into_bytes())])
 }
 
 fn r#match(_: &mut VM, mut input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
@@ -818,4 +834,12 @@ fn unpack(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
 
     result.push((pos as i64 + 1).into());
     Ok(result)
+}
+
+fn upper(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
+    let input = require_string!(input, "string.upper");
+    let string = String::from_utf8_lossy(input);
+    let upper = string.to_uppercase();
+
+    Ok(vec![LuaValue::String(upper.into_bytes())])
 }

@@ -95,7 +95,8 @@ Legend:
     6. 🚫 string.gmatch
     7. 🚫 string.gsub
     8. ✅ string.len
-    9. 🚫 string.lower
+    9. ⚠️ string.lower
+       Only handles UTF-8 input, and does not use current locale.
     10. ✅ string.match
     11. ✅ string.pack
     12. ✅ string.packsize
@@ -103,7 +104,8 @@ Legend:
     14. ✅ string.reverse
     15. ✅ string.sub
     16. ✅ string.unpack
-    17. 🚫 string.upper
+    17. ⚠️ string.upper
+        Only handles UTF-8 input, and does not use current locale.
 5. UTF-8 support \[1/6]
     1. 🚫 utf8.char
     2. ✅ utf8.charpattern
