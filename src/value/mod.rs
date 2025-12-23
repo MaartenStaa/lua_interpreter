@@ -102,6 +102,14 @@ impl Hash for LuaValue {
 impl Eq for LuaValue {}
 
 impl LuaValue {
+    pub const MAX_STRING_LENGTH: usize = const {
+        if size_of::<usize>() < size_of::<i32>() {
+            usize::MAX
+        } else {
+            i32::MAX as usize
+        }
+    };
+
     pub fn type_name(&self) -> &'static str {
         match self {
             LuaValue::Nil => "nil",

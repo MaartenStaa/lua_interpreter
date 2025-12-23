@@ -5,6 +5,9 @@ use subslice::SubsliceExt;
 use crate::{
     error::lua_error,
     macros::{get_number, get_string, require_number, require_string},
+    stdlib::utils::pack::{
+        PackOption, PackOptionItem, copy_bytes_fix_endian, get_pack_option, pack_int, unpack_int,
+    },
     value::{LuaNumber, LuaObject, LuaTable, LuaValue},
     vm::VM,
 };
@@ -38,7 +41,19 @@ pub static STRING: LazyLock<LuaValue> = LazyLock::new(|| {
         "reverse".into(),
         LuaObject::NativeFunction("reverse", reverse).into(),
     );
+    string.insert(
+        "pack".into(),
+        LuaObject::NativeFunction("pack", pack).into(),
+    );
+    string.insert(
+        "packsize".into(),
+        LuaObject::NativeFunction("packsize", packsize).into(),
+    );
     string.insert("sub".into(), LuaObject::NativeFunction("sub", sub).into());
+    string.insert(
+        "unpack".into(),
+        LuaObject::NativeFunction("unpack", unpack).into(),
+    );
 
     string.into()
 });
@@ -400,6 +415,192 @@ fn reverse(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     Ok(vec![LuaValue::String(reversed)])
 }
 
+fn pack(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
+    let fmt = require_string!(input, "string.pack");
+    let mut result = vec![];
+    let mut max_alignment = 1;
+    let mut is_little_endian = cfg!(target_endian = "little");
+
+    let mut chars = fmt.iter().peekable();
+    let mut param = 1;
+
+    loop {
+        let PackOptionItem {
+            option,
+            size,
+            align,
+        } = get_pack_option(&mut chars, result.len(), max_alignment)?;
+
+        if align > 0 {
+            result.extend(std::iter::repeat_n(0, align));
+        }
+
+        match option {
+            PackOption::SignedInt => {
+                let number = require_number!(input, "string.pack", param);
+                param += 1;
+                let value = number.integer_repr()?;
+
+                if size < size_of_val(&value) {
+                    // need to check for overflow
+                    let limit = 1i64 << (size * 8 - 1);
+                    if value < -limit || value >= limit {
+                        return Err(lua_error!(
+                            "bad argument #{param} to 'string.pack' (integer overflow)",
+                        ));
+                    }
+                }
+
+                result.extend(pack_int(
+                    value.cast_unsigned(),
+                    is_little_endian,
+                    size,
+                    value < 0,
+                ));
+            }
+            PackOption::UnsignedInt => {
+                let number = require_number!(input, "string.pack", param);
+                param += 1;
+                let value = number.integer_repr()?;
+
+                if size < size_of_val(&value) {
+                    // need to check for overflow
+                    let limit = 1i64 << (size * 8);
+                    if value < 0 || value >= limit {
+                        return Err(lua_error!(
+                            "bad argument #{param} to 'string.pack' (unsigned overflow)",
+                        ));
+                    }
+                }
+
+                result.extend(pack_int(value as u64, is_little_endian, size, false));
+            }
+            PackOption::Float => {
+                let number = require_number!(input, "string.pack", param);
+                param += 1;
+                let float = f32::from(number.clone());
+                let mut buf = [0; size_of::<f32>()];
+                copy_bytes_fix_endian(&mut buf, &float.to_ne_bytes(), is_little_endian);
+                result.extend(buf);
+            }
+            PackOption::LuaNumber | PackOption::Double => {
+                let number = require_number!(input, "string.pack", param);
+                param += 1;
+                let double = f64::from(number.clone());
+                let mut buf = [0; size_of::<f64>()];
+                copy_bytes_fix_endian(&mut buf, &double.to_ne_bytes(), is_little_endian);
+                result.extend(buf);
+            }
+            PackOption::FixedString => {
+                let string = require_string!(input, "string.pack", param);
+                param += 1;
+                if string.len() > size {
+                    return Err(lua_error!(
+                        "bad argument #{param} to 'string.pack' (string longer than given size)"
+                    ));
+                }
+                // Option 'c' is not aligned
+                let padding = size - string.len();
+                result.extend_from_slice(string);
+                result.extend(std::iter::repeat_n(0, padding));
+            }
+            PackOption::String => {
+                let string = require_string!(input, "string.pack", param);
+                param += 1;
+                let len = string.len();
+                if size < size_of_val(&len) && len >= 1 << (size * 8) {
+                    return Err(lua_error!(
+                        "bad argument #{param} to 'string.pack' (string length does not fit in given size)",
+                    ));
+                }
+                result.extend(pack_int(len as u64, is_little_endian, size, false));
+                result.extend_from_slice(string);
+            }
+            PackOption::Zstr => {
+                let string = require_string!(input, "string.pack", param);
+                if string.contains(&0) {
+                    return Err(lua_error!(
+                        "bad argument #{param} to 'string.pack' (string contains zeros)",
+                    ));
+                }
+                param += 1;
+                // Option 'z' is not aligned
+                result.extend_from_slice(string);
+                result.push(0);
+            }
+            PackOption::Padding => {
+                result.push(0);
+            }
+            PackOption::PaddingAlign => {}
+            PackOption::LittleEndian => {
+                is_little_endian = true;
+            }
+            PackOption::BigEndian => {
+                is_little_endian = false;
+            }
+            PackOption::NativeEndian => {
+                is_little_endian = cfg!(target_endian = "little");
+            }
+            PackOption::SetAlignment { value } => {
+                max_alignment = value;
+            }
+            PackOption::Nop => {}
+            PackOption::Eof => break,
+        }
+    }
+
+    Ok(vec![LuaValue::String(result)])
+}
+
+fn packsize(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
+    let fmt = require_string!(input, "string.packsize");
+    let mut result = 0;
+    let mut max_alignment = 1;
+
+    let mut chars = fmt.iter().peekable();
+    let mut item = 0;
+    loop {
+        let PackOptionItem {
+            option,
+            size,
+            align,
+        } = get_pack_option(&mut chars, result, max_alignment)?;
+
+        result += align;
+
+        match option {
+            PackOption::Zstr => {
+                return Err(lua_error!(
+                    "'z' option not supported in 'string.packsize': variable-length format"
+                ));
+            }
+            PackOption::String => {
+                return Err(lua_error!(
+                    "'s' option not supported in 'string.packsize': variable-length format"
+                ));
+            }
+            PackOption::Eof => break,
+            PackOption::SetAlignment { value } => {
+                max_alignment = value;
+            }
+            _ => {
+                if result > LuaValue::MAX_STRING_LENGTH - size {
+                    return Err(lua_error!(
+                        "format result too large (item={item}, result={result}, max={}, adding {size}",
+                        LuaValue::MAX_STRING_LENGTH
+                    ));
+                }
+
+                result += size;
+            }
+        }
+
+        item += 1;
+    }
+
+    Ok(vec![LuaValue::Number(LuaNumber::Integer(result as i64))])
+}
+
 fn sub(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     let s = require_string!(input, "string.sub");
     let i = require_number!(input, "string.sub", 1).integer_repr()?;
@@ -440,4 +641,181 @@ fn sub(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     Ok(vec![LuaValue::String(
         s[(i - 1) as usize..=(j - 1) as usize].to_vec(),
     )])
+}
+
+fn unpack(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
+    let fmt = require_string!(input, "string.unpack");
+    let s = require_string!(input, "string.unpack", 1);
+    let mut pos = get_number!(input, "string.unpack", 2)
+        .map(|v| v.integer_repr())
+        .transpose()?
+        .map(|n| match n.cmp(&0) {
+            Ordering::Less => s.len() as i64 + n + 1,
+            Ordering::Greater => n,
+            Ordering::Equal => 1,
+        } as usize)
+        .unwrap_or(1) as usize
+        - 1;
+
+    if pos > s.len() {
+        return Err(lua_error!(
+            "bad argument #2 to 'string.unpack' (initial position out of string)",
+        ));
+    }
+
+    let mut result = vec![];
+    let mut is_little_endian = cfg!(target_endian = "little");
+    let mut max_alignment = 1;
+
+    macro_rules! align {
+        ($size:expr) => {
+            if $size > 1 {
+                let mut align = $size;
+                if align > max_alignment {
+                    align = max_alignment;
+                }
+                if align & (align - 1) != 0 {
+                    return Err(lua_error!("format asks for alignment not power of 2"));
+                }
+
+                align = (align - (pos & (align - 1))) & (align - 1);
+                if pos + align > s.len() {
+                    return Err(lua_error!(
+                        "bad argument #2 to 'string.unpack' (data string too short)",
+                    ));
+                }
+
+                pos += align;
+            }
+        };
+    }
+
+    let mut chars = fmt.iter().peekable();
+    loop {
+        let PackOptionItem {
+            option,
+            size,
+            align,
+        } = get_pack_option(&mut chars, pos, max_alignment)?;
+
+        pos += align;
+
+        match option {
+            PackOption::SignedInt => {
+                align!(size);
+                if pos + size > s.len() {
+                    return Err(lua_error!(
+                        "bad argument #2 to 'string.unpack' (data string too short)",
+                    ));
+                }
+
+                result.push(unpack_int(&s[pos..pos + size], is_little_endian, size, true)?.into());
+                pos += size;
+            }
+            PackOption::UnsignedInt => {
+                align!(size);
+                if pos + size > s.len() {
+                    return Err(lua_error!(
+                        "bad argument #2 to 'string.unpack' (data string too short)",
+                    ));
+                }
+
+                result.push(unpack_int(&s[pos..pos + size], is_little_endian, size, false)?.into());
+                pos += size;
+            }
+            PackOption::Float => {
+                align!(size);
+                if pos + size > s.len() {
+                    return Err(lua_error!(
+                        "bad argument #2 to 'string.unpack' (data string too short)",
+                    ));
+                }
+
+                let mut buff = [0u8; size_of::<f32>()];
+                copy_bytes_fix_endian(&mut buff, &s[pos..], is_little_endian);
+                let float = f32::from_ne_bytes(buff);
+                result.push(LuaNumber::Float(float as f64).into());
+                pos += size;
+            }
+            PackOption::Double | PackOption::LuaNumber => {
+                align!(size);
+                if pos + size > s.len() {
+                    return Err(lua_error!(
+                        "bad argument #2 to 'string.unpack' (data string too short)",
+                    ));
+                }
+
+                let mut buff = [0u8; size_of::<f64>()];
+                copy_bytes_fix_endian(&mut buff, &s[pos..], is_little_endian);
+                let float = f64::from_ne_bytes(buff);
+                result.push(LuaNumber::Float(float).into());
+                pos += size;
+            }
+            PackOption::FixedString => {
+                // 'c' is not aligned
+                if pos + size > s.len() {
+                    return Err(lua_error!(
+                        "bad argument #2 to 'string.unpack' (data string too short)",
+                    ));
+                }
+
+                let string = Vec::from(&s[pos..pos + size]);
+                result.push(LuaValue::String(string));
+                pos += size;
+            }
+            PackOption::String => {
+                align!(size);
+                if pos + size > s.len() {
+                    return Err(lua_error!(
+                        "bad argument #2 to 'string.unpack' (data string too short)",
+                    ));
+                }
+
+                let len = unpack_int(&s[pos..pos + size], is_little_endian, size, false)? as usize;
+                pos += size;
+                if pos + len > s.len() {
+                    return Err(lua_error!(
+                        "bad argument #2 to 'string.unpack' (data string too short)",
+                    ));
+                }
+
+                let string = Vec::from(&s[pos..pos + len]);
+                result.push(LuaValue::String(string));
+                pos += len;
+            }
+            PackOption::Zstr => {
+                // 'z' is not aligned
+                let Some(len) = s[pos..].iter().position(|&c| c == 0) else {
+                    return Err(lua_error!(
+                        "bad argument #2 to 'string.unpack' (unfinished string for format 'z')",
+                    ));
+                };
+
+                let string = Vec::from(&s[pos..pos + len]);
+                result.push(LuaValue::String(string));
+                // skip past string and the null terminator
+                pos += len + 1;
+            }
+            PackOption::LittleEndian => {
+                is_little_endian = true;
+            }
+            PackOption::BigEndian => {
+                is_little_endian = false;
+            }
+            PackOption::NativeEndian => {
+                is_little_endian = cfg!(target_endian = "little");
+            }
+            PackOption::SetAlignment { value } => {
+                max_alignment = value;
+            }
+            PackOption::Padding | PackOption::PaddingAlign => {
+                pos += size;
+            }
+            PackOption::Nop => {}
+            PackOption::Eof => break,
+        }
+    }
+
+    result.push((pos as i64 + 1).into());
+    Ok(result)
 }

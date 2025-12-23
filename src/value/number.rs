@@ -46,6 +46,24 @@ impl LuaNumber {
     }
 }
 
+impl From<LuaNumber> for f32 {
+    fn from(value: LuaNumber) -> Self {
+        match value {
+            LuaNumber::Integer(i) => i as f32,
+            LuaNumber::Float(f) => f as f32,
+        }
+    }
+}
+
+impl From<LuaNumber> for f64 {
+    fn from(value: LuaNumber) -> Self {
+        match value {
+            LuaNumber::Integer(i) => i as f64,
+            LuaNumber::Float(f) => f,
+        }
+    }
+}
+
 impl Display for LuaNumber {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
