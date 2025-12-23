@@ -3,14 +3,14 @@ use std::{
     path::Path,
     sync::{
         Arc, LazyLock, RwLock,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
 };
 
 use crate::{
     compiler::Compiler,
     error::lua_error,
-    macros::{assert_string, assert_table, require_string, require_table},
+    macros::{assert_string, assert_table, get_number, require_string, require_table},
     stdlib::package,
     value::{
         LuaClosure, LuaNumber, LuaObject, LuaValue,
@@ -45,6 +45,112 @@ pub(crate) fn assert(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaV
     }
 
     Ok(input)
+}
+
+static GC_STATUS: LazyLock<AtomicBool> = LazyLock::new(|| AtomicBool::new(true));
+static GC_MODE: LazyLock<RwLock<&'static str>> = LazyLock::new(|| RwLock::new("incremental"));
+static GC_PAUSE: LazyLock<AtomicUsize> = LazyLock::new(|| AtomicUsize::new(200));
+static GC_STEP_MULTIPLIER: LazyLock<AtomicUsize> = LazyLock::new(|| AtomicUsize::new(100));
+
+const GC_PAUSE_MAX: usize = 1020;
+const GC_STEP_MULTIPLIER_MAX: usize = 572;
+
+pub(crate) fn collectgarbage(vm: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
+    let result = match input.first() {
+        Some(LuaValue::String(s)) if s == b"collect" => {
+            // Performs a full garbage-collection cycle. This is the default option.
+            // We don't use a garbage collector, so do nothing.
+            vec![LuaValue::Nil]
+        }
+        Some(LuaValue::String(s)) if s == b"stop" => {
+            // Stops automatic execution of the garbage collector. The collector will run only when explicitly invoked, until a call to restart it.
+            // We don't use a garbage collector, so do nothing.
+            GC_STATUS.store(false, Ordering::Relaxed);
+            vec![LuaValue::Nil]
+        }
+        Some(LuaValue::String(s)) if s == b"restart" => {
+            // Restarts automatic execution of the garbage collector.
+            // We don't use a garbage collector, so do nothing.
+            GC_STATUS.store(true, Ordering::Relaxed);
+            vec![LuaValue::Nil]
+        }
+        Some(LuaValue::String(s)) if s == b"count" => {
+            // Returns the total memory in use by Lua (in Kbytes).
+            // We don't use a garbage collector, so return 0.
+            // FIXME: Account for upvalues held only by call frames.
+            vec![
+                ((vm.get_stack().iter().map(|v| v.size_bytes()).sum::<u64>() as f64) / 1024.)
+                    .into(),
+            ]
+            // TODO: Maybe we can give an approximation of memory used by the VM?
+            // vec![LuaValue::Number(LuaNumber::Float(0.0))]
+        }
+        Some(LuaValue::String(s)) if s == b"step" => {
+            // Performs a garbage-collection step. The step "size" is controlled by arg. With a zero value, the collector will perform one basic (indivisible) step. For non-zero values, the collector will perform as if that amount of memory (in Kbytes) had been allocated by Lua. Returns true if the step finished a collection cycle.
+            // We don't use a garbage collector, so return false.
+            vec![LuaValue::Boolean(false)]
+        }
+        Some(LuaValue::String(s)) if s == b"isrunning" => {
+            // Returns a boolean that tells whether the collector is running (i.e., not stopped).
+            vec![LuaValue::Boolean(GC_STATUS.load(Ordering::Relaxed))]
+        }
+        // Changes the GC mode, no-op in our case. Just return the previous mode.
+        Some(LuaValue::String(s)) if s == b"incremental" => {
+            let mut mode = GC_MODE.write().unwrap();
+            let previous_mode = *mode;
+            *mode = "incremental";
+            vec![LuaValue::String(previous_mode.as_bytes().to_vec())]
+        }
+        Some(LuaValue::String(s)) if s == b"generational" => {
+            let mut mode = GC_MODE.write().unwrap();
+            let previous_mode = *mode;
+            *mode = "generational";
+            vec![LuaValue::String(previous_mode.as_bytes().to_vec())]
+        }
+        Some(LuaValue::String(s)) if s == b"setpause" => {
+            let val = get_number!(input, "collectgarbage", 1)
+                .map(|v| v.integer_repr())
+                .transpose()?
+                .map(|n| n as usize)
+                .unwrap_or(0)
+                .min(GC_PAUSE_MAX);
+            let previous_value = GC_PAUSE.load(Ordering::Relaxed);
+            GC_PAUSE.store(val, Ordering::Relaxed);
+            vec![LuaValue::Number(LuaNumber::Integer(previous_value as i64))]
+        }
+        Some(LuaValue::String(s)) if s == b"setstepmul" => {
+            let val = get_number!(input, "collectgarbage", 1)
+                .map(|v| v.integer_repr())
+                .transpose()?
+                .map(|n| n as usize)
+                .unwrap_or(0)
+                .min(GC_STEP_MULTIPLIER_MAX);
+            let previous_value = GC_STEP_MULTIPLIER.load(Ordering::Relaxed);
+            GC_STEP_MULTIPLIER.store(val, Ordering::Relaxed);
+            vec![LuaValue::Number(LuaNumber::Integer(previous_value as i64))]
+        }
+        Some(LuaValue::String(s)) => {
+            return Err(lua_error!(
+                "bad argument #1 to 'collectgarbage' (invalid option '{}')",
+                String::from_utf8_lossy(s)
+            ));
+        }
+        Some(LuaValue::Number(n)) => {
+            return Err(lua_error!(
+                "bad argument #1 to 'collectgarbage' (invalid option '{}')",
+                n.to_string()
+            ));
+        }
+        None => vec![LuaValue::Nil],
+        v => {
+            return Err(lua_error!(
+                "bad argument #1 to 'collectgarbage' (string expected, got {})",
+                v.unwrap().type_name(),
+            ));
+        }
+    };
+
+    Ok(result)
 }
 
 pub(crate) fn error(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {

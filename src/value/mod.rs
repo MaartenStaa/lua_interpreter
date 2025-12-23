@@ -110,6 +110,22 @@ impl LuaValue {
         }
     };
 
+    pub fn size_bytes(&self) -> u64 {
+        (size_of::<Self>() as u64)
+            + match self {
+                Self::String(s) => size_of_val(s) as u64,
+                Self::Object(o) => {
+                    let o = o.read().unwrap();
+                    match &*o {
+                        LuaObject::Table(t) => t.size_bytes(),
+                        // TODO: Once we have threads or userdata, this probably needs to change.
+                        _ => 0,
+                    }
+                }
+                _ => 0,
+            }
+    }
+
     pub fn type_name(&self) -> &'static str {
         match self {
             LuaValue::Nil => "nil",

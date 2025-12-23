@@ -136,6 +136,20 @@ impl LuaTable {
     pub fn metatable(&self) -> Option<&LuaValue> {
         self.metatable.as_ref()
     }
+
+    pub fn size_bytes(&self) -> u64 {
+        size_of::<Self> as u64
+            + self
+                .fields
+                .iter()
+                .map(|(k, v)| k.size_bytes() + v.size_bytes())
+                .sum::<u64>()
+            + self
+                .metatable
+                .as_ref()
+                .map(|mt| mt.size_bytes())
+                .unwrap_or_default()
+    }
 }
 
 impl Deref for LuaTable {
