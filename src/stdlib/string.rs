@@ -260,13 +260,13 @@ fn find(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     let init = match input.get(2) {
         Some(LuaValue::Number(LuaNumber::Integer(i))) => *i,
         Some(LuaValue::Number(f @ LuaNumber::Float(_))) => f.integer_repr()?,
+        Some(LuaValue::Nil) | None => 1,
         Some(v) => {
             return Err(lua_error!(
                 "bad argument #3 to 'find' (number expected, got {type_name})",
                 type_name = v.type_name()
             ));
         }
-        None => 1,
     };
 
     let init = match init.cmp(&0) {
