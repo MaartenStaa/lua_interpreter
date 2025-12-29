@@ -272,12 +272,17 @@ impl<'source> VM<'source> {
     }
 
     fn capture_upvalue(&mut self, register: u8) -> Arc<RwLock<UpValue>> {
-        let value = self.get_ref(register);
-        if let LuaValue::UpValue(upvalue) = &*value {
+        let frame_pointer = self.call_stack[self.call_stack_index - 1].frame_pointer;
+        if let LuaValue::UpValue(upvalue) = &self.stack[frame_pointer + register as usize] {
             return Arc::clone(upvalue);
         }
 
-        let upvalue = Arc::new(RwLock::new(UpValue(value.into_owned())));
+        let mut value = LuaValue::Nil;
+        std::mem::swap(
+            &mut value,
+            &mut self.stack[frame_pointer + register as usize],
+        );
+        let upvalue = Arc::new(RwLock::new(UpValue(value)));
         self.set(register, LuaValue::UpValue(Arc::clone(&upvalue)));
 
         upvalue
