@@ -138,7 +138,7 @@ impl LuaTable {
     }
 
     pub fn size_bytes(&self) -> u64 {
-        size_of::<Self> as u64
+        size_of::<Self>() as u64
             + self
                 .fields
                 .iter()
