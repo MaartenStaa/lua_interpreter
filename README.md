@@ -115,7 +115,7 @@ Legend:
     6. 🚫 utf8.offset
 6. Table manipulation \[3/7]
     1. ✅ table.concat
-    2. 🚫 table.insert
+    2. ✅ table.insert
     3. 🚫 table.move
     4. ✅ table.pack
     5. 🚫 table.remove

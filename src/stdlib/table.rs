@@ -15,6 +15,10 @@ pub static TABLE: LazyLock<LuaValue> = LazyLock::new(|| {
         LuaObject::NativeFunction("concat", concat).into(),
     );
     table.insert(
+        "insert".into(),
+        LuaObject::NativeFunction("insert", insert).into(),
+    );
+    table.insert(
         "pack".into(),
         LuaObject::NativeFunction("pack", pack).into(),
     );
@@ -111,6 +115,42 @@ fn concat(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     }
 
     Ok(vec![LuaValue::String(result)])
+}
+
+fn insert(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
+    require_table!(write, input, "table.insert", 0, table, {
+        let len = table.len() as i64;
+
+        match input.get(1) {
+            Some(LuaValue::Number(n)) => {
+                let i = n.integer_repr()?;
+                let value = input.get(2).cloned().ok_or_else(|| {
+                    lua_error!("bad argument #3 to 'table.insert' (value expected)")
+                })?;
+
+                if i < 1 || i > len + 1 {
+                    return Err(lua_error!(
+                        "bad argument #2 to 'table.insert' (position out of bounds)"
+                    ));
+                }
+
+                for k in (i..=len).rev() {
+                    let v = table.get(&k.into()).cloned().unwrap_or(LuaValue::Nil);
+                    table.insert((k + 1).into(), v);
+                }
+
+                table.insert(i.into(), value);
+            }
+            Some(value) => {
+                table.insert((len + 1).into(), value.clone());
+            }
+            None => {
+                return Err(lua_error!("wrong number of arguments to 'table.insert'"));
+            }
+        }
+
+        Ok(vec![])
+    })
 }
 
 fn pack(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
