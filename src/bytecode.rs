@@ -1,7 +1,6 @@
 use crate::compiler::{ExpressionResultMode, Upvalue};
 use crate::error::RuntimeError;
 use crate::instruction::Instruction;
-use crate::value::LuaVariableAttribute;
 use crate::vm::{ConstIndex, JumpAddr};
 
 #[derive(Debug)]
@@ -149,11 +148,6 @@ pub(crate) enum Bytecode {
         dest_register: u8,
         src_register: u8,
     },
-    /// Set an attribute for a local variable in a register.
-    SetLocalAttr {
-        register: u8,
-        attr_index: LuaVariableAttribute,
-    },
     /// Set an upvalue from a register.
     SetUpval {
         upval_index: u8,
@@ -169,6 +163,14 @@ pub(crate) enum Bytecode {
     LoadVararg {
         dest_register: u8,
         single_value: bool,
+    },
+    /// Mark a register as having a <close> attribute.
+    ToClose {
+        register: u8,
+    },
+    /// Close all registers from a given register upwards that have the <close> attribute.
+    Close {
+        from_register: u8,
     },
 
     // Tables
@@ -492,12 +494,6 @@ impl Bytecode {
             } => {
                 bytes!(Mov, dest_register, src_register)
             }
-            Self::SetLocalAttr {
-                register,
-                attr_index,
-            } => {
-                bytes!(SetLocalAttr, register, bytes = attr_index as u8)
-            }
             Self::SetUpval {
                 upval_index,
                 src_register,
@@ -515,6 +511,12 @@ impl Bytecode {
                 single_value,
             } => {
                 bytes!(LoadVararg, dest_register, single_value as u8)
+            }
+            Self::ToClose { register } => {
+                bytes!(ToClose, register)
+            }
+            Self::Close { from_register } => {
+                bytes!(Close, from_register)
             }
 
             // Tables

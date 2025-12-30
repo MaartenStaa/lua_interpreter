@@ -22,14 +22,74 @@ use crate::{
     vm::{ConstIndex, JumpAddr, VM},
 };
 
+/// Goto statement waiting to be resolved. Gotos are tricky, we might be jumping out of a scope
+/// where we may or may not need to close values (marked as to-be-closed), or even out of multiple
+/// scopes; and we don't know this until we find the label we're looking for.
+///
+/// ```lua
+/// do
+///   local x <close> = foo()
+///   do
+///     local y <close> = foo()
+///     goto somewhere -- A
+///     local z <close> = foo()
+///   end -- B
+///   local something = bar()
+///   ::somewhere:: -- C
+///   -- ...
+/// end
+/// ```
+///
+/// We handle this as follows:
+/// - When we find the `goto` statement, we haven't found the label yet, so this struct gets
+///   created, along with a Jmp instruction with the undecided address in [`Self::addr`].
+/// - At `B` the scope ends. We know that `y` was in-scope (from [`Self::current_register`]), so
+///   we'll generate: an undecided jump (A), a `Close <scope_starting_register` to close `y`, and a
+///   new jump for the goto (patching [`Self::addr`]). Then we'll path jump `A` so regular flow
+///   that doesn't hit the `goto` can jump over the generated close instruction. We update
+///   [`Self::current_register`] to match the starting register of the scope.
+/// - At `C`, we find the pending goto, and patch the jump address. Based on the updated
+///   `current_register`, we know that `something` is a new local. This is fine, _unless_ the block
+///   contains any more statements. If this happens, we'll raise an error.
+///
+/// Note that gotos cannot jump into a narrower scope, which is why we keep both [`Self::depth`]
+/// and [`Self::scope_id`]. Then, when encountering a label, we can verify the current depth is
+/// less than or equal to the goto's depth, and that the goto's scope id is part of the current
+/// scope stack (and not an unrelated depth).
+///
+/// For example, this is okay:
+///
+/// ```lua
+/// do
+///   do
+///     do
+///       goto foo
+///     end
+///   end
+///   ::foo::
+/// end
+/// ```
+///
+/// While this is not:
+///
+/// ```lua
+/// do
+///   do
+///     goto foo
+///   end
+///   do
+///     -- depth is the same, but the goto's scope id is no longer accessible
+///     ::foo::
+///   end
+/// end
+/// ```
 #[derive(Debug)]
 struct Goto {
     addr: JumpAddr,
     span: Span,
-    locals: usize,
+    current_register: u8,
     depth: u8,
     scope_id: usize,
-    to_end_of_scope: bool,
 }
 
 #[derive(Debug)]
@@ -95,6 +155,7 @@ struct Frame {
     name: Option<Vec<u8>>,
     method_name: Option<Vec<u8>>,
     locals: Vec<Local>,
+    to_close: Vec<u8>,
     gotos: HashMap<Vec<u8>, Vec<Goto>>,
     labels: HashMap<Vec<u8>, Label>,
     upvalues: Vec<Upvalue>,
@@ -112,6 +173,7 @@ impl Frame {
             name,
             method_name,
             locals: vec![],
+            to_close: vec![],
             gotos: HashMap::new(),
             labels: HashMap::new(),
             upvalues: vec![],
@@ -532,9 +594,8 @@ impl<'a, 'source> Compiler<'a, 'source> {
                             attributes |= LuaVariableAttribute::Constant as u8;
                             attributes |= LuaVariableAttribute::ToBeClosed as u8;
                             self.chunk.push_bytecode(
-                                Bytecode::SetLocalAttr {
+                                Bytecode::ToClose {
                                     register: name_register,
-                                    attr_index: LuaVariableAttribute::ToBeClosed,
                                 },
                                 Some(span),
                             );
@@ -790,22 +851,26 @@ impl<'a, 'source> Compiler<'a, 'source> {
                     ));
                 }
 
-                // Check the number of locals defined so far.
-                // let locals = self
-                //     .frames
-                //     .last()
-                //     .expect("frames is not empty")
-                //     .locals
-                //     .iter()
-                //     .filter(|local| local.depth >= options.loop_scope_depth)
-                //     .count();
+                // Jump past the rest of the loop, using a JmpClose instruction
+                // to also close any locals if needed..
+                let frame = self.frames.last().expect("frames is not empty");
+                let scope_starting_register =
+                    frame.scope_starting_registers[options.loop_scope_depth as usize];
+                let close_from = frame
+                    .to_close
+                    .iter()
+                    .find(|&&r| r >= scope_starting_register);
 
-                // Jump past the rest of the loop (sort of, we do some intermediate jumps to clean
-                // up all locals along the way, both in the scope of the loop itself, and any
-                // underlying ones such as if statements).
-                let break_jump = self
-                    .chunk
-                    .push_undecided_jump(JumpToUndecidedAddress::Jmp, Some(span));
+                let break_jump = self.chunk.push_undecided_jump(
+                    if let Some(r) = close_from {
+                        JumpToUndecidedAddress::JmpClose {
+                            close_from_register: *r,
+                        }
+                    } else {
+                        JumpToUndecidedAddress::Jmp
+                    },
+                    Some(span),
+                );
 
                 BlockResult::new().with_breaks(vec![BreakJump { addr: break_jump }])
             }
@@ -887,31 +952,14 @@ impl<'a, 'source> Compiler<'a, 'source> {
                     None,
                 );
 
-                let jmps: Vec<_> = block_result
-                    .breaks
-                    .into_iter()
-                    .map(|jump| {
-                        // Skip over the extra pops here for non-breaks
-                        let jmp = self
-                            .chunk
-                            .push_undecided_jump(JumpToUndecidedAddress::Jmp, None);
-
-                        // Pop the locals defined in the loop before the break
-                        self.chunk.patch_addr_placeholder(jump.addr);
-
-                        jmp
-                    })
-                    .collect();
-                for addr in jmps {
-                    self.chunk.patch_addr_placeholder(addr);
+                for break_ in block_result.breaks {
+                    self.chunk.patch_addr_placeholder(break_.addr);
                 }
 
                 let jmp_exit_loop_addr = self
                     .chunk
                     .push_undecided_jump(JumpToUndecidedAddress::Jmp, None);
                 self.chunk.patch_addr_placeholder(jmp_false_addr);
-                // Pop the loop condition value
-                // self.chunk.push_instruction(Instruction::Pop, None);
                 self.chunk.patch_addr_placeholder(jmp_exit_loop_addr);
 
                 BlockResult::new()
@@ -1141,9 +1189,8 @@ impl<'a, 'source> Compiler<'a, 'source> {
                             None,
                         );
                         self.chunk.push_bytecode(
-                            Bytecode::SetLocalAttr {
+                            Bytecode::ToClose {
                                 register: closing_local,
-                                attr_index: LuaVariableAttribute::ToBeClosed,
                             },
                             None,
                         );
@@ -1257,28 +1304,6 @@ impl<'a, 'source> Compiler<'a, 'source> {
                 self.end_scope()?;
 
                 // Patch any break jumps
-                // let jmps: Vec<_> = block_result
-                //     .breaks
-                //     .into_iter()
-                //     .map(|jump| {
-                //         // Skip over the extra pops here for non-breaks
-                //         self.chunk.push_instruction(Instruction::Jmp, None);
-                //         let jmp = self.chunk.push_addr_placeholder();
-
-                // // Pop the locals defined in the loop before the break
-                // self.chunk.patch_addr_placeholder(jump.addr);
-                // for _ in 0..jump.locals {
-                //     self.chunk.push_instruction(Instruction::Pop, None);
-                // }
-
-                //         jmp
-                //     })
-                //     .collect();
-                // for addr in jmps {
-                //     self.chunk.patch_addr_placeholder(addr);
-                // }
-
-                // Patch any break jumps
                 for jump in block_result.breaks {
                     self.chunk.patch_addr_placeholder(jump.addr);
                 }
@@ -1297,11 +1322,6 @@ impl<'a, 'source> Compiler<'a, 'source> {
             Statement::Goto(name) => {
                 let frame = self.frames.last_mut().expect("frames is not empty");
                 let label = frame.labels.get(&name.node.0);
-                let locals = frame
-                    .locals
-                    .iter()
-                    .filter(|local| local.depth <= frame.scope_depth)
-                    .count();
                 match label {
                     Some(label) => {
                         self.chunk.push_bytecode(
@@ -1314,18 +1334,20 @@ impl<'a, 'source> Compiler<'a, 'source> {
                     }
                     None => {
                         // Add to frame to resolve the jump later
+                        // Note that we don't use JmpClose, since we might jump forward into the
+                        // same scope, so the to-be-closed variables should still be valid in that
+                        // case.
                         let addr = self
                             .chunk
-                            .push_undecided_jump(JumpToUndecidedAddress::Jmp, None);
+                            .push_undecided_jump(JumpToUndecidedAddress::Jmp, Some(span));
 
                         let scope_id = frame.scope_id();
                         let goto = Goto {
                             addr,
-                            locals,
                             span,
                             depth: frame.scope_depth,
+                            current_register: frame.register_index,
                             scope_id,
-                            to_end_of_scope: false,
                         };
                         frame.gotos.entry(name.node.0).or_default().push(goto);
                     }
@@ -1344,57 +1366,39 @@ impl<'a, 'source> Compiler<'a, 'source> {
                 }
 
                 let addr = self.chunk.get_current_addr();
-                let locals = frame
-                    .locals
-                    .iter()
-                    .filter(|local| local.depth <= frame.scope_depth)
-                    .count();
-
                 let scope_id = frame.scope_id();
-                let (any_new_locals, resolved_all_gotos) =
-                    if let Some(gotos) = frame.gotos.get_mut(&label.node.0) {
-                        let mut any_new_locals = None;
-                        for goto in gotos.iter_mut() {
-                            if goto.depth < frame.scope_depth {
-                                return Err(lua_error!(
-                                    labels = vec![
-                                        goto.span.labeled("this goto statement"),
-                                        label.span.labeled("this label")
-                                    ],
-                                    "cannot goto label '{}' in a narrower scope",
-                                    String::from_utf8_lossy(&label.node.0)
-                                ));
-                            }
-
-                            if goto.depth > frame.scope_depth || goto.scope_id == scope_id {
-                                if locals > goto.locals && any_new_locals.is_none() {
-                                    let first_new_local = frame
-                                        .locals
-                                        .iter()
-                                        .filter(|local| local.depth <= frame.scope_depth)
-                                        .nth(goto.locals)
-                                        .expect("local exists");
-                                    any_new_locals = Some(NewLocalsAfterGoto {
-                                        goto: (label.node.0.clone(), goto.span),
-                                        local: (first_new_local.name.clone(), first_new_local.span),
-                                    });
-
-                                    goto.to_end_of_scope = true;
-                                } else {
-                                    self.chunk.patch_addr_placeholder_with(goto.addr, addr);
-                                }
-                            }
+                let mut any_new_locals = None;
+                let mut resolved_all_gotos = false;
+                if let Some(gotos) = frame.gotos.get_mut(&label.node.0) {
+                    for goto in gotos.extract_if(.., |goto| scope_id == goto.scope_id) {
+                        // Is this part of the same scope hierarchy, but in a lower scope? If so,
+                        // that's an error.
+                        if goto.depth < frame.scope_depth {
+                            return Err(lua_error!(
+                                labels = vec![
+                                    goto.span.labeled("this goto statement"),
+                                    label.span.labeled("this label")
+                                ],
+                                "no visible label '{}' for goto",
+                                String::from_utf8_lossy(&label.node.0)
+                            ));
                         }
 
-                        gotos.retain(|goto| {
-                            (goto.depth <= frame.scope_depth && goto.scope_id != scope_id)
-                                || goto.to_end_of_scope
-                        });
+                        self.chunk.patch_addr_placeholder_with(goto.addr, addr);
 
-                        (any_new_locals, gotos.is_empty())
-                    } else {
-                        (None, false)
-                    };
+                        let first_new_local = frame
+                            .locals
+                            .iter()
+                            .filter(|local| local.depth <= frame.scope_depth)
+                            .nth(goto.current_register as usize);
+                        any_new_locals = first_new_local.map(|local| NewLocalsAfterGoto {
+                            goto: (label.node.0.clone(), goto.span),
+                            local: (local.name.clone(), local.span),
+                        });
+                    }
+
+                    resolved_all_gotos = gotos.is_empty();
+                }
 
                 if resolved_all_gotos {
                     frame.gotos.remove(&label.node.0);
@@ -1418,7 +1422,12 @@ impl<'a, 'source> Compiler<'a, 'source> {
         &mut self,
         return_statement: Vec<TokenTree<Expression>>,
     ) -> crate::Result {
+        let has_to_close_values = !self.frames.last().unwrap().to_close.is_empty();
         if return_statement.is_empty() {
+            if has_to_close_values {
+                self.chunk
+                    .push_bytecode(Bytecode::Close { from_register: 0 }, None);
+            }
             self.chunk.push_bytecode(Bytecode::Return0, None);
             return Ok(());
         }
@@ -1430,6 +1439,11 @@ impl<'a, 'source> Compiler<'a, 'source> {
 
         let register = self.frames.last().unwrap().register_index;
         let expression_list_length = self.compile_expression_list(return_statement)?;
+
+        if has_to_close_values {
+            self.chunk
+                .push_bytecode(Bytecode::Close { from_register: 0 }, None);
+        }
 
         if num_returns == 1 && !is_variable {
             self.chunk.push_bytecode(
@@ -1641,6 +1655,10 @@ impl<'a, 'source> Compiler<'a, 'source> {
         let frame = self.end_frame()?;
 
         if !has_return {
+            if !frame.to_close.is_empty() {
+                self.chunk
+                    .push_bytecode(Bytecode::Close { from_register: 0 }, None);
+            }
             self.chunk.push_bytecode(Bytecode::Return0, None);
         }
 
@@ -2475,7 +2493,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
         {
             return Err(lua_error!(
                 labels = vec![goto.span.labeled("here")],
-                "label '{}' not found",
+                "no visible label '{}' for goto",
                 String::from_utf8_lossy(name)
             ));
         }
@@ -2516,81 +2534,68 @@ impl<'a, 'source> Compiler<'a, 'source> {
             current_frame.locals.pop();
         }
 
-        // Remove any labels that are no longer in scope
-        let mut to_remove = Vec::new();
-        for (name, label) in current_frame.labels.iter() {
-            if label.depth > current_frame.scope_depth {
-                to_remove.push(name.clone());
-            }
-
-            // Patch gotos that go to this label
-            let all_jumps_resolved = if let Some(jumps) = current_frame.gotos.get_mut(name) {
-                for jump in jumps.iter() {
-                    if (jump.depth > label.depth || jump.scope_id == scope_id)
-                        && !jump.to_end_of_scope
-                    {
-                        if jump.depth < label.depth {
-                            return Err(lua_error!(
-                                labels = vec![jump.span.labeled("here")],
-                                "label '{}' not found",
-                                String::from_utf8_lossy(name)
-                            ));
-                        }
-
-                        self.chunk
-                            .patch_addr_placeholder_with(jump.addr, label.addr);
-                    }
-                }
-
-                jumps.retain(|jump| {
-                    jump.depth < label.depth || jump.scope_id != scope_id || jump.to_end_of_scope
-                });
-                jumps.is_empty()
-            } else {
-                false
-            };
-            if all_jumps_resolved {
-                current_frame.gotos.remove(name);
-            }
-        }
-
-        for name in to_remove {
-            current_frame.labels.remove(&name);
-        }
-
         // If we have any gotos still pending, they're going to jump out of this scope. So we need
-        // to make sure that they will correctly pop any locals that were in scope at the point of
-        // the goto.
+        // to make sure that they will correctly close any to-be-closed values that were in scope
+        // at the point of the goto statement.
         for gotos in current_frame.gotos.values_mut() {
-            for goto in gotos.iter_mut() {
-                if goto.scope_id == scope_id || goto.to_end_of_scope {
-                    if goto.locals > 0 {
-                        // FIXME: This doesn't need to `pop` anything, but if any locals of this
-                        // scope have the `ToBeClosed` attribute, we need to call their __close
-                        // metamethod.
-                        self.chunk.patch_addr_placeholder(goto.addr);
-                        if !goto.to_end_of_scope {
-                            goto.addr = self
-                                .chunk
-                                .push_undecided_jump(JumpToUndecidedAddress::Jmp, None);
-                        }
-                    } else if goto.to_end_of_scope {
-                        self.chunk.patch_addr_placeholder(goto.addr);
-                    }
-
-                    goto.scope_id = parent_scope_id;
-                    goto.locals = current_frame
-                        .locals
+            // Find the gotos that need to close variables
+            let gotos_with_to_close = gotos
+                .iter_mut()
+                .filter(|goto| goto.scope_id == scope_id)
+                .filter(|goto| {
+                    current_frame
+                        .to_close
                         .iter()
-                        .filter(|local| local.depth <= current_frame.scope_depth)
-                        .count();
+                        .find(|&&r| r >= starting_register)
+                        .is_some_and(|&r| r < goto.current_register)
+                })
+                .collect::<Vec<_>>();
+
+            if !gotos_with_to_close.is_empty() {
+                // Let those gotos close their values, and then jump onwards
+                for goto in gotos_with_to_close.iter() {
+                    self.chunk.patch_addr_placeholder(goto.addr);
+                }
+
+                let new_addr_placeholder = self.chunk.push_undecided_jump(
+                    JumpToUndecidedAddress::JmpClose {
+                        close_from_register: starting_register,
+                    },
+                    None,
+                );
+                for goto in gotos_with_to_close {
+                    goto.addr = new_addr_placeholder;
                 }
             }
 
-            gotos.retain(|goto| !goto.to_end_of_scope);
+            for goto in gotos.iter_mut().filter(|goto| goto.scope_id == scope_id) {
+                goto.scope_id = parent_scope_id;
+                goto.current_register = starting_register;
+            }
         }
 
         current_frame.gotos.retain(|_, gotos| !gotos.is_empty());
+
+        // Do we need to close any variables?
+        if let Some(at) = current_frame
+            .to_close
+            .iter()
+            .position(|&r| r >= starting_register)
+        {
+            self.chunk.push_bytecode(
+                Bytecode::Close {
+                    from_register: starting_register,
+                },
+                None,
+            );
+
+            current_frame.to_close.truncate(at);
+        }
+
+        // Remove any labels that are no longer in scope
+        current_frame
+            .labels
+            .retain(|_, label| label.depth <= current_frame.scope_depth);
 
         Ok(())
     }
@@ -2612,6 +2617,10 @@ impl<'a, 'source> Compiler<'a, 'source> {
             String::from_utf8_lossy(&name),
         );
         current_frame.locals.push(local);
+
+        if attributes & (LuaVariableAttribute::ToBeClosed as u8) != 0 {
+            current_frame.to_close.push(index);
+        }
     }
 
     fn resolve_local(&mut self, name: &[u8]) -> Option<(u8, &Local)> {

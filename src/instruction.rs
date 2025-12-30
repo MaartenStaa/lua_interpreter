@@ -40,10 +40,11 @@ pub enum Instruction {
     SetGlobal,
     GetGlobal,
     Mov,
-    SetLocalAttr,
     SetUpval,
     GetUpval,
     LoadVararg,
+    ToClose,
+    Close,
 
     // Table
     NewTable,

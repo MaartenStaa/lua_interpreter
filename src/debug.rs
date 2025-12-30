@@ -5,7 +5,7 @@ use crate::{
     error::RuntimeError,
     instruction::Instruction,
     macros::assert_function_const,
-    value::{LuaConst, LuaFunctionDefinition, LuaVariableAttribute},
+    value::{LuaConst, LuaFunctionDefinition},
     vm::{ConstIndex, JumpAddr, VM},
 };
 
@@ -295,14 +295,6 @@ pub fn print_instructions(vm: &VM, chunk: &Chunk<'_>) {
                 println!();
                 3
             }
-            Instruction::SetLocalAttr => {
-                let attr_value = instructions[instruction_pointer + 2];
-                let attr = LuaVariableAttribute::try_from(attr_value).expect("valid attribute");
-                instr!("SET_LOCAL_ATTR");
-                reg!();
-                println!(" {attr:?}");
-                3
-            }
             Instruction::SetUpval => {
                 let upval_index = instructions[instruction_pointer + 1];
                 instr!("SET_UPVAL");
@@ -324,6 +316,18 @@ pub fn print_instructions(vm: &VM, chunk: &Chunk<'_>) {
                 reg!();
                 println!("{}", if is_single_value { "single" } else { "multi" });
                 3
+            }
+            Instruction::ToClose => {
+                instr!("TO_CLOSE");
+                reg!();
+                println!();
+                2
+            }
+            Instruction::Close => {
+                instr!("CLOSE");
+                reg!();
+                println!();
+                2
             }
 
             // Table

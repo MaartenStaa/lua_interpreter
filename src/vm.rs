@@ -13,11 +13,13 @@ use crate::{
     instruction::Instruction,
     macros::{assert_closure, assert_table, assert_table_object},
     value::{
-        LuaClosure, LuaConst, LuaObject, LuaValue, LuaVariableAttribute, UpValue,
+        LuaClosure, LuaConst, LuaObject, LuaValue, UpValue,
         callable::{Callable, Method},
-        metatables::{self, CLOSE_KEY, INDEX_KEY, NEWINDEX_KEY},
+        metatables::{self, INDEX_KEY, NEWINDEX_KEY},
     },
 };
+
+mod close;
 
 const MAX_STACK_SIZE: usize = 256;
 
@@ -32,7 +34,6 @@ pub struct VM<'source> {
     consts: Vec<LuaConst>,
     const_index: ConstIndex,
     stack: Vec<LuaValue>,
-    stack_attrs: Vec<u8>,
     // Ephemeral result count for multi-return value calls
     multres: usize,
     call_stack: [CallFrame; MAX_STACK_SIZE],
@@ -55,6 +56,7 @@ struct CallFrame {
     varargs: Vec<LuaValue>,
     takes_varargs: bool,
     allow_multi_return_values: bool,
+    to_close: Vec<u8>,
 }
 
 impl CallFrame {
@@ -73,6 +75,7 @@ impl CallFrame {
             varargs: vec![],
             takes_varargs: false,
             allow_multi_return_values: true,
+            to_close: vec![],
         }
     }
 }
@@ -94,7 +97,6 @@ impl<'source> VM<'source> {
             consts: vec![],
             const_index: 0,
             stack: vec![],
-            stack_attrs: vec![],
             multres: 0,
             call_stack: [const { CallFrame::default() }; MAX_STACK_SIZE],
             call_stack_index: 0,
@@ -243,8 +245,6 @@ impl<'source> VM<'source> {
         if required_stack_size >= self.stack.len() {
             self.stack
                 .resize(frame_pointer + max_registers, LuaValue::Nil);
-            // NOTE: `stack` and `stack_attrs` are always the same size
-            self.stack_attrs.resize(frame_pointer + max_registers, 0);
         }
 
         // FIXME: If the stack is already big enough, we might need to
@@ -267,6 +267,7 @@ impl<'source> VM<'source> {
 
         frame.upvalues.as_mut().unwrap().clear();
         frame.varargs.clear();
+        frame.to_close.clear();
 
         popped_frame
     }
@@ -393,6 +394,7 @@ impl<'source> VM<'source> {
         )?;
 
         let num_args = args.len();
+        self.ensure_stack_space(value.max_registers.max(num_args as u8));
         for (index, arg) in args.into_iter().enumerate() {
             self.set(index, arg);
         }
@@ -907,15 +909,6 @@ impl<'source> VM<'source> {
 
                     3
                 }
-                Instruction::SetLocalAttr => {
-                    let local_index = instr_param!(1);
-                    let attr_value = instr_param!(2);
-
-                    self.stack_attrs[self.call_stack[self.call_stack_index - 1].frame_pointer
-                        + local_index as usize] |= attr_value;
-
-                    3
-                }
                 Instruction::SetUpval => {
                     let upval_index = instr_param!();
                     let register = register!(2);
@@ -973,6 +966,18 @@ impl<'source> VM<'source> {
                         self.clear_registers_from(register as usize + self.multres);
                     }
                     3
+                }
+                Instruction::ToClose => {
+                    let register = register!();
+                    self.call_stack[self.call_stack_index - 1]
+                        .to_close
+                        .push(register);
+                    2
+                }
+                Instruction::Close => {
+                    let from_register = register!();
+                    self.close(from_register)?;
+                    2
                 }
 
                 // Table
@@ -1383,7 +1388,7 @@ impl<'source> VM<'source> {
                     2 + size_of::<JumpAddr>()
                 }
                 Instruction::JmpClose => {
-                    let close_register = register!();
+                    let from_register = register!();
                     let addr = jump_addr!(2);
                     if addr == JumpAddr::MAX {
                         // TODO: We probably want a nicer error here. Was this a break
@@ -1392,45 +1397,9 @@ impl<'source> VM<'source> {
                         return Err(self.err("attempt to jump to an invalid address"));
                     }
 
-                    let frame_pointer = self.call_stack[self.call_stack_index - 1].frame_pointer;
-                    let to_be_closed = LuaVariableAttribute::ToBeClosed as u8;
-                    let attrs =
-                        Vec::from(&self.stack_attrs[frame_pointer + close_register as usize..]);
-                    for attr in attrs {
-                        if attr & to_be_closed == 1 {
-                            let value = self.get(close_register);
-                            if let Some(__close) = value.get_metavalue(&CLOSE_KEY) {
-                                let close: Callable = (&__close).try_into().map_err(|_| {
-                                    self.err("__close metamethod must be a callable value")
-                                })?;
-
-                                // TODO: Second value refers to "the error object that caused the exit
-                                // (if any)", but we don't have that yet. Sound like we'll need to
-                                // unwind the stack for that.
-                                let args = if close.is_metamethod {
-                                    vec![__close, value, LuaValue::Nil]
-                                } else {
-                                    vec![value, LuaValue::Nil]
-                                };
-                                match close.method {
-                                    Method::Closure(closure) => {
-                                        self.run_closure(closure, args)?;
-                                    }
-                                    Method::NativeFunction(name, func) => {
-                                        self.run_native_function(&name, func, args)?;
-                                    }
-                                }
-                            } else {
-                                return Err(self
-                                    .err("variable marked for closing has a non-closeable value"));
-                            }
-                        } else {
-                            break;
-                        }
-                    }
-
-                    self.clear_registers_from(close_register);
+                    self.close(from_register)?;
                     self.chunks[chunk_index].ip = addr as usize;
+
                     continue;
                 }
 
