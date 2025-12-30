@@ -473,6 +473,35 @@ pub(crate) fn rawget(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaV
     })
 }
 
+pub(crate) fn rawlen(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
+    let value = input.first();
+    let result = match value {
+        Some(LuaValue::Object(o)) => match &*o.read().unwrap() {
+            LuaObject::Table(t) => t.len(),
+            _ => {
+                return Err(lua_error!(
+                    "bad argument #1 to 'rawlen' (table or string expected, got {})",
+                    o.read().unwrap().type_name(),
+                ));
+            }
+        },
+        Some(LuaValue::String(s)) => s.len(),
+        Some(v) => {
+            return Err(lua_error!(
+                "bad argument #1 to 'rawlen' (table or string expected, got {})",
+                v.type_name(),
+            ));
+        }
+        None => {
+            return Err(lua_error!(
+                "bad argument #1 to 'rawlen' (table or string expected, got no value)"
+            ));
+        }
+    } as i64;
+
+    Ok(vec![result.into()])
+}
+
 pub(crate) fn rawset(_: &mut VM, mut input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     let key = input
         .get(1)

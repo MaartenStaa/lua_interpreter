@@ -51,7 +51,7 @@ Legend:
     13. ✅ print
     14. ✅ rawequal
     15. ✅ rawget
-    16. 🚫 rawlen
+    16. ✅ rawlen
     17. ✅ rawset
     18. ✅ select
     19. ✅ setmetatable

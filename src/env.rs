@@ -56,6 +56,10 @@ pub fn create_global_env() -> LuaTable {
         LuaObject::NativeFunction("rawget", stdlib::globals::rawget).into(),
     );
     env.insert(
+        "rawlen".into(),
+        LuaObject::NativeFunction("rawlen", stdlib::globals::rawlen).into(),
+    );
+    env.insert(
         "rawset".into(),
         LuaObject::NativeFunction("rawset", stdlib::globals::rawset).into(),
     );
