@@ -1248,6 +1248,8 @@ impl<'source> VM<'source> {
                                 }
                             }
 
+                            self.clear_registers_from(func_r as usize + self.multres);
+
                             4
                         }
                         _ => {
