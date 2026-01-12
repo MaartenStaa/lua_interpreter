@@ -20,7 +20,7 @@ pub enum LuaObject {
 impl PartialEq for LuaObject {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (LuaObject::Table(a), LuaObject::Table(b)) => a == b,
+            (LuaObject::Table(a), LuaObject::Table(b)) => std::ptr::eq(a, b),
             (
                 LuaObject::Closure(LuaClosure {
                     chunk: chunk_a,
