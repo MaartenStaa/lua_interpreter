@@ -1,14 +1,21 @@
-use std::sync::{Arc, RwLock};
+use std::{
+    collections::HashMap,
+    sync::{Arc, RwLock},
+};
 
-use super::UpValue;
+use crate::{value::UpValue, vm::ConstIndex};
 
 #[derive(Debug, Clone)]
 pub struct LuaClosure {
-    pub name: Option<Vec<u8>>,
-    pub chunk: usize,
-    pub ip: u16,
-    pub max_registers: u8,
-    pub upvalues: Vec<Option<Arc<RwLock<UpValue>>>>,
-    pub num_params: u8,
-    pub has_varargs: bool,
+    pub chunk: ConstIndex,
+    pub upvalues: HashMap<usize, Arc<RwLock<UpValue>>>,
+}
+
+impl LuaClosure {
+    pub(crate) fn new(chunk_index: ConstIndex) -> Self {
+        Self {
+            chunk: chunk_index,
+            upvalues: HashMap::new(),
+        }
+    }
 }

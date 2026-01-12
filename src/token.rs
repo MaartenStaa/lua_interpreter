@@ -2,6 +2,8 @@ use std::fmt::Debug;
 
 use miette::{LabeledSpan, SourceSpan};
 
+use crate::value::LuaString;
+
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub struct Span {
     pub start: usize,
@@ -115,5 +117,5 @@ pub enum TokenKind<'source> {
     Nil,
     Integer(i64),
     Float(f64),
-    String(Vec<u8>), // TODO: Extract to dedicated type.
+    String(LuaString),
 }

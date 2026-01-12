@@ -392,9 +392,9 @@ fn optimize_binary_op(
                     ..
                 }),
             ) => Expression::Literal(TokenTree::new(
-                Literal::String(Vec::from_iter(
-                    lhs.to_string().into_bytes().into_iter().chain(rhs),
-                )),
+                Literal::String(
+                    Vec::from_iter(lhs.to_string().into_bytes().into_iter().chain(rhs)).into(),
+                ),
                 span,
             )),
             (
@@ -411,7 +411,7 @@ fn optimize_binary_op(
                 let mut lhs = lhs.to_string();
                 lhs.push_str(&rhs.to_string());
                 Expression::Literal(TokenTree {
-                    node: Literal::String(lhs.into_bytes()),
+                    node: Literal::String(lhs.into_bytes().into()),
                     span,
                 })
             }

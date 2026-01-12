@@ -1,4 +1,5 @@
 use crate::{
+    error::LuaError,
     value::{
         LuaValue,
         callable::{Callable, Method},
@@ -8,7 +9,11 @@ use crate::{
 
 impl<'source> VM<'source> {
     #[inline]
-    pub(crate) fn close(&mut self, from_register: u8) -> crate::Result<()> {
+    pub(crate) fn close(
+        &mut self,
+        from_register: u8,
+        error: Option<&LuaError>,
+    ) -> crate::Result<()> {
         // This close is unfortunate, but otherwise the borrow-checker won't be happy
         // with us calling `run_closure` or `run_native_function` below.
         let to_close = self.call_stack[self.call_stack_index - 1].to_close.clone();
@@ -32,20 +37,20 @@ impl<'source> VM<'source> {
                     .try_into()
                     .map_err(|_| self.err("__close metamethod must be a callable value"))?;
 
-                // TODO: Second value refers to "the error object that caused the exit
-                // (if any)", but we don't have that yet. Sound like we'll need to
-                // unwind the stack for that.
+                let error = error
+                    .map(|e| e.message.clone().into_bytes().into())
+                    .unwrap_or(LuaValue::Nil);
                 let args = if close.is_metamethod {
-                    vec![__close, value, LuaValue::Nil]
+                    vec![__close, value, error]
                 } else {
-                    vec![value, LuaValue::Nil]
+                    vec![value, error]
                 };
                 match close.method {
                     Method::Closure(closure) => {
                         self.run_closure(closure, args)?;
                     }
-                    Method::NativeFunction(name, func) => {
-                        self.run_native_function(&name, func, args)?;
+                    Method::NativeFunction(_, func) => {
+                        self.run_native_function(func, args)?;
                     }
                 }
             } else {

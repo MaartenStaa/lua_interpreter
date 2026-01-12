@@ -43,7 +43,6 @@ Legend:
     7. ✅ ipairs
     8. ⚠️ load
        Loading binary chunks is not yet supported.
-       The loaded chunk does not correctly support varargs.
     9. 🚫 loadfile
     10. ✅ next
     11. ✅ pairs

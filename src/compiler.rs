@@ -1,8 +1,5 @@
 use std::{
-    borrow::Cow,
-    collections::HashMap,
-    path::PathBuf,
-    sync::{Arc, RwLock},
+    borrow::Cow, collections::HashMap, mem::MaybeUninit, path::PathBuf, ptr::NonNull, sync::Arc,
 };
 
 use crate::{
@@ -12,192 +9,38 @@ use crate::{
         TokenTree, UnaryOperator, Variable,
     },
     bytecode::{Bytecode, JumpToUndecidedAddress},
-    chunk::Chunk,
+    chunk::{Chunk, ChunkUpValue},
+    compiler::{
+        block::{BlockOptions, BlockResult, BreakJump, NewLocalsAfterGoto},
+        expression::{ExpressionListLength, ExpressionMode, ExpressionResult, VariableMode},
+        frame::{Frame, ResolvedName, UpvalueLocation},
+        goto::{Goto, Label},
+        variable::{Local, Upvalue},
+    },
     error::{RuntimeError, lua_error},
     parser::Parser,
     token::Span,
-    value::{
-        LuaConst, LuaFunctionDefinition, LuaNumber, LuaObject, LuaTable, LuaVariableAttribute,
-    },
+    value::{LuaConst, LuaNumber, LuaString, LuaTable, LuaVariableAttribute},
     vm::{ConstIndex, JumpAddr, VM},
 };
 
-/// Goto statement waiting to be resolved. Gotos are tricky, we might be jumping out of a scope
-/// where we may or may not need to close values (marked as to-be-closed), or even out of multiple
-/// scopes; and we don't know this until we find the label we're looking for.
-///
-/// ```lua
-/// do
-///   local x <close> = foo()
-///   do
-///     local y <close> = foo()
-///     goto somewhere -- A
-///     local z <close> = foo()
-///   end -- B
-///   local something = bar()
-///   ::somewhere:: -- C
-///   -- ...
-/// end
-/// ```
-///
-/// We handle this as follows:
-/// - When we find the `goto` statement, we haven't found the label yet, so this struct gets
-///   created, along with a Jmp instruction with the undecided address in [`Self::addr`].
-/// - At `B` the scope ends. We know that `y` was in-scope (from [`Self::current_register`]), so
-///   we'll generate: an undecided jump (A), a `Close <scope_starting_register` to close `y`, and a
-///   new jump for the goto (patching [`Self::addr`]). Then we'll path jump `A` so regular flow
-///   that doesn't hit the `goto` can jump over the generated close instruction. We update
-///   [`Self::current_register`] to match the starting register of the scope.
-/// - At `C`, we find the pending goto, and patch the jump address. Based on the updated
-///   `current_register`, we know that `something` is a new local. This is fine, _unless_ the block
-///   contains any more statements. If this happens, we'll raise an error.
-///
-/// Note that gotos cannot jump into a narrower scope, which is why we keep both [`Self::depth`]
-/// and [`Self::scope_id`]. Then, when encountering a label, we can verify the current depth is
-/// less than or equal to the goto's depth, and that the goto's scope id is part of the current
-/// scope stack (and not an unrelated depth).
-///
-/// For example, this is okay:
-///
-/// ```lua
-/// do
-///   do
-///     do
-///       goto foo
-///     end
-///   end
-///   ::foo::
-/// end
-/// ```
-///
-/// While this is not:
-///
-/// ```lua
-/// do
-///   do
-///     goto foo
-///   end
-///   do
-///     -- depth is the same, but the goto's scope id is no longer accessible
-///     ::foo::
-///   end
-/// end
-/// ```
-#[derive(Debug)]
-struct Goto {
-    addr: JumpAddr,
-    span: Span,
-    current_register: u8,
-    depth: u8,
-    scope_id: usize,
-}
+pub(crate) use expression::ExpressionResultMode;
 
-#[derive(Debug)]
-struct Label {
-    addr: JumpAddr,
-    current_register: u8,
-    depth: u8,
-}
+mod block;
+mod expression;
+mod frame;
+mod goto;
+mod variable;
 
-#[derive(Debug, Clone)]
-struct Local {
-    name: Vec<u8>,
-    depth: u8,
-    span: Option<Span>,
-    attributes: u8,
-}
+const ENV_NAME: &[u8] = b"_ENV";
 
-impl Local {
-    fn is_constant(&self) -> bool {
-        self.attributes & (LuaVariableAttribute::Constant as u8) != 0
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct Upvalue {
-    pub(crate) is_local: bool,
-    pub(crate) index: u8,
-    pub(crate) attributes: u8,
-}
-
-impl Upvalue {
-    fn is_constant(&self) -> bool {
-        self.attributes & (LuaVariableAttribute::Constant as u8) != 0
-    }
-}
-
-#[derive(Debug)]
-struct BlockOptions {
-    is_loop: bool,
-    loop_scope_depth: u8,
-    new_scope: bool,
-}
-
-#[derive(Debug, Default)]
-struct BreakJump {
-    addr: JumpAddr,
-}
-
-#[derive(Debug, Default)]
-struct BlockResult {
-    breaks: Vec<BreakJump>,
-    any_new_locals: Option<NewLocalsAfterGoto>,
-}
-
-#[derive(Debug)]
-struct NewLocalsAfterGoto {
-    goto: (Vec<u8>, Span),
-    local: (Vec<u8>, Option<Span>),
-}
-
-#[derive(Debug)]
-struct Frame {
-    name: Option<Vec<u8>>,
-    method_name: Option<Vec<u8>>,
-    locals: Vec<Local>,
-    to_close: Vec<u8>,
-    gotos: HashMap<Vec<u8>, Vec<Goto>>,
-    labels: HashMap<Vec<u8>, Label>,
-    upvalues: Vec<Upvalue>,
-    scope_depth: u8,
-    scope_id_counter: usize,
-    scope_ids: Vec<usize>,
-    scope_starting_registers: Vec<u8>,
-    register_index: u8,
-    max_registers: u8,
-}
-
-impl Frame {
-    fn new(name: Option<Vec<u8>>, method_name: Option<Vec<u8>>) -> Self {
-        Self {
-            name,
-            method_name,
-            locals: vec![],
-            to_close: vec![],
-            gotos: HashMap::new(),
-            labels: HashMap::new(),
-            upvalues: vec![],
-            scope_depth: 0,
-            scope_id_counter: 1,
-            scope_ids: vec![0],
-            scope_starting_registers: vec![0],
-            register_index: 0,
-            max_registers: 0,
-        }
-    }
-
+impl<'vm, 'source> Compiler<'vm, 'source> {
     fn scope_id(&self) -> usize {
         *self.scope_ids.last().expect("scope_ids is not empty")
     }
 
-    fn resolve_local(&self, name: &[u8]) -> Option<(u8, &Local)> {
-        self.locals.iter().enumerate().rev().find_map(|(i, local)| {
-            if local.name == name {
-                Some((i as u8, local))
-            } else {
-                None
-            }
-        })
+    fn resolve_local(&self, name: &LuaString) -> Option<(u8, &Local)> {
+        self.frame.resolve_local(name)
     }
 
     fn take_register(&mut self) -> u8 {
@@ -238,155 +81,126 @@ impl Frame {
 }
 
 #[derive(Debug)]
-pub struct Compiler<'a, 'source> {
+pub struct Compiler<'vm, 'source> {
+    vm: &'vm mut VM<'source>,
     chunk: Chunk<'source>,
-    chunk_index: usize,
-    vm: &'a mut VM<'source>,
-    frames: Vec<Frame>,
+    method_name: Option<LuaString>,
+    frame: Frame,
+    to_close: Vec<u8>,
+    gotos: HashMap<LuaString, Vec<Goto>>,
+    labels: HashMap<LuaString, Label>,
+    scope_depth: u8,
+    scope_id_counter: usize,
+    scope_ids: Vec<usize>,
+    scope_starting_registers: Vec<u8>,
+    register_index: u8,
+    max_registers: u8,
 }
 
-impl BlockResult {
-    fn new() -> Self {
-        Self {
-            breaks: vec![],
-            any_new_locals: None,
-        }
-    }
-
-    fn extend(&mut self, other: Self) {
-        self.breaks.extend(other.breaks);
-        if self.any_new_locals.is_none() {
-            self.any_new_locals = other.any_new_locals;
-        }
-    }
-
-    fn with_breaks(mut self, breaks: Vec<BreakJump>) -> Self {
-        self.breaks = breaks;
-        self
-    }
-
-    fn with_new_locals(mut self, any_new_locals: Option<NewLocalsAfterGoto>) -> Self {
-        self.any_new_locals = any_new_locals;
-        self
-    }
-
-    fn assert_no_new_locals(&self) -> crate::Result {
-        if let Some(new_local) = &self.any_new_locals {
-            let mut labels = vec![new_local.goto.1.labeled("this goto statement")];
-            if let Some(span) = new_local.local.1 {
-                labels.push(span.labeled("this local variable definition"));
-            }
-            return Err(lua_error!(
-                labels = labels,
-                "<goto {}> jumps into the scope of local '{}'",
-                String::from_utf8_lossy(&new_local.goto.0),
-                String::from_utf8_lossy(&new_local.local.0)
-            ));
-        }
-        Ok(())
-    }
+#[derive(Debug)]
+pub struct CompiledChunk {
+    pub chunk_index: ConstIndex,
 }
 
-enum VariableMode {
-    Ref,
-    Read,
-    Write { value_register: u8 },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum ExpressionMode {
-    /// When possible, just return a register reference to the value. This will
-    /// mainly benefit references to variables, in usages like `SetTable`, where
-    /// you need the register holding the table value. Expressions such as
-    /// calls or operations that produce new values will always return a new
-    /// register.
-    Ref,
-    /// Always copy the value into a new register, even if we have a register
-    /// already holding the value. This is useful e.g. for function calls,
-    /// where the layout is expected to be [..., function, arg1, arg2, ...].
-    Copy,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum ExpressionResultMode {
-    Single,
-    Multiple,
-}
-
-impl ExpressionResultMode {
-    fn into_result(self, register: u8) -> ExpressionResult {
-        match self {
-            ExpressionResultMode::Single => ExpressionResult::Single { register },
-            ExpressionResultMode::Multiple => ExpressionResult::Multiple {
-                from_register: register,
-            },
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum ExpressionResult {
-    Single { register: u8 },
-    Multiple { from_register: u8 },
-}
-
-impl ExpressionResult {
-    pub fn get_register(&self) -> u8 {
-        match self {
-            ExpressionResult::Single { register } => *register,
-            ExpressionResult::Multiple { from_register } => *from_register,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum ExpressionListLength {
-    Constant {
-        from_register: u8,
-    },
-    /// Expression list ends in an expression that _may_ result in multiple values.
-    MultRes {
-        from_register: u8,
-    },
-}
-
-impl ExpressionListLength {
-    pub fn get_register(&self) -> u8 {
-        match self {
-            Self::Constant { from_register } => *from_register,
-            Self::MultRes { from_register } => *from_register,
-        }
-    }
-}
-
-impl<'a, 'source> Compiler<'a, 'source> {
+impl<'vm, 'source> Compiler<'vm, 'source> {
     pub fn new(
-        vm: &'a mut VM<'source>,
-        global_env: Option<Arc<RwLock<LuaObject>>>,
-        filename: Option<PathBuf>,
-        chunk_name: String,
-        source: Cow<'source, [u8]>,
+        vm: &'vm mut VM<'source>,
+        chunk_name: LuaString,
+        filename: Option<impl Into<PathBuf>>,
+        method_name: Option<LuaString>,
+        source: Arc<Cow<'source, [u8]>>,
+        parameters: Vec<TokenTree<Name>>,
+        has_varargs: bool,
     ) -> Self {
-        Self {
-            chunk: Chunk::new(
-                global_env.unwrap_or_else(|| vm.get_global_env()),
-                filename,
-                chunk_name,
-                source,
-            ),
-            chunk_index: vm.get_next_chunk_index(),
+        let mut result = Self {
             vm,
-            // Start at the root of the file.
-            frames: vec![Frame::new(None, None)],
+            chunk: Chunk::new(
+                chunk_name,
+                filename.map(|f| f.into()),
+                source,
+                parameters.len() as u8,
+                has_varargs,
+                vec![],
+            ),
+            method_name,
+            gotos: HashMap::new(),
+            labels: HashMap::new(),
+            to_close: vec![],
+            frame: Frame::new(),
+            scope_depth: 0,
+            scope_id_counter: 1,
+            scope_ids: vec![0],
+            scope_starting_registers: vec![0],
+            register_index: 0,
+            max_registers: 0,
+        };
+
+        // Every main chunk has an `_ENV` upvalue.
+        result
+            .frame
+            // NOTE: The source location doesn't matter much here, as for the root chunk the value
+            // is set directly, rather than being loaded from a parent call frame.
+            .add_upvalue(ENV_NAME.into(), UpvalueLocation::Upvalue { index: 0 }, 0);
+
+        for param in parameters {
+            let register = result.take_register();
+            result.add_local(param.node.0, register, 0, Some(param.span));
         }
+
+        result
     }
 
-    pub fn compile(mut self, ast: Option<TokenTree<Block>>) -> crate::Result<usize> {
+    /// Create a new compiler instance for a non-main chunk, e.g. a function body.
+    #[allow(clippy::too_many_arguments)]
+    fn new_sub(
+        vm: &'vm mut VM<'source>,
+        chunk_name: LuaString,
+        filename: Option<impl Into<PathBuf>>,
+        method_name: Option<LuaString>,
+        source: Arc<Cow<'source, [u8]>>,
+        parameters: Vec<TokenTree<Name>>,
+        has_varargs: bool,
+        parent_frame: std::ptr::NonNull<Frame>,
+    ) -> Self {
+        let mut result = Self {
+            vm,
+            chunk: Chunk::new(
+                chunk_name,
+                filename.map(|f| f.into()),
+                source,
+                parameters.len() as u8,
+                has_varargs,
+                vec![],
+            ),
+            method_name,
+            gotos: HashMap::new(),
+            labels: HashMap::new(),
+            to_close: vec![],
+            frame: Frame::with_parent(parent_frame.as_ptr()),
+            scope_depth: 0,
+            scope_id_counter: 1,
+            scope_ids: vec![0],
+            scope_starting_registers: vec![0],
+            register_index: 0,
+            max_registers: 0,
+        };
+
+        for param in parameters {
+            let register = result.take_register();
+            result.add_local(param.node.0, register, 0, Some(param.span));
+        }
+
+        result
+    }
+
+    pub fn compile_chunk(mut self, ast: Option<TokenTree<Block>>) -> crate::Result<CompiledChunk> {
         let ast = match ast {
             Some(ast) => Ok(ast),
-            None => Parser::new(self.chunk.get_filename(), self.chunk.get_source()).parse(),
+            None => Parser::new(&self.chunk.name, &self.chunk.source).parse(),
         }?;
 
+        // We might have some initial locals from function args
+        let initial_locals = self.frame.locals.len();
         let has_return = ast.node.return_statement.is_some();
 
         self.compile_block(
@@ -401,29 +215,84 @@ impl<'a, 'source> Compiler<'a, 'source> {
 
         if !has_return {
             // Add implicit final return
-            self.chunk.push_bytecode(Bytecode::Return0, None);
+            self.push_bytecode(Bytecode::Return0, None);
         }
 
         debug_assert!(
-            self.frames.len() == 1,
-            "should have only the root frame left"
-        );
-        debug_assert!(
-            self.frames[0].locals.is_empty(),
-            "all locals should be popped"
+            self.frame.locals.len() == initial_locals,
+            "all locals should be popped, found {:?}",
+            self.frame.locals
         );
 
         // Get rid of the root frame, to resolve any pending gotos and such.
-        let frame = self.end_frame()?;
-        self.chunk.max_registers = frame.max_registers;
+        if let Some((name, goto)) = self
+            .gotos
+            .iter()
+            .flat_map(|(name, jumps)| jumps.iter().map(move |jump| (name, jump)))
+            .next()
+        {
+            return Err(lua_error!(
+                labels = vec![goto.span.labeled("here")],
+                "no visible label '{}' for goto",
+                String::from_utf8_lossy(name)
+            ));
+        }
 
-        Ok(self.vm.add_chunk(self.chunk))
+        self.chunk.max_registers = self.max_registers;
+
+        // Write the upvalues into the chunk. This is a bit clunky since we store it as a hashmap
+        // here (for easy name lookup), but the chunk wants a vec.
+        let mut chunk_upvalues: Vec<_> = (0..self.frame.upvalues.len())
+            .map(|_| MaybeUninit::uninit())
+            .collect();
+        for (name, upvalue) in self.frame.upvalues.iter() {
+            chunk_upvalues[upvalue.index as usize].write(ChunkUpValue {
+                is_local: matches!(upvalue.source, UpvalueLocation::Local { .. }),
+                index: match upvalue.source {
+                    UpvalueLocation::Local { register } => register,
+                    UpvalueLocation::Upvalue { index } => index,
+                },
+                name: Some(name.clone()),
+            });
+        }
+        self.chunk.upvalues = unsafe {
+            chunk_upvalues
+                .into_iter()
+                .map(|u| u.assume_init())
+                .collect()
+        };
+
+        Ok(CompiledChunk {
+            chunk_index: self.vm.add_chunk(self.chunk)?,
+        })
+    }
+
+    /// Push bytecode into the current chunk.
+    fn push_bytecode(&mut self, bytecode: Bytecode, span: Option<Span>) {
+        self.chunk.push_bytecode(bytecode, span)
+    }
+
+    /// Push bytecode into the current chunk to jump to an undecided address.
+    fn push_undecided_jump(
+        &mut self,
+        jump: JumpToUndecidedAddress,
+        span: Option<Span>,
+    ) -> JumpAddr {
+        self.chunk.push_undecided_jump(jump, span)
+    }
+
+    fn get_current_addr(&self) -> JumpAddr {
+        self.chunk.get_current_addr()
+    }
+
+    fn patch_addr_placeholder(&mut self, index: JumpAddr) {
+        self.chunk.patch_addr_placeholder(index)
     }
 
     fn push_load_nil(&mut self, span: Option<Span>) -> u8 {
         let const_index = self.get_const_index(LuaConst::Nil);
-        let register = self.frames.last_mut().unwrap().take_register();
-        self.chunk.push_bytecode(
+        let register = self.take_register();
+        self.push_bytecode(
             Bytecode::LoadConst {
                 register,
                 const_index,
@@ -439,7 +308,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
             .unwrap_or_else(|| self.vm.register_const(lua_const))
     }
 
-    fn get_global_name_index(&mut self, name: Vec<u8>) -> ConstIndex {
+    fn get_global_name_index(&mut self, name: LuaString) -> ConstIndex {
         let lua_const = LuaConst::String(name);
         self.get_const_index(lua_const)
     }
@@ -501,7 +370,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
         is_final_statement: bool,
     ) -> crate::Result<BlockResult> {
         let span = statement.span;
-        let current_register = self.frames.last().unwrap().register_index;
+        let current_register = self.register_index;
 
         Ok(match statement.node {
             Statement::FunctionCall(function_call) => {
@@ -510,10 +379,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                 }
 
                 self.compile_function_call(function_call, ExpressionResultMode::Multiple)?;
-                self.frames
-                    .last_mut()
-                    .unwrap()
-                    .release_registers_from(current_register);
+                self.release_registers_from(current_register);
                 BlockResult::new()
             }
             Statement::LocalDeclaraction(names, expressions) => {
@@ -542,7 +408,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                     if num_non_multres_expressions < num_names {
                         let preinit_from = (num_names - num_non_multres_expressions) as u8;
                         let preinit_to = num_names as u8;
-                        self.chunk.push_bytecode(
+                        self.push_bytecode(
                             Bytecode::LoadNil {
                                 from_register: current_register + preinit_from,
                                 to_register: current_register + preinit_to - 1,
@@ -552,7 +418,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                     }
                 } else if num_expressions == 0 {
                     // Then just `LoadNil` all names.
-                    self.chunk.push_bytecode(
+                    self.push_bytecode(
                         Bytecode::LoadNil {
                             from_register: current_register,
                             to_register: current_register + num_names as u8 - 1,
@@ -593,7 +459,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                             // `<close>` implies `<const>`
                             attributes |= LuaVariableAttribute::Constant as u8;
                             attributes |= LuaVariableAttribute::ToBeClosed as u8;
-                            self.chunk.push_bytecode(
+                            self.push_bytecode(
                                 Bytecode::ToClose {
                                     register: name_register,
                                 },
@@ -611,10 +477,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                     );
                 }
 
-                self.frames
-                    .last_mut()
-                    .unwrap()
-                    .release_registers_from(current_register + num_names as u8);
+                self.release_registers_from(current_register + num_names as u8);
 
                 BlockResult::new()
             }
@@ -627,10 +490,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
 
                 self.compile_function_def(function_def, Some(name_r))?;
 
-                self.frames
-                    .last_mut()
-                    .unwrap()
-                    .release_registers_from(name_r + 1);
+                self.release_registers_from(name_r + 1);
 
                 BlockResult::new()
             }
@@ -640,12 +500,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                 for (index, variable) in varlist.into_iter().enumerate() {
                     match variable.node {
                         Variable::Name(name) => {
-                            self.variable(
-                                name,
-                                VariableMode::Write {
-                                    value_register: current_register + index as u8,
-                                },
-                            )?;
+                            self.write_variable(name, current_register + index as u8)?;
                         }
                         Variable::Indexed(target, target_index) => {
                             // `SetTable` expects a stack head of:
@@ -671,7 +526,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                                     ExpressionResultMode::Single,
                                 )?
                                 .get_register();
-                            self.chunk.push_bytecode(
+                            self.push_bytecode(
                                 Bytecode::SetTable {
                                     table_register: target_r,
                                     key_register: index_r,
@@ -690,8 +545,8 @@ impl<'a, 'source> Compiler<'a, 'source> {
                                 )?
                                 .get_register();
                             let const_index = self.get_const_index(LuaConst::String(name.node.0));
-                            let const_r = self.frames.last_mut().unwrap().take_register();
-                            self.chunk.push_bytecode(
+                            let const_r = self.take_register();
+                            self.push_bytecode(
                                 Bytecode::LoadConst {
                                     register: const_r,
                                     const_index,
@@ -699,7 +554,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                                 Some(span),
                             );
 
-                            self.chunk.push_bytecode(
+                            self.push_bytecode(
                                 Bytecode::SetTable {
                                     table_register: target_r,
                                     key_register: const_r,
@@ -711,10 +566,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                     }
                 }
 
-                self.frames
-                    .last_mut()
-                    .unwrap()
-                    .release_registers_from(current_register);
+                self.release_registers_from(current_register);
 
                 BlockResult::new()
             }
@@ -735,7 +587,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                     .get_register();
 
                 // Jump to the end of the block if the condition is false
-                let jmp_false_addr = self.chunk.push_undecided_jump(
+                let jmp_false_addr = self.push_undecided_jump(
                     JumpToUndecidedAddress::JmpFalse {
                         condition_register: condition_r,
                     },
@@ -743,10 +595,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                 );
 
                 // Release the condition register
-                self.frames
-                    .last_mut()
-                    .unwrap()
-                    .release_registers_from(current_register);
+                self.release_registers_from(current_register);
 
                 // Compile the block
                 let block_has_return = block.node.return_statement.is_some();
@@ -763,14 +612,11 @@ impl<'a, 'source> Compiler<'a, 'source> {
                 // Jump to the end of the if statement
                 let mut jmp_end_addrs = vec![];
                 if !block_has_return && (!else_ifs.is_empty() || else_block.is_some()) {
-                    jmp_end_addrs.push(
-                        self.chunk
-                            .push_undecided_jump(JumpToUndecidedAddress::Jmp, None),
-                    );
+                    jmp_end_addrs.push(self.push_undecided_jump(JumpToUndecidedAddress::Jmp, None));
                 }
 
                 // Right before the else/elseifs, go here if the condition was false
-                self.chunk.patch_addr_placeholder(jmp_false_addr);
+                self.patch_addr_placeholder(jmp_false_addr);
                 for else_if in else_ifs {
                     // Push the new condition
                     let condition_r = self
@@ -781,17 +627,14 @@ impl<'a, 'source> Compiler<'a, 'source> {
                         )?
                         .get_register();
                     // Jump to the end of the block if the condition is false
-                    let jmp_false_addr = self.chunk.push_undecided_jump(
+                    let jmp_false_addr = self.push_undecided_jump(
                         JumpToUndecidedAddress::JmpFalse {
                             condition_register: condition_r,
                         },
                         None,
                     );
                     // Release the condition register
-                    self.frames
-                        .last_mut()
-                        .unwrap()
-                        .release_registers_from(condition_r);
+                    self.release_registers_from(condition_r);
                     // Compile the block
                     let block_has_return = else_if.node.block.node.return_statement.is_some();
                     block_result.extend(self.compile_block(
@@ -805,13 +648,11 @@ impl<'a, 'source> Compiler<'a, 'source> {
                     )?);
                     // Jump to the end of the if statement
                     if !block_has_return {
-                        jmp_end_addrs.push(
-                            self.chunk
-                                .push_undecided_jump(JumpToUndecidedAddress::Jmp, None),
-                        );
+                        jmp_end_addrs
+                            .push(self.push_undecided_jump(JumpToUndecidedAddress::Jmp, None));
                     }
                     // Right before the else/elseifs, go here if the condition was false
-                    self.chunk.patch_addr_placeholder(jmp_false_addr);
+                    self.patch_addr_placeholder(jmp_false_addr);
                 }
                 let else_jump_addr = if let Some(else_block) = else_block {
                     let block_has_return = else_block.node.return_statement.is_some();
@@ -825,10 +666,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                         },
                     )?);
                     if !block_has_return {
-                        Some(
-                            self.chunk
-                                .push_undecided_jump(JumpToUndecidedAddress::Jmp, None),
-                        )
+                        Some(self.push_undecided_jump(JumpToUndecidedAddress::Jmp, None))
                     } else {
                         None
                     }
@@ -836,10 +674,10 @@ impl<'a, 'source> Compiler<'a, 'source> {
                     None
                 };
                 for jmp_end_addr in jmp_end_addrs {
-                    self.chunk.patch_addr_placeholder(jmp_end_addr);
+                    self.patch_addr_placeholder(jmp_end_addr);
                 }
                 if let Some(else_jump_addr) = else_jump_addr {
-                    self.chunk.patch_addr_placeholder(else_jump_addr);
+                    self.patch_addr_placeholder(else_jump_addr);
                 }
                 block_result
             }
@@ -853,15 +691,14 @@ impl<'a, 'source> Compiler<'a, 'source> {
 
                 // Jump past the rest of the loop, using a JmpClose instruction
                 // to also close any locals if needed..
-                let frame = self.frames.last().expect("frames is not empty");
                 let scope_starting_register =
-                    frame.scope_starting_registers[options.loop_scope_depth as usize];
-                let close_from = frame
+                    self.scope_starting_registers[options.loop_scope_depth as usize];
+                let close_from = self
                     .to_close
                     .iter()
                     .find(|&&r| r >= scope_starting_register);
 
-                let break_jump = self.chunk.push_undecided_jump(
+                let break_jump = self.push_undecided_jump(
                     if let Some(r) = close_from {
                         JumpToUndecidedAddress::JmpClose {
                             close_from_register: *r,
@@ -875,7 +712,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                 BlockResult::new().with_breaks(vec![BreakJump { addr: break_jump }])
             }
             Statement::Repeat { block, condition } => {
-                let start_addr = self.chunk.get_current_addr();
+                let start_addr = self.get_current_addr();
 
                 let loop_scope_depth = self.begin_scope();
                 let block_result = self.compile_block(
@@ -897,7 +734,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                         ExpressionResultMode::Single,
                     )?
                     .get_register();
-                self.chunk.push_bytecode(
+                self.push_bytecode(
                     Bytecode::JmpFalse {
                         condition_register: expr_r,
                         address: start_addr,
@@ -908,13 +745,13 @@ impl<'a, 'source> Compiler<'a, 'source> {
                 self.end_scope()?;
 
                 for break_ in block_result.breaks {
-                    self.chunk.patch_addr_placeholder(break_.addr);
+                    self.patch_addr_placeholder(break_.addr);
                 }
 
                 BlockResult::new()
             }
             Statement::While { condition, block } => {
-                let start_addr = self.chunk.get_current_addr();
+                let start_addr = self.get_current_addr();
                 let expr_r = self
                     .compile_expression(
                         condition,
@@ -922,16 +759,13 @@ impl<'a, 'source> Compiler<'a, 'source> {
                         ExpressionResultMode::Single,
                     )?
                     .get_register();
-                let jmp_false_addr = self.chunk.push_undecided_jump(
+                let jmp_false_addr = self.push_undecided_jump(
                     JumpToUndecidedAddress::JmpFalse {
                         condition_register: expr_r,
                     },
                     None,
                 );
-                self.frames
-                    .last_mut()
-                    .unwrap()
-                    .release_registers_from(current_register);
+                self.release_registers_from(current_register);
 
                 let loop_scope_depth = self.begin_scope();
                 let block_result = self.compile_block(
@@ -945,7 +779,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                 )?;
                 self.end_scope()?;
 
-                self.chunk.push_bytecode(
+                self.push_bytecode(
                     Bytecode::Jmp {
                         address: start_addr,
                     },
@@ -953,14 +787,13 @@ impl<'a, 'source> Compiler<'a, 'source> {
                 );
 
                 for break_ in block_result.breaks {
-                    self.chunk.patch_addr_placeholder(break_.addr);
+                    self.patch_addr_placeholder(break_.addr);
                 }
 
-                let jmp_exit_loop_addr = self
-                    .chunk
-                    .push_undecided_jump(JumpToUndecidedAddress::Jmp, None);
-                self.chunk.patch_addr_placeholder(jmp_false_addr);
-                self.chunk.patch_addr_placeholder(jmp_exit_loop_addr);
+                let jmp_exit_loop_addr =
+                    self.push_undecided_jump(JumpToUndecidedAddress::Jmp, None);
+                self.patch_addr_placeholder(jmp_false_addr);
+                self.patch_addr_placeholder(jmp_exit_loop_addr);
 
                 BlockResult::new()
             }
@@ -1002,7 +835,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                                 ExpressionResultMode::Single,
                             )?
                             .get_register();
-                        self.add_local(b"#limit".to_vec(), limit_r, 0, None);
+                        self.add_local(b"#limit".into(), limit_r, 0, None);
 
                         let step_r = if let Some(step) = step {
                             let step_span = step.span;
@@ -1013,12 +846,12 @@ impl<'a, 'source> Compiler<'a, 'source> {
                                     ExpressionResultMode::Single,
                                 )?
                                 .get_register();
-                            self.add_local(b"#step".to_vec(), step_r, 0, None);
+                            self.add_local(b"#step".into(), step_r, 0, None);
 
                             // Raise an error if the step value is equal to zero
                             let zero_r = self
                                 .compile_load_literal(Literal::Number(Number::Integer(0)), None);
-                            self.chunk.push_bytecode(
+                            self.push_bytecode(
                                 Bytecode::Eq {
                                     dest_register: zero_r,
                                     left_register: step_r,
@@ -1026,7 +859,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                                 },
                                 None,
                             );
-                            let jmp_false_addr = self.chunk.push_undecided_jump(
+                            let jmp_false_addr = self.push_undecided_jump(
                                 JumpToUndecidedAddress::JmpFalse {
                                     condition_register: zero_r,
                                 },
@@ -1034,7 +867,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                             );
 
                             // Raise error
-                            self.chunk.push_bytecode(
+                            self.push_bytecode(
                                 Bytecode::Error {
                                     code: RuntimeError::ForLoopLimitIsZero,
                                 },
@@ -1042,15 +875,15 @@ impl<'a, 'source> Compiler<'a, 'source> {
                             );
 
                             // Release `zero_r`.
-                            self.frames.last_mut().unwrap().release_register();
+                            self.release_register();
 
                             // Otherwise, move past it
-                            self.chunk.patch_addr_placeholder(jmp_false_addr);
+                            self.patch_addr_placeholder(jmp_false_addr);
                             step_r
                         } else {
                             let step_r = self
                                 .compile_load_literal(Literal::Number(Number::Integer(1)), None);
-                            self.add_local(b"#step".to_vec(), step_r, 0, None);
+                            self.add_local(b"#step".into(), step_r, 0, None);
                             step_r
                         };
 
@@ -1060,8 +893,8 @@ impl<'a, 'source> Compiler<'a, 'source> {
                         let zero_r =
                             self.compile_load_literal(Literal::Number(Number::Integer(0)), None);
                         let decreasing_r = zero_r; // We can reuse this slot
-                        self.add_local(b"#decreasing".to_vec(), decreasing_r, 0, None);
-                        self.chunk.push_bytecode(
+                        self.add_local(b"#decreasing".into(), decreasing_r, 0, None);
+                        self.push_bytecode(
                             Bytecode::Lt {
                                 dest_register: decreasing_r,
                                 left_register: step_r,
@@ -1071,22 +904,22 @@ impl<'a, 'source> Compiler<'a, 'source> {
                         );
 
                         // Label to jump back to the start of the loop
-                        let condition_addr = self.chunk.get_current_addr();
+                        let condition_addr = self.get_current_addr();
 
                         // Evaluate the limit
                         // Choose either "<=" or ">=" depending on whether the loop is increasing
                         // or decreasing.
-                        let jmp_decreasing = self.chunk.push_undecided_jump(
+                        let jmp_decreasing = self.push_undecided_jump(
                             JumpToUndecidedAddress::JmpTrue {
                                 condition_register: decreasing_r,
                             },
                             None,
                         );
 
-                        let limit_eval_r = self.frames.last_mut().unwrap().take_register();
+                        let limit_eval_r = self.take_register();
 
                         // Loop is increasing, check if ident <= limit
-                        self.chunk.push_bytecode(
+                        self.push_bytecode(
                             Bytecode::Le {
                                 dest_register: limit_eval_r,
                                 left_register: ident_r,
@@ -1094,14 +927,13 @@ impl<'a, 'source> Compiler<'a, 'source> {
                             },
                             None,
                         );
-                        let jmp_after_le = self
-                            .chunk
-                            .push_undecided_jump(JumpToUndecidedAddress::Jmp, None);
+                        let jmp_after_le =
+                            self.push_undecided_jump(JumpToUndecidedAddress::Jmp, None);
 
-                        self.chunk.patch_addr_placeholder(jmp_decreasing);
+                        self.patch_addr_placeholder(jmp_decreasing);
 
                         // Loop is decreasing, check if limit <= ident
-                        self.chunk.push_bytecode(
+                        self.push_bytecode(
                             Bytecode::Le {
                                 dest_register: limit_eval_r,
                                 left_register: limit_r,
@@ -1110,9 +942,9 @@ impl<'a, 'source> Compiler<'a, 'source> {
                             None,
                         );
 
-                        self.chunk.patch_addr_placeholder(jmp_after_le);
+                        self.patch_addr_placeholder(jmp_after_le);
 
-                        let jmp_false_addr = self.chunk.push_undecided_jump(
+                        let jmp_false_addr = self.push_undecided_jump(
                             JumpToUndecidedAddress::JmpFalse {
                                 condition_register: limit_eval_r,
                             },
@@ -1120,13 +952,12 @@ impl<'a, 'source> Compiler<'a, 'source> {
                         );
 
                         // Jump into the loop
-                        let inside_block_jump = self
-                            .chunk
-                            .push_undecided_jump(JumpToUndecidedAddress::Jmp, None);
+                        let inside_block_jump =
+                            self.push_undecided_jump(JumpToUndecidedAddress::Jmp, None);
 
                         // Compile the step
-                        let step_addr = self.chunk.get_current_addr();
-                        self.chunk.push_bytecode(
+                        let step_addr = self.get_current_addr();
+                        self.push_bytecode(
                             Bytecode::Add {
                                 dest_register: ident_r,
                                 left_register: ident_r,
@@ -1136,7 +967,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                         );
 
                         // After step, jump to the condition
-                        self.chunk.push_bytecode(
+                        self.push_bytecode(
                             Bytecode::Jmp {
                                 address: condition_addr,
                             },
@@ -1144,17 +975,17 @@ impl<'a, 'source> Compiler<'a, 'source> {
                         );
 
                         // Path the inside block jump
-                        self.chunk.patch_addr_placeholder(inside_block_jump);
+                        self.patch_addr_placeholder(inside_block_jump);
 
                         // Release the limit_eval_r register.
-                        self.frames.last_mut().unwrap().release_register();
+                        self.release_register();
 
                         (step_addr, jmp_false_addr)
                     }
                     ForCondition::GenericFor { names, expressions } => {
                         // Evaluate the expressions and keep no more than 4
                         // Pre-fill `nil` values as well
-                        self.chunk.push_bytecode(
+                        self.push_bytecode(
                             Bytecode::LoadNil {
                                 from_register: current_register,
                                 to_register: current_register + 3,
@@ -1162,10 +993,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                             None,
                         );
                         self.compile_expression_list(expressions)?;
-                        self.frames
-                            .last_mut()
-                            .unwrap()
-                            .set_register_index(current_register + 4);
+                        self.set_register_index(current_register + 4);
 
                         // Save the result as locals: the iterator function, the state, the initial
                         // value for the control variable (which is the first name).
@@ -1173,8 +1001,8 @@ impl<'a, 'source> Compiler<'a, 'source> {
                         let state_local = current_register + 1;
                         let control_local = current_register + 2;
                         let closing_local = current_register + 3;
-                        self.add_local(b"#iterator".to_vec(), iterator_local, 0, None);
-                        self.add_local(b"#state".to_vec(), state_local, 0, None);
+                        self.add_local(b"#iterator".into(), iterator_local, 0, None);
+                        self.add_local(b"#state".into(), state_local, 0, None);
                         // NOTE: The syntax ensures there is at least one name
                         self.add_local(
                             names[0].node.0.clone(),
@@ -1183,12 +1011,12 @@ impl<'a, 'source> Compiler<'a, 'source> {
                             Some(names[0].span),
                         );
                         self.add_local(
-                            b"#closing".to_vec(),
+                            b"#closing".into(),
                             closing_local,
                             LuaVariableAttribute::ToBeClosed.into(),
                             None,
                         );
-                        self.chunk.push_bytecode(
+                        self.push_bytecode(
                             Bytecode::ToClose {
                                 register: closing_local,
                             },
@@ -1202,33 +1030,32 @@ impl<'a, 'source> Compiler<'a, 'source> {
                         }
 
                         // Call the iterator function
-                        let step_addr = self.chunk.get_current_addr();
-                        let frame = self.frames.last_mut().unwrap();
-                        let func_r = frame.take_register();
-                        let state_r = frame.take_register();
-                        let control_r = frame.take_register();
-                        self.chunk.push_bytecode(
+                        let step_addr = self.get_current_addr();
+                        let func_r = self.take_register();
+                        let state_r = self.take_register();
+                        let control_r = self.take_register();
+                        self.push_bytecode(
                             Bytecode::Mov {
                                 dest_register: func_r,
                                 src_register: iterator_local,
                             },
                             None,
                         );
-                        self.chunk.push_bytecode(
+                        self.push_bytecode(
                             Bytecode::Mov {
                                 dest_register: state_r,
                                 src_register: state_local,
                             },
                             None,
                         );
-                        self.chunk.push_bytecode(
+                        self.push_bytecode(
                             Bytecode::Mov {
                                 dest_register: control_r,
                                 src_register: control_local,
                             },
                             None,
                         );
-                        self.chunk.push_bytecode(
+                        self.push_bytecode(
                             Bytecode::Call {
                                 func_register: func_r,
                                 result_mode: ExpressionResultMode::Multiple,
@@ -1242,7 +1069,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                             let (local_register, _) = self
                                 .resolve_local(&name.node.0)
                                 .expect("parser ensures that variable is in scope");
-                            self.chunk.push_bytecode(
+                            self.push_bytecode(
                                 Bytecode::Mov {
                                     dest_register: local_register,
                                     src_register: func_r + index as u8,
@@ -1251,15 +1078,12 @@ impl<'a, 'source> Compiler<'a, 'source> {
                             );
                         }
 
-                        self.frames
-                            .last_mut()
-                            .unwrap()
-                            .release_registers_from(func_r);
+                        self.release_registers_from(func_r);
 
                         // Now we need to evaluate whether any value was returned. If not, we
                         // should break out of the loop.
                         let nil_r = self.push_load_nil(None);
-                        self.chunk.push_bytecode(
+                        self.push_bytecode(
                             Bytecode::Eq {
                                 dest_register: nil_r,
                                 left_register: control_local,
@@ -1267,14 +1091,14 @@ impl<'a, 'source> Compiler<'a, 'source> {
                             },
                             None,
                         );
-                        let jmp_true_addr = self.chunk.push_undecided_jump(
+                        let jmp_true_addr = self.push_undecided_jump(
                             JumpToUndecidedAddress::JmpTrue {
                                 condition_register: nil_r,
                             },
                             None,
                         );
 
-                        self.frames.last_mut().unwrap().release_register();
+                        self.release_register();
 
                         (step_addr, jmp_true_addr)
                     }
@@ -1291,7 +1115,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                 )?;
 
                 // Jump back to the step evaluation
-                self.chunk.push_bytecode(
+                self.push_bytecode(
                     Bytecode::Jmp {
                         address: continue_addr,
                     },
@@ -1299,13 +1123,13 @@ impl<'a, 'source> Compiler<'a, 'source> {
                 );
 
                 // Patch the false condition jump
-                self.chunk.patch_addr_placeholder(jmp_exit_loop_addr);
+                self.patch_addr_placeholder(jmp_exit_loop_addr);
 
                 self.end_scope()?;
 
                 // Patch any break jumps
                 for jump in block_result.breaks {
-                    self.chunk.patch_addr_placeholder(jump.addr);
+                    self.patch_addr_placeholder(jump.addr);
                 }
 
                 BlockResult::new()
@@ -1320,11 +1144,10 @@ impl<'a, 'source> Compiler<'a, 'source> {
                 },
             )?,
             Statement::Goto(name) => {
-                let frame = self.frames.last_mut().expect("frames is not empty");
-                let label = frame.labels.get(&name.node.0);
+                let label = self.labels.get(&name.node.0);
                 match label {
                     Some(label) => {
-                        self.chunk.push_bytecode(
+                        self.push_bytecode(
                             Bytecode::JmpClose {
                                 address: label.addr,
                                 close_from_register: label.current_register,
@@ -1337,27 +1160,25 @@ impl<'a, 'source> Compiler<'a, 'source> {
                         // Note that we don't use JmpClose, since we might jump forward into the
                         // same scope, so the to-be-closed variables should still be valid in that
                         // case.
-                        let addr = self
-                            .chunk
-                            .push_undecided_jump(JumpToUndecidedAddress::Jmp, Some(span));
+                        let addr =
+                            self.push_undecided_jump(JumpToUndecidedAddress::Jmp, Some(span));
 
-                        let scope_id = frame.scope_id();
+                        let scope_id = self.scope_id();
                         let goto = Goto {
                             addr,
                             span,
-                            depth: frame.scope_depth,
-                            current_register: frame.register_index,
+                            depth: self.scope_depth,
+                            current_register: self.register_index,
                             scope_id,
                         };
-                        frame.gotos.entry(name.node.0).or_default().push(goto);
+                        self.gotos.entry(name.node.0).or_default().push(goto);
                     }
                 }
 
                 BlockResult::new()
             }
             Statement::Label(label) => {
-                let frame = self.frames.last_mut().expect("frames is not empty");
-                if frame.labels.contains_key(&label.node.0) {
+                if self.labels.contains_key(&label.node.0) {
                     return Err(lua_error!(
                         labels = vec![label.span.labeled("here")],
                         "label '{}' already defined",
@@ -1365,15 +1186,15 @@ impl<'a, 'source> Compiler<'a, 'source> {
                     ));
                 }
 
-                let addr = self.chunk.get_current_addr();
-                let scope_id = frame.scope_id();
+                let addr = self.get_current_addr();
+                let scope_id = self.scope_id();
                 let mut any_new_locals = None;
                 let mut resolved_all_gotos = false;
-                if let Some(gotos) = frame.gotos.get_mut(&label.node.0) {
+                if let Some(gotos) = self.gotos.get_mut(&label.node.0) {
                     for goto in gotos.extract_if(.., |goto| scope_id == goto.scope_id) {
                         // Is this part of the same scope hierarchy, but in a lower scope? If so,
                         // that's an error.
-                        if goto.depth < frame.scope_depth {
+                        if goto.depth < self.scope_depth {
                             return Err(lua_error!(
                                 labels = vec![
                                     goto.span.labeled("this goto statement"),
@@ -1386,10 +1207,11 @@ impl<'a, 'source> Compiler<'a, 'source> {
 
                         self.chunk.patch_addr_placeholder_with(goto.addr, addr);
 
-                        let first_new_local = frame
+                        let first_new_local = self
+                            .frame
                             .locals
                             .iter()
-                            .filter(|local| local.depth <= frame.scope_depth)
+                            .filter(|local| local.depth <= self.scope_depth)
                             .nth(goto.current_register as usize);
                         any_new_locals = first_new_local.map(|local| NewLocalsAfterGoto {
                             goto: (label.node.0.clone(), goto.span),
@@ -1401,15 +1223,15 @@ impl<'a, 'source> Compiler<'a, 'source> {
                 }
 
                 if resolved_all_gotos {
-                    frame.gotos.remove(&label.node.0);
+                    self.gotos.remove(&label.node.0);
                 }
 
-                frame.labels.insert(
+                self.labels.insert(
                     label.node.0,
                     Label {
                         addr,
-                        current_register: frame.register_index,
-                        depth: frame.scope_depth,
+                        current_register: self.register_index,
+                        depth: self.scope_depth,
                     },
                 );
 
@@ -1422,13 +1244,12 @@ impl<'a, 'source> Compiler<'a, 'source> {
         &mut self,
         return_statement: Vec<TokenTree<Expression>>,
     ) -> crate::Result {
-        let has_to_close_values = !self.frames.last().unwrap().to_close.is_empty();
+        let has_to_close_values = !self.to_close.is_empty();
         if return_statement.is_empty() {
             if has_to_close_values {
-                self.chunk
-                    .push_bytecode(Bytecode::Close { from_register: 0 }, None);
+                self.push_bytecode(Bytecode::Close { from_register: 0 }, None);
             }
-            self.chunk.push_bytecode(Bytecode::Return0, None);
+            self.push_bytecode(Bytecode::Return0, None);
             return Ok(());
         }
 
@@ -1437,23 +1258,22 @@ impl<'a, 'source> Compiler<'a, 'source> {
             Self::expression_list_can_be_multres(&return_statement),
         );
 
-        let register = self.frames.last().unwrap().register_index;
+        let register = self.register_index;
         let expression_list_length = self.compile_expression_list(return_statement)?;
 
         if has_to_close_values {
-            self.chunk
-                .push_bytecode(Bytecode::Close { from_register: 0 }, None);
+            self.push_bytecode(Bytecode::Close { from_register: 0 }, None);
         }
 
         if num_returns == 1 && !is_variable {
-            self.chunk.push_bytecode(
+            self.push_bytecode(
                 Bytecode::Return1 {
                     src_register: register,
                 },
                 None,
             );
         } else {
-            self.chunk.push_bytecode(
+            self.push_bytecode(
                 match expression_list_length {
                     ExpressionListLength::Constant { from_register } => Bytecode::Return {
                         from_register,
@@ -1479,7 +1299,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
         // If this is a method call, we need to push the object as the first argument
         let (function_register, self_arg_n) =
             if let Some(method_name) = function_call.node.method_name {
-                let func_r = self.frames.last_mut().unwrap().take_register();
+                let func_r = self.take_register();
                 let table_r = self
                     .compile_prefix_expression(
                         *function_call.node.function,
@@ -1490,8 +1310,8 @@ impl<'a, 'source> Compiler<'a, 'source> {
 
                 let method_name_const_index =
                     self.get_const_index(LuaConst::String(method_name.node.0));
-                let method_name_r = self.frames.last_mut().unwrap().take_register();
-                self.chunk.push_bytecode(
+                let method_name_r = self.take_register();
+                self.push_bytecode(
                     Bytecode::LoadConst {
                         register: method_name_r,
                         const_index: method_name_const_index,
@@ -1499,7 +1319,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                     Some(function_call.span),
                 );
 
-                self.chunk.push_bytecode(
+                self.push_bytecode(
                     Bytecode::GetTable {
                         dest_register: func_r,
                         table_register: table_r,
@@ -1508,10 +1328,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                     Some(Span::new(function_call.span.start, method_name.span.end)),
                 );
 
-                self.frames
-                    .last_mut()
-                    .unwrap()
-                    .release_registers_from(method_name_r);
+                self.release_registers_from(method_name_r);
 
                 // Account for one extra parameter (the `self` argument)
                 (func_r, 1)
@@ -1542,26 +1359,22 @@ impl<'a, 'source> Compiler<'a, 'source> {
             Some(function_call.span),
         );
 
-        self.frames
-            .last_mut()
-            .unwrap()
-            .release_registers_from(function_register + 1);
+        self.release_registers_from(function_register + 1);
 
         Ok(function_register)
     }
 
     fn compile_tail_call(&mut self, function_call: TokenTree<FunctionCall>) -> crate::Result<bool> {
         // Check if this function call refers to the current function
-        let frame = self.frames.last_mut().expect("frames is not empty");
         let is_tail_call = match &function_call.node.function.node {
             PrefixExpression::Variable(TokenTree {
                 node: Variable::Name(name),
                 ..
             }) => {
-                (Some(&name.node.0) == frame.name.as_ref()
+                (name.node.0 == self.chunk.name.as_slice()
                     && function_call.node.method_name.is_none())
                     || (&name.node.0 == b"self"
-                        && function_call.node.method_name.map(|n| n.node.0) == frame.method_name)
+                        && function_call.node.method_name.map(|n| n.node.0) == self.method_name)
             }
             _ => false,
         };
@@ -1571,10 +1384,10 @@ impl<'a, 'source> Compiler<'a, 'source> {
         }
 
         let mut num_args = function_call.node.args.node.len();
-        let (parameters_register, is_self_call) = if frame.method_name.is_some() {
+        let (parameters_register, is_self_call) = if self.method_name.is_some() {
             // Load the `self` argument into the first parameter register.
-            let register = frame.take_register();
-            self.chunk.push_bytecode(
+            let register = self.take_register();
+            self.push_bytecode(
                 Bytecode::Mov {
                     dest_register: register,
                     // NOTE: `self` is always in the first register of method-style functions.
@@ -1585,7 +1398,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
             num_args += 1;
             (register, true)
         } else {
-            (frame.register_index, false)
+            (self.register_index, false)
         };
         let expression_list_length = self.compile_expression_list(function_call.node.args.node)?;
         if !is_self_call {
@@ -1619,78 +1432,32 @@ impl<'a, 'source> Compiler<'a, 'source> {
         function_def: TokenTree<FunctionDef>,
         closure_r: Option<u8>,
     ) -> crate::Result<u8> {
-        // We'll issue the bytecode inline here, but jump over it at runtime
-        let jmp_over_func_addr = self
-            .chunk
-            .push_undecided_jump(JumpToUndecidedAddress::Jmp, None);
-
-        // Compile the function
-        let func_addr = self.chunk.get_current_addr();
-        self.begin_frame(
-            function_def.node.name.clone(),
+        // Compile the function definition as a new chunk.
+        let function_chunk = Compiler::new_sub(
+            &mut *self.vm,
+            function_def
+                .node
+                .name
+                .map(|mut name| {
+                    name.extend(b"()");
+                    name
+                })
+                .unwrap_or_else(|| b"<anonymous>()".into()),
+            self.chunk.filename.as_ref(),
             function_def.node.method_name.clone(),
-        );
-        self.begin_scope();
+            Arc::clone(&self.chunk.source),
+            function_def.node.parameters,
+            function_def.node.varargs.is_some(),
+            NonNull::from_mut(&mut self.frame),
+        )
+        .compile_chunk(Some(function_def.node.block))?;
 
-        // Define the function arguments
-        let parameter_count = function_def.node.parameters.len();
-        for (index, parameter) in function_def.node.parameters.into_iter().enumerate() {
-            self.add_local(parameter.node.0, index as u8, 0, Some(parameter.span));
-        }
-
-        let has_return = function_def.node.block.node.return_statement.is_some();
-        self.compile_block(
-            function_def.node.block,
-            true,
-            BlockOptions {
-                is_loop: false,
-                loop_scope_depth: 0,
-                // Already started the function scope above
-                new_scope: false,
-            },
-        )?;
-
-        // NOTE: We don't call `end_scope` here because we want to keep the locals around for the
-        // return values. They're handled by the return statement, when the call frame is dropped.
-        let frame = self.end_frame()?;
-
-        if !has_return {
-            if !frame.to_close.is_empty() {
-                self.chunk
-                    .push_bytecode(Bytecode::Close { from_register: 0 }, None);
-            }
-            self.chunk.push_bytecode(Bytecode::Return0, None);
-        }
-
-        // Jump over the function
-        self.chunk.patch_addr_placeholder(jmp_over_func_addr);
-
-        // Save the function definition
-        let const_index = self
-            .vm
-            .register_const(LuaConst::Function(LuaFunctionDefinition {
-                name: function_def
-                    .node
-                    .method_name
-                    .or(function_def.node.name)
-                    .map(|mut name| {
-                        name.extend_from_slice(b"()");
-                        name
-                    }),
-                chunk: self.chunk_index,
-                ip: func_addr,
-                upvalues: frame.upvalues.len(),
-                num_params: parameter_count as u8,
-                has_varargs: function_def.node.varargs.is_some(),
-                max_registers: frame.max_registers,
-            }));
-        let closure_r =
-            closure_r.unwrap_or_else(|| self.frames.last_mut().unwrap().take_register());
-        self.chunk.push_bytecode(
+        // Load it as a closure into a register.
+        let closure_r = closure_r.unwrap_or_else(|| self.take_register());
+        self.push_bytecode(
             Bytecode::LoadClosure {
                 register: closure_r,
-                const_index,
-                upvalues: frame.upvalues,
+                chunk_index: function_chunk.chunk_index,
             },
             Some(function_def.span),
         );
@@ -1703,7 +1470,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
         expressions: Vec<TokenTree<Expression>>,
     ) -> crate::Result<ExpressionListLength> {
         let num_expressions = expressions.len();
-        let from_register = self.frames.last().unwrap().register_index;
+        let from_register = self.register_index;
         let mut multres = false;
         for (i, expression) in expressions.into_iter().enumerate() {
             let is_last = i == num_expressions - 1;
@@ -1752,17 +1519,14 @@ impl<'a, 'source> Compiler<'a, 'source> {
                                 ExpressionResultMode::Single,
                             )?
                             .get_register();
-                        let jmp_false_addr = self.chunk.push_undecided_jump(
+                        let jmp_false_addr = self.push_undecided_jump(
                             JumpToUndecidedAddress::JmpFalse {
                                 condition_register: lhs_r,
                             },
                             None,
                         );
 
-                        self.frames
-                            .last_mut()
-                            .unwrap()
-                            .release_registers_from(lhs_r);
+                        self.release_registers_from(lhs_r);
 
                         let rhs_r = self
                             .compile_expression(
@@ -1771,7 +1535,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                                 ExpressionResultMode::Single,
                             )?
                             .get_register();
-                        self.chunk.patch_addr_placeholder(jmp_false_addr);
+                        self.patch_addr_placeholder(jmp_false_addr);
 
                         debug_assert_eq!(lhs_r, rhs_r, "AND rhs must reuse lhs register");
 
@@ -1785,17 +1549,14 @@ impl<'a, 'source> Compiler<'a, 'source> {
                                 ExpressionResultMode::Single,
                             )?
                             .get_register();
-                        let jmp_true_addr = self.chunk.push_undecided_jump(
+                        let jmp_true_addr = self.push_undecided_jump(
                             JumpToUndecidedAddress::JmpTrue {
                                 condition_register: lhs_r,
                             },
                             None,
                         );
 
-                        self.frames
-                            .last_mut()
-                            .unwrap()
-                            .release_registers_from(lhs_r);
+                        self.release_registers_from(lhs_r);
 
                         let rhs_r = self
                             .compile_expression(
@@ -1804,14 +1565,14 @@ impl<'a, 'source> Compiler<'a, 'source> {
                                 ExpressionResultMode::Single,
                             )?
                             .get_register();
-                        self.chunk.patch_addr_placeholder(jmp_true_addr);
+                        self.patch_addr_placeholder(jmp_true_addr);
 
                         debug_assert_eq!(lhs_r, rhs_r, "OR rhs must reuse lhs register");
 
                         lhs_r
                     }
                     _ => {
-                        let dest_r = self.frames.last_mut().unwrap().take_register();
+                        let dest_r = self.take_register();
                         let lhs_r = self
                             .compile_expression(
                                 *lhs,
@@ -1828,10 +1589,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                             .get_register();
                         self.compile_binary_operator(op, dest_r, lhs_r, rhs_r, expression.span);
 
-                        self.frames
-                            .last_mut()
-                            .unwrap()
-                            .release_registers_from(dest_r + 1);
+                        self.release_registers_from(dest_r + 1);
 
                         dest_r
                     }
@@ -1843,14 +1601,14 @@ impl<'a, 'source> Compiler<'a, 'source> {
                 self.compile_prefix_expression(prefix_expression, expression_mode, result_mode)?
             }
             Expression::UnaryOp { op, rhs } => {
-                let current_r = self.frames.last().unwrap().register_index;
+                let current_r = self.register_index;
                 let expr_r = self
                     .compile_expression(*rhs, ExpressionMode::Ref, ExpressionResultMode::Single)?
                     .get_register();
                 let dest_r = if current_r == expr_r {
                     expr_r
                 } else {
-                    self.frames.last_mut().unwrap().take_register()
+                    self.take_register()
                 };
                 self.compile_unary_operator(op, expression.span, dest_r, expr_r);
 
@@ -1867,8 +1625,8 @@ impl<'a, 'source> Compiler<'a, 'source> {
                 ExpressionResult::Single { register }
             }
             Expression::Ellipsis => {
-                let register = self.frames.last_mut().unwrap().take_register();
-                self.chunk.push_bytecode(
+                let register = self.take_register();
+                self.push_bytecode(
                     Bytecode::LoadVararg {
                         dest_register: register,
                         single_value: matches!(result_mode, ExpressionResultMode::Single),
@@ -1898,7 +1656,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
             }
             PrefixExpression::Variable(variable) => {
                 let register = match variable.node {
-                    Variable::Name(name) => self.variable(
+                    Variable::Name(name) => self.read_variable(
                         name,
                         match expression_mode {
                             ExpressionMode::Ref => VariableMode::Ref,
@@ -1906,7 +1664,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                         },
                     )?,
                     Variable::Indexed(prefix, index) => {
-                        let dest_r = self.frames.last_mut().unwrap().take_register();
+                        let dest_r = self.take_register();
                         let table_r = self
                             .compile_prefix_expression(
                                 *prefix,
@@ -1921,7 +1679,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                                 ExpressionResultMode::Single,
                             )?
                             .get_register();
-                        self.chunk.push_bytecode(
+                        self.push_bytecode(
                             Bytecode::GetTable {
                                 dest_register: dest_r,
                                 table_register: table_r,
@@ -1929,15 +1687,12 @@ impl<'a, 'source> Compiler<'a, 'source> {
                             },
                             Some(prefix_expression.span),
                         );
-                        self.frames
-                            .last_mut()
-                            .unwrap()
-                            .release_registers_from(dest_r + 1);
+                        self.release_registers_from(dest_r + 1);
 
                         dest_r
                     }
                     Variable::Field(prefix, name) => {
-                        let current_r = self.frames.last().unwrap().register_index;
+                        let current_r = self.register_index;
                         let table_r = self
                             .compile_prefix_expression(
                                 *prefix,
@@ -1947,8 +1702,8 @@ impl<'a, 'source> Compiler<'a, 'source> {
                             .get_register();
 
                         let const_index = self.get_const_index(LuaConst::String(name.node.0));
-                        let name_r = self.frames.last_mut().unwrap().take_register();
-                        self.chunk.push_bytecode(
+                        let name_r = self.take_register();
+                        self.push_bytecode(
                             Bytecode::LoadConst {
                                 register: name_r,
                                 const_index,
@@ -1960,7 +1715,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                         } else {
                             name_r
                         };
-                        self.chunk.push_bytecode(
+                        self.push_bytecode(
                             Bytecode::GetTable {
                                 dest_register: dest_r,
                                 table_register: table_r,
@@ -1969,10 +1724,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                             Some(prefix_expression.span),
                         );
 
-                        self.frames
-                            .last_mut()
-                            .unwrap()
-                            .release_registers_from(dest_r + 1);
+                        self.release_registers_from(dest_r + 1);
 
                         dest_r
                     }
@@ -2029,8 +1781,8 @@ impl<'a, 'source> Compiler<'a, 'source> {
             }
 
             let const_index = self.get_const_index(LuaConst::Table(new_table));
-            let table_r = self.frames.last_mut().unwrap().take_register();
-            self.chunk.push_bytecode(
+            let table_r = self.take_register();
+            self.push_bytecode(
                 Bytecode::LoadConst {
                     register: table_r,
                     const_index,
@@ -2041,8 +1793,8 @@ impl<'a, 'source> Compiler<'a, 'source> {
             return Ok(table_r);
         }
 
-        let table_r = self.frames.last_mut().unwrap().take_register();
-        self.chunk.push_bytecode(
+        let table_r = self.take_register();
+        self.push_bytecode(
             Bytecode::NewTable {
                 dest_register: table_r,
             },
@@ -2057,7 +1809,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
             if previous_was_value_field && !matches!(&field.node, Field::Value(_)) {
                 // TODO: Do we specify the starting register here for the values? Or is it ALWAYS
                 // table_r + 1?
-                self.chunk.push_bytecode(
+                self.push_bytecode(
                     if !previous_was_multires {
                         Bytecode::AppendToTable {
                             table_register: table_r,
@@ -2078,8 +1830,8 @@ impl<'a, 'source> Compiler<'a, 'source> {
             match field.node {
                 Field::Named(name, value) => {
                     let const_index = self.get_const_index(LuaConst::String(name.node.0));
-                    let const_r = self.frames.last_mut().unwrap().take_register();
-                    self.chunk.push_bytecode(
+                    let const_r = self.take_register();
+                    self.push_bytecode(
                         Bytecode::LoadConst {
                             register: const_r,
                             const_index,
@@ -2093,7 +1845,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                             ExpressionResultMode::Single,
                         )?
                         .get_register();
-                    self.chunk.push_bytecode(
+                    self.push_bytecode(
                         Bytecode::SetTable {
                             table_register: table_r,
                             key_register: const_r,
@@ -2102,10 +1854,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                         Some(field.span),
                     );
 
-                    self.frames
-                        .last_mut()
-                        .unwrap()
-                        .release_registers_from(const_r);
+                    self.release_registers_from(const_r);
                 }
                 Field::Indexed(index_expression, value) => {
                     let index_r = self
@@ -2122,7 +1871,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                             ExpressionResultMode::Single,
                         )?
                         .get_register();
-                    self.chunk.push_bytecode(
+                    self.push_bytecode(
                         Bytecode::SetTable {
                             table_register: table_r,
                             key_register: index_r,
@@ -2131,10 +1880,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
                         Some(field.span),
                     );
 
-                    self.frames
-                        .last_mut()
-                        .unwrap()
-                        .release_registers_from(table_r + 1);
+                    self.release_registers_from(table_r + 1);
                 }
                 Field::Value(value) => {
                     previous_was_value_field = true;
@@ -2161,7 +1907,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
         }
 
         if previous_was_value_field {
-            self.chunk.push_bytecode(
+            self.push_bytecode(
                 if !previous_was_multires {
                     Bytecode::AppendToTable {
                         table_register: table_r,
@@ -2177,16 +1923,13 @@ impl<'a, 'source> Compiler<'a, 'source> {
             );
         }
 
-        self.frames
-            .last_mut()
-            .unwrap()
-            .release_registers_from(table_r + 1);
+        self.release_registers_from(table_r + 1);
 
         Ok(table_r)
     }
 
     fn compile_load_literal(&mut self, literal: Literal, span: Option<Span>) -> u8 {
-        let register = self.frames.last_mut().unwrap().take_register();
+        let register = self.take_register();
         let const_index = match literal {
             Literal::Nil => self.get_const_index(LuaConst::Nil),
             Literal::Boolean(b) => self.get_const_index(LuaConst::Boolean(b)),
@@ -2199,7 +1942,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
             Literal::String(s) => self.get_const_index(LuaConst::String(s)),
         };
 
-        self.chunk.push_bytecode(
+        self.push_bytecode(
             Bytecode::LoadConst {
                 register,
                 const_index,
@@ -2218,7 +1961,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
         right_register: u8,
         span: Span,
     ) {
-        self.chunk.push_bytecode(
+        self.push_bytecode(
             match op.node {
                 // Arithmetic
                 BinaryOperator::Add => Bytecode::Add {
@@ -2305,24 +2048,16 @@ impl<'a, 'source> Compiler<'a, 'source> {
                 },
                 // https://www.lua.org/manual/5.4/manual.html#3.4.4
                 // A comparison a > b is translated to b < a and a >= b is translated to b <= a.
-                BinaryOperator::GreaterThan => {
-                    // std::mem::swap(&mut left_register, &mut right_register);
-                    // self.chunk.push_instruction(Instruction::Lt, Some(span));
-                    Bytecode::Lt {
-                        dest_register,
-                        left_register: right_register,
-                        right_register: left_register,
-                    }
-                }
-                BinaryOperator::GreaterThanOrEqual => {
-                    // self.chunk.push_instruction(Instruction::Le, Some(span));
-                    // std::mem::swap(&mut left_register, &mut right_register);
-                    Bytecode::Le {
-                        dest_register,
-                        left_register: right_register,
-                        right_register: left_register,
-                    }
-                }
+                BinaryOperator::GreaterThan => Bytecode::Lt {
+                    dest_register,
+                    left_register: right_register,
+                    right_register: left_register,
+                },
+                BinaryOperator::GreaterThanOrEqual => Bytecode::Le {
+                    dest_register,
+                    left_register: right_register,
+                    right_register: left_register,
+                },
 
                 // Strings
                 BinaryOperator::Concat => Bytecode::Concat {
@@ -2349,7 +2084,7 @@ impl<'a, 'source> Compiler<'a, 'source> {
         dest_register: u8,
         src_register: u8,
     ) {
-        self.chunk.push_bytecode(
+        self.push_bytecode(
             match op.node {
                 UnaryOperator::Neg => Bytecode::Neg {
                     dest_register,
@@ -2387,164 +2122,210 @@ impl<'a, 'source> Compiler<'a, 'source> {
         })
     }
 
-    fn variable(&mut self, name: TokenTree<Name>, mode: VariableMode) -> crate::Result<u8> {
+    fn read_variable(&mut self, name: TokenTree<Name>, mode: VariableMode) -> crate::Result<u8> {
         let span = name.span;
-        let (bytecode, register) =
-            if let Some((local_register, local)) = self.resolve_local(&name.node.0) {
-                match mode {
-                    VariableMode::Ref => {
-                        return Ok(local_register);
-                    }
-                    VariableMode::Read => {
-                        let register = self.frames.last_mut().unwrap().take_register();
-                        (
-                            Bytecode::Mov {
-                                dest_register: register,
-                                src_register: local_register,
-                            },
-                            register,
-                        )
-                    }
-                    VariableMode::Write { value_register } => {
-                        if local.is_constant() {
-                            return Err(lua_error!(
-                                "attempt to assign to const variable '{}'",
-                                String::from_utf8_lossy(&name.node.0)
-                            ));
-                        }
-
-                        (
-                            Bytecode::Mov {
-                                dest_register: local_register,
-                                src_register: value_register,
-                            },
-                            0,
-                        )
-                    }
+        let (bytecode, register) = match self.frame.resolve_name(&name.node.0) {
+            ResolvedName::Local { register, .. } => match mode {
+                VariableMode::Ref => {
+                    return Ok(register);
                 }
-            } else if let Some((upval_index, upvalue)) = self.resolve_upvalue(&name.node.0) {
-                match mode {
-                    VariableMode::Read | VariableMode::Ref => {
-                        let register = self.frames.last_mut().unwrap().take_register();
-                        (
-                            Bytecode::GetUpval {
-                                dest_register: register,
-                                upval_index,
-                            },
-                            register,
-                        )
-                    }
-                    VariableMode::Write { value_register } => {
-                        if upvalue.is_constant() {
-                            return Err(lua_error!(
-                                "attempt to assign to const variable '{}'",
-                                String::from_utf8_lossy(&name.node.0)
-                            ));
-                        }
-
-                        (
-                            Bytecode::SetUpval {
-                                upval_index,
-                                src_register: value_register,
-                            },
-                            0,
-                        )
-                    }
-                }
-            } else {
-                let const_index = self.get_global_name_index(name.node.0.clone());
-                match mode {
-                    VariableMode::Read | VariableMode::Ref => {
-                        let register = self.frames.last_mut().unwrap().take_register();
-                        (
-                            Bytecode::GetGlobal {
-                                dest_register: register,
-                                name_index: const_index,
-                            },
-                            register,
-                        )
-                    }
-                    VariableMode::Write { value_register } => (
-                        Bytecode::SetGlobal {
-                            src_register: value_register,
-                            name_index: const_index,
+                VariableMode::Read => {
+                    let dest_register = self.take_register();
+                    (
+                        Bytecode::Mov {
+                            dest_register,
+                            src_register: register,
                         },
-                        0,
-                    ),
+                        dest_register,
+                    )
                 }
-            };
+            },
+            ResolvedName::Upvalue {
+                index: upval_index, ..
+            } => match mode {
+                VariableMode::Read | VariableMode::Ref => {
+                    let register = self.take_register();
+                    (
+                        Bytecode::GetUpval {
+                            dest_register: register,
+                            upval_index,
+                        },
+                        register,
+                    )
+                }
+            },
+            ResolvedName::None => {
+                // Unbounded variable access:
+                // "any reference to a free name (that is, a name not bound to any declaration) var is syntactically translated to _ENV.var"
+                if name.node.0 == ENV_NAME {
+                    unreachable!("the _ENV variable should always be bound to a local or upvalue");
+                }
 
-        self.chunk.push_bytecode(bytecode, Some(span));
+                // Resolve the name `_ENV`. Note that in the future we may want to implement a
+                // specialized `GETTABUP` opcode like Lua has, to fetch a table key from an
+                // upvalue directly, without moving the upvalue into a register.
+                let current_r = self.register_index;
+                let env_register = self.read_variable(
+                    TokenTree {
+                        node: Name(ENV_NAME.into()),
+                        span: name.span,
+                    },
+                    VariableMode::Ref,
+                )?;
+
+                let const_index = self.get_global_name_index(name.node.0.clone());
+
+                match mode {
+                    VariableMode::Read | VariableMode::Ref => {
+                        let dest_r = if env_register == current_r {
+                            env_register
+                        } else {
+                            self.take_register()
+                        };
+
+                        let key_r = self.take_register();
+                        self.push_bytecode(
+                            Bytecode::LoadConst {
+                                register: key_r,
+                                const_index,
+                            },
+                            Some(span),
+                        );
+
+                        self.release_registers_from(dest_r + 1);
+
+                        (
+                            Bytecode::GetTable {
+                                table_register: env_register,
+                                dest_register: dest_r,
+                                key_register: key_r,
+                            },
+                            dest_r,
+                        )
+                    }
+                }
+            }
+        };
+
+        self.push_bytecode(bytecode, Some(span));
         Ok(register)
     }
 
-    fn begin_frame(&mut self, name: Option<Vec<u8>>, method_name: Option<Vec<u8>>) {
-        self.frames.push(Frame::new(name, method_name));
-    }
+    fn write_variable(&mut self, name: TokenTree<Name>, value_register: u8) -> crate::Result<()> {
+        let span = name.span;
+        let bytecode = match self.frame.resolve_name(&name.node.0) {
+            ResolvedName::Local { register, local } => {
+                if local.is_constant() {
+                    return Err(lua_error!(
+                        "attempt to assign to const variable '{}'",
+                        String::from_utf8_lossy(&name.node.0)
+                    ));
+                }
 
-    fn end_frame(&mut self) -> crate::Result<Frame> {
-        let frame = self.frames.pop().expect("frame exists");
+                Bytecode::Mov {
+                    dest_register: register,
+                    src_register: value_register,
+                }
+            }
+            u @ ResolvedName::Upvalue {
+                index: upval_index, ..
+            } => {
+                if u.is_constant() {
+                    return Err(lua_error!(
+                        "attempt to assign to const variable '{}'",
+                        String::from_utf8_lossy(&name.node.0)
+                    ));
+                }
 
-        if let Some((name, goto)) = frame
-            .gotos
-            .iter()
-            .flat_map(|(name, jumps)| jumps.iter().map(move |jump| (name, jump)))
-            .next()
-        {
-            return Err(lua_error!(
-                labels = vec![goto.span.labeled("here")],
-                "no visible label '{}' for goto",
-                String::from_utf8_lossy(name)
-            ));
-        }
+                Bytecode::SetUpval {
+                    upval_index,
+                    src_register: value_register,
+                }
+            }
+            ResolvedName::None => {
+                // Unbounded variable access:
+                // "any reference to a free name (that is, a name not bound to any declaration) var is syntactically translated to _ENV.var"
+                if name.node.0 == ENV_NAME {
+                    unreachable!("the _ENV variable should always be bound to a local or upvalue");
+                }
 
-        Ok(frame)
+                // Resolve the name `_ENV`. Note that in the future we may want to implement a
+                // specialized `GETTABUP` opcode like Lua has, to fetch a table key from an
+                // upvalue directly, without moving the upvalue into a register.
+                let current_r = self.register_index;
+                let env_register = self.read_variable(
+                    TokenTree {
+                        node: Name(ENV_NAME.into()),
+                        span: name.span,
+                    },
+                    VariableMode::Ref,
+                )?;
+
+                let const_index = self.get_global_name_index(name.node.0.clone());
+
+                let key_r = self.take_register();
+                self.push_bytecode(
+                    Bytecode::LoadConst {
+                        register: key_r,
+                        const_index,
+                    },
+                    Some(span),
+                );
+
+                self.release_registers_from(current_r);
+
+                Bytecode::SetTable {
+                    table_register: env_register,
+                    value_register,
+                    key_register: key_r,
+                }
+            }
+        };
+
+        self.push_bytecode(bytecode, Some(span));
+        Ok(())
     }
 
     fn begin_scope(&mut self) -> u8 {
-        let current_frame = self.frames.last_mut().unwrap();
-        current_frame.scope_depth += 1;
-        current_frame.scope_ids.push(current_frame.scope_id_counter);
-        current_frame
-            .scope_starting_registers
-            .push(current_frame.register_index);
-        current_frame.scope_id_counter += 1;
-        current_frame.scope_depth
+        self.scope_depth += 1;
+        self.scope_ids.push(self.scope_id_counter);
+        self.scope_starting_registers.push(self.register_index);
+        self.scope_id_counter += 1;
+        self.scope_depth
     }
 
     fn end_scope(&mut self) -> crate::Result {
-        let current_frame = self.frames.last_mut().unwrap();
-        let scope_id = current_frame.scope_id();
-        current_frame.scope_ids.pop();
-        let parent_scope_id = current_frame.scope_id();
-        current_frame.scope_depth -= 1;
-        let starting_register = current_frame
+        let scope_id = self.scope_id();
+        self.scope_ids.pop();
+        let parent_scope_id = self.scope_id();
+        self.scope_depth -= 1;
+        let starting_register = self
             .scope_starting_registers
             .pop()
             .expect("there should be a starting register for the scope");
-        current_frame.release_registers_from(starting_register);
+        self.release_registers_from(starting_register);
 
-        while !current_frame.locals.is_empty()
-            && current_frame
+        while !self.frame.locals.is_empty()
+            && self
+                .frame
                 .locals
                 .last()
                 .as_ref()
-                .is_some_and(|local| local.depth > current_frame.scope_depth)
+                .is_some_and(|local| local.depth > self.scope_depth)
         {
-            current_frame.locals.pop();
+            self.frame.locals.pop();
         }
 
         // If we have any gotos still pending, they're going to jump out of this scope. So we need
         // to make sure that they will correctly close any to-be-closed values that were in scope
         // at the point of the goto statement.
-        for gotos in current_frame.gotos.values_mut() {
+        for gotos in self.gotos.values_mut() {
             // Find the gotos that need to close variables
             let gotos_with_to_close = gotos
                 .iter_mut()
                 .filter(|goto| goto.scope_id == scope_id)
                 .filter(|goto| {
-                    current_frame
-                        .to_close
+                    self.to_close
                         .iter()
                         .find(|&&r| r >= starting_register)
                         .is_some_and(|&r| r < goto.current_register)
@@ -2574,111 +2355,46 @@ impl<'a, 'source> Compiler<'a, 'source> {
             }
         }
 
-        current_frame.gotos.retain(|_, gotos| !gotos.is_empty());
+        self.gotos.retain(|_, gotos| !gotos.is_empty());
 
         // Do we need to close any variables?
-        if let Some(at) = current_frame
-            .to_close
-            .iter()
-            .position(|&r| r >= starting_register)
-        {
-            self.chunk.push_bytecode(
+        if let Some(at) = self.to_close.iter().position(|&r| r >= starting_register) {
+            self.push_bytecode(
                 Bytecode::Close {
                     from_register: starting_register,
                 },
                 None,
             );
 
-            current_frame.to_close.truncate(at);
+            self.to_close.truncate(at);
         }
 
         // Remove any labels that are no longer in scope
-        current_frame
-            .labels
-            .retain(|_, label| label.depth <= current_frame.scope_depth);
+        self.labels
+            .retain(|_, label| label.depth <= self.scope_depth);
 
         Ok(())
     }
 
-    fn add_local(&mut self, name: Vec<u8>, register: u8, attributes: u8, span: Option<Span>) {
-        let current_frame = self.frames.last_mut().unwrap();
-        current_frame.reserve_register(register);
+    fn add_local(&mut self, name: LuaString, register: u8, attributes: u8, span: Option<Span>) {
+        self.reserve_register(register);
         let local = Local {
             name: name.clone(),
-            depth: current_frame.scope_depth,
+            depth: self.scope_depth,
             span,
             attributes,
         };
 
-        let index = current_frame.locals.len() as u8;
+        let index = self.frame.locals.len() as u8;
         debug_assert!(
             index == register,
             "registers must be allocated sequentially (index: {index}, register: {register}), when adding local {}",
             String::from_utf8_lossy(&name),
         );
-        current_frame.locals.push(local);
+        self.frame.locals.push(local);
 
         if attributes & (LuaVariableAttribute::ToBeClosed as u8) != 0 {
-            current_frame.to_close.push(index);
+            self.to_close.push(index);
         }
-    }
-
-    fn resolve_local(&mut self, name: &[u8]) -> Option<(u8, &Local)> {
-        self.frames
-            .last()
-            .expect("there should always be at least one frame")
-            .resolve_local(name)
-    }
-
-    fn resolve_upvalue(&mut self, name: &[u8]) -> Option<(u8, Upvalue)> {
-        self.resolve_upvalue_inner(name, self.frames.len() - 1)
-    }
-
-    fn resolve_upvalue_inner(&mut self, name: &[u8], frame_index: usize) -> Option<(u8, Upvalue)> {
-        if frame_index < 1 {
-            return None;
-        }
-
-        match self.frames[frame_index - 1].resolve_local(name) {
-            Some((local_register, local)) => {
-                Some(self.add_upvalue(frame_index, local_register, local.attributes, true))
-            }
-            None => {
-                if let Some((upvalue_index, upvalue)) =
-                    self.resolve_upvalue_inner(name, frame_index - 1)
-                {
-                    let attributes = upvalue.attributes;
-                    Some(self.add_upvalue(frame_index, upvalue_index, attributes, false))
-                } else {
-                    None
-                }
-            }
-        }
-    }
-
-    fn add_upvalue(
-        &mut self,
-        frame_index: usize,
-        index: u8,
-        attributes: u8,
-        is_local: bool,
-    ) -> (u8, Upvalue) {
-        let frame = self.frames.get_mut(frame_index).expect("frame exists");
-        if let Some((i, upvalue)) = frame
-            .upvalues
-            .iter()
-            .enumerate()
-            .find(|(_, upvalue)| upvalue.is_local == is_local && upvalue.index == index)
-        {
-            return (i as u8, *upvalue);
-        }
-
-        frame.upvalues.push(Upvalue {
-            is_local,
-            index,
-            attributes,
-        });
-        let index = frame.upvalues.len() as u8 - 1;
-        (index, frame.upvalues[index as usize])
     }
 }

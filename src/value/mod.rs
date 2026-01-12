@@ -13,9 +13,10 @@ mod userdata;
 
 pub use attribute::LuaVariableAttribute;
 pub use closure::LuaClosure;
-pub use constant::{LuaConst, LuaFunctionDefinition};
+pub use constant::LuaConst;
 pub use number::LuaNumber;
 pub use object::LuaObject;
+pub use string::LuaString;
 pub use table::LuaTable;
 pub use upvalue::UpValue;
 pub use userdata::UserData;
@@ -31,7 +32,7 @@ pub enum LuaValue {
     Nil,
     Boolean(bool),
     Number(number::LuaNumber),
-    String(Vec<u8>),
+    String(LuaString),
     Object(Arc<RwLock<LuaObject>>),
     UpValue(Arc<RwLock<UpValue>>),
 }
@@ -54,7 +55,7 @@ impl Debug for LuaValue {
                 }
             },
             LuaValue::UpValue(u) => match u.try_write() {
-                Ok(inner) => write!(f, "upvalue<0x{:x}>: {:?}", u as *const _ as usize, inner),
+                Ok(inner) => write!(f, "{:?}", inner),
                 Err(e) => {
                     write!(f, "upvalue<0x{:x}>: <locked: {e}>", u as *const _ as usize)
                 }

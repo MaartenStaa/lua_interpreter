@@ -1,8 +1,6 @@
 mod compat;
 pub(crate) mod numbers;
 
-use std::path::Path;
-
 use miette::LabeledSpan;
 use numbers::{NumberParser, ParsedNumber};
 use subslice::SubsliceExt;
@@ -11,18 +9,18 @@ use crate::error::{Context, LuaError, lua_error};
 use crate::token::{Span, Token, TokenKind};
 use compat::ByteCharExt;
 
-pub struct Lexer<'path, 'source> {
-    filename: Option<&'path Path>,
+pub struct Lexer<'name, 'source> {
+    chunk_name: &'name [u8],
     source: &'source [u8],
     rest: &'source [u8],
     position: usize,
     peeked: Option<Token<'source>>,
 }
 
-impl<'path, 'source> Lexer<'path, 'source> {
-    pub fn new(filename: Option<&'path Path>, source: &'source [u8]) -> Self {
+impl<'name, 'source> Lexer<'name, 'source> {
+    pub fn new(chunk_name: &'name [u8], source: &'source [u8]) -> Self {
         Self {
-            filename,
+            chunk_name,
             source,
             rest: source,
             position: 0,
@@ -40,14 +38,13 @@ impl<'path, 'source> Lexer<'path, 'source> {
     }
 
     pub fn with_source_code(&self, report: LuaError) -> LuaError {
-        if let Some(filename) = self.filename {
-            report.with_source_code(
-                miette::NamedSource::new(filename.to_string_lossy(), self.source.to_vec())
-                    .with_language("lua"),
+        report.with_source_code(
+            miette::NamedSource::new(
+                String::from_utf8_lossy(self.chunk_name),
+                self.source.to_vec(),
             )
-        } else {
-            report.with_source_code(self.source.to_vec())
-        }
+            .with_language("lua"),
+        )
     }
 }
 
@@ -611,7 +608,7 @@ impl<'path, 'source> Lexer<'path, 'source> {
                     self.rest = &self.rest[self.position - start - 1..];
 
                     return Ok(Token {
-                        kind: TokenKind::String(string),
+                        kind: TokenKind::String(string.into()),
                         span: Span {
                             start,
                             end: self.position,
@@ -633,7 +630,7 @@ impl<'path, 'source> Lexer<'path, 'source> {
                                 &self.rest[self.position - start - 2 - expected_equals as usize..];
 
                             return Ok(Token {
-                                kind: TokenKind::String(string),
+                                kind: TokenKind::String(string.into()),
                                 span: Span {
                                     start,
                                     end: self.position,
@@ -845,14 +842,14 @@ mod tests {
             ("0X1.921FB54442D18P+1", TokenKind::Float(3.141592653589793)),
             ("0x.0p-3", TokenKind::Float(0.0)),
         ] {
-            let mut lexer = Lexer::new(Some(Path::new("test.lua")), input.as_bytes());
+            let mut lexer = Lexer::new(b"test.lua", input.as_bytes());
             let token = lexer.next().unwrap().unwrap();
             assert_eq!(token.kind, expected, "when parsing '{input}'");
         }
 
         // Invalid numbers
         for input in &["0x5pf", "0xi"] {
-            let mut lexer = Lexer::new(Some(Path::new("test.lua")), input.as_bytes());
+            let mut lexer = Lexer::new(b"test.lua", input.as_bytes());
             let token = lexer.next().unwrap();
             assert!(token.is_err(), "when parsing '{input}'");
         }
@@ -868,11 +865,11 @@ mod tests {
             "[[alo\n123\"]]",
             "[==[alo\n123\"]==]",
         ] {
-            let mut lexer = Lexer::new(Some(Path::new("test.lua")), example.as_bytes());
+            let mut lexer = Lexer::new(b"test.lua", example.as_bytes());
             let token = lexer.next().unwrap().unwrap();
             assert_eq!(
                 token.kind,
-                TokenKind::String(vec![b'a', b'l', b'o', b'\n', b'1', b'2', b'3', b'"']),
+                TokenKind::String(vec![b'a', b'l', b'o', b'\n', b'1', b'2', b'3', b'"'].into()),
                 "when parsing '{example}'"
             );
         }
@@ -885,9 +882,9 @@ mod tests {
                 vec![b' ', b' ', b'f', b'o', b'o', b' ', b'b', b'a', b'r'],
             ),
         ] {
-            let mut lexer = Lexer::new(Some(Path::new("test.lua")), input.as_bytes());
+            let mut lexer = Lexer::new(b"test.lua", input.as_bytes());
             let token = lexer.next().unwrap().unwrap();
-            assert_eq!(token.kind, TokenKind::String(expected));
+            assert_eq!(token.kind, TokenKind::String(expected.into()));
         }
     }
 
@@ -897,13 +894,13 @@ mod tests {
             "-- this is a comment\n",
             "--[=[\n  example of a long [comment],\n  [[spanning several [lines]]]\n\n]=]",
         ] {
-            let mut lexer = Lexer::new(Some(Path::new("test.lua")), input.as_bytes());
+            let mut lexer = Lexer::new(b"test.lua", input.as_bytes());
             let token = lexer.next();
             assert!(token.is_none(), "when parsing '{input}'");
 
             // Also check that we can find tokens after the comment
             let input = format!("{} 3", input);
-            let mut lexer = Lexer::new(Some(Path::new("test.lua")), input.as_bytes());
+            let mut lexer = Lexer::new(b"test.lua", input.as_bytes());
             let token = lexer.next().unwrap().unwrap();
             assert_eq!(token.kind, TokenKind::Integer(3));
         }
@@ -925,9 +922,9 @@ mod tests {
             // newline immediately after opening delimiter is ignored
             "[[\nfoo\nbar]]",
         ] {
-            let mut lexer = Lexer::new(Some(Path::new("test.lua")), input.as_bytes());
+            let mut lexer = Lexer::new(b"test.lua", input.as_bytes());
             let token = lexer.next().unwrap().unwrap();
-            assert_eq!(token.kind, TokenKind::String(expected.to_vec()));
+            assert_eq!(token.kind, TokenKind::String(expected.into()));
         }
     }
 }

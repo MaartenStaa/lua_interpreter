@@ -8,7 +8,7 @@ use crate::{
     stdlib::utils::pack::{
         PackOption, PackOptionItem, copy_bytes_fix_endian, get_pack_option, pack_int, unpack_int,
     },
-    value::{LuaNumber, LuaObject, LuaTable, LuaValue},
+    value::{LuaNumber, LuaObject, LuaString, LuaTable, LuaValue},
     vm::VM,
 };
 
@@ -68,7 +68,7 @@ pub static STRING: LazyLock<LuaValue> = LazyLock::new(|| {
 
 #[derive(Debug)]
 enum LuaPattern {
-    Plain(Vec<u8>),
+    Plain(LuaString),
     Regex(Regex),
 }
 
@@ -196,7 +196,7 @@ fn pattern_to_regex(pattern: &[u8]) -> crate::Result<LuaPattern> {
             .map(LuaPattern::Regex)
             .map_err(|e| lua_error!("{e}"))
     } else {
-        Ok(LuaPattern::Plain(pattern.to_vec()))
+        Ok(LuaPattern::Plain(pattern.into()))
     }
 }
 
@@ -251,7 +251,7 @@ fn char(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
         str.push(i as u8);
     }
 
-    Ok(vec![LuaValue::String(str)])
+    Ok(vec![LuaValue::String(str.into())])
 }
 
 fn find(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
@@ -371,7 +371,7 @@ fn lower(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     let string = String::from_utf8_lossy(input);
     let lower = string.to_lowercase();
 
-    Ok(vec![LuaValue::String(lower.into_bytes())])
+    Ok(vec![LuaValue::String(lower.into_bytes().into())])
 }
 
 fn r#match(_: &mut VM, mut input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
@@ -383,7 +383,7 @@ fn r#match(_: &mut VM, mut input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>>
     match pattern {
         LuaPattern::Plain(pattern) => match s.find(&pattern) {
             Some(start) => Ok(vec![LuaValue::String(
-                s[start..start + pattern.len()].to_vec(),
+                s[start..start + pattern.len()].into(),
             )]),
             None => Ok(vec![LuaValue::Nil]),
         },
@@ -393,7 +393,7 @@ fn r#match(_: &mut VM, mut input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>>
             match captures {
                 Some(captures) => {
                     if let Some(capture) = captures.get(0) {
-                        Ok(vec![LuaValue::String(capture.as_bytes().to_vec())])
+                        Ok(vec![LuaValue::String(capture.as_bytes().into())])
                     } else {
                         Ok(vec![input.swap_remove(0)])
                     }
@@ -411,7 +411,7 @@ fn rep(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
         .map(|s| s.as_slice())
         .unwrap_or(b"");
     if n < 1 {
-        return Ok(vec![LuaValue::String(vec![])]);
+        return Ok(vec![LuaValue::String(LuaString::new())]);
     }
 
     let mut result = s.clone();
@@ -433,7 +433,7 @@ fn reverse(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
 
 fn pack(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     let fmt = require_string!(input, "string.pack");
-    let mut result = vec![];
+    let mut result = LuaString::new();
     let mut max_alignment = 1;
     let mut is_little_endian = cfg!(target_endian = "little");
 
@@ -642,7 +642,7 @@ fn sub(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
         Ordering::Less => s.len() as i64 + j + 1,
         Ordering::Greater if j >= s.len() as i64 => s.len() as i64,
         Ordering::Greater => j,
-        Ordering::Equal => return Ok(vec![LuaValue::String(vec![])]),
+        Ordering::Equal => return Ok(vec![LuaValue::String(LuaString::new())]),
     };
     let j = if j > s.len() as i64 {
         s.len() as i64
@@ -651,11 +651,11 @@ fn sub(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     };
 
     if i > j {
-        return Ok(vec![LuaValue::String(vec![])]);
+        return Ok(vec![LuaValue::String(LuaString::new())]);
     }
 
     Ok(vec![LuaValue::String(
-        s[(i - 1) as usize..=(j - 1) as usize].to_vec(),
+        s[(i - 1) as usize..=(j - 1) as usize].into(),
     )])
 }
 
@@ -775,8 +775,7 @@ fn unpack(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
                     ));
                 }
 
-                let string = Vec::from(&s[pos..pos + size]);
-                result.push(LuaValue::String(string));
+                result.push(LuaValue::String(s[pos..pos + size].into()));
                 pos += size;
             }
             PackOption::String => {
@@ -796,7 +795,7 @@ fn unpack(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
                 }
 
                 let string = Vec::from(&s[pos..pos + len]);
-                result.push(LuaValue::String(string));
+                result.push(LuaValue::String(string.into()));
                 pos += len;
             }
             PackOption::Zstr => {
@@ -808,7 +807,7 @@ fn unpack(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
                 };
 
                 let string = Vec::from(&s[pos..pos + len]);
-                result.push(LuaValue::String(string));
+                result.push(LuaValue::String(string.into()));
                 // skip past string and the null terminator
                 pos += len + 1;
             }
@@ -841,5 +840,5 @@ fn upper(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     let string = String::from_utf8_lossy(input);
     let upper = string.to_uppercase();
 
-    Ok(vec![LuaValue::String(upper.into_bytes())])
+    Ok(vec![LuaValue::String(upper.into_bytes().into())])
 }

@@ -37,8 +37,6 @@ pub enum Instruction {
     BNot,
 
     // Variables
-    SetGlobal,
-    GetGlobal,
     Mov,
     SetUpval,
     GetUpval,

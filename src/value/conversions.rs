@@ -1,14 +1,10 @@
 use std::sync::{Arc, RwLock};
 
-use crate::ast;
+use crate::{ast, value::LuaString};
 
 use super::{
-    LuaValue, UserData,
-    closure::LuaClosure,
-    constant::{LuaConst, LuaFunctionDefinition},
-    number::LuaNumber,
-    object::LuaObject,
-    table::LuaTable,
+    LuaValue, UserData, closure::LuaClosure, constant::LuaConst, number::LuaNumber,
+    object::LuaObject, table::LuaTable,
 };
 
 impl From<ast::Literal> for LuaValue {
@@ -30,18 +26,24 @@ impl From<bool> for LuaValue {
 
 impl From<&str> for LuaValue {
     fn from(s: &str) -> Self {
-        LuaValue::String(s.as_bytes().to_vec())
+        LuaValue::String(s.as_bytes().to_vec().into())
     }
 }
 
 impl From<String> for LuaValue {
     fn from(s: String) -> Self {
-        LuaValue::String(s.as_bytes().to_vec())
+        LuaValue::String(s.as_bytes().to_vec().into())
     }
 }
 
 impl From<Vec<u8>> for LuaValue {
     fn from(s: Vec<u8>) -> Self {
+        LuaValue::String(s.into())
+    }
+}
+
+impl From<LuaString> for LuaValue {
+    fn from(s: LuaString) -> Self {
         LuaValue::String(s)
     }
 }
@@ -70,6 +72,12 @@ impl From<LuaTable> for LuaValue {
     }
 }
 
+impl From<LuaClosure> for LuaValue {
+    fn from(closure: LuaClosure) -> Self {
+        LuaValue::Object(Arc::new(RwLock::new(LuaObject::Closure(closure))))
+    }
+}
+
 impl From<UserData> for LuaValue {
     fn from(user_data: UserData) -> Self {
         LuaValue::Object(Arc::new(RwLock::new(LuaObject::UserData(user_data))))
@@ -83,23 +91,6 @@ impl From<LuaConst> for LuaValue {
             LuaConst::Boolean(b) => LuaValue::Boolean(b),
             LuaConst::Number(n) => LuaValue::Number(n),
             LuaConst::String(s) => LuaValue::String(s),
-            LuaConst::Function(LuaFunctionDefinition {
-                name,
-                chunk,
-                ip,
-                upvalues,
-                num_params,
-                has_varargs,
-                max_registers,
-            }) => LuaValue::Object(Arc::new(RwLock::new(LuaObject::Closure(LuaClosure {
-                name,
-                chunk,
-                ip,
-                upvalues: vec![None; upvalues],
-                num_params,
-                has_varargs,
-                max_registers,
-            })))),
             LuaConst::Table(t) => LuaValue::Object(Arc::new(RwLock::new(LuaObject::Table(t)))),
         }
     }

@@ -3,7 +3,7 @@ use std::{
     collections::HashMap,
     mem::size_of,
     path::{Path, PathBuf},
-    sync::{Arc, RwLock},
+    sync::Arc,
 };
 
 use miette::NamedSource;
@@ -12,46 +12,59 @@ use crate::{
     bytecode::{Bytecode, JumpToUndecidedAddress},
     compiler::ExpressionResultMode,
     token::Span,
-    value::LuaObject,
+    value::LuaString,
     vm::JumpAddr,
 };
 
 #[derive(Debug, Clone)]
+pub(crate) struct ChunkUpValue {
+    pub(crate) is_local: bool,
+    pub(crate) index: u8,
+    pub(crate) name: Option<LuaString>,
+}
+
+#[derive(Debug, Clone)]
 pub struct Chunk<'source> {
-    pub(crate) env: Arc<RwLock<LuaObject>>,
-    pub(crate) index: usize,
+    pub(crate) name: LuaString,
+    // TODO: Maybe this can be a Cow<'source, Path>?
     pub(crate) filename: Option<PathBuf>,
-    pub(crate) chunk_name: String,
-    pub(crate) source: Cow<'source, [u8]>,
+    pub(crate) source: Arc<Cow<'source, [u8]>>,
     pub(crate) instructions: Vec<u8>,
     pub(crate) instruction_spans: HashMap<usize, Span>,
-    pub(crate) ip: usize,
     pub(crate) max_registers: u8,
+    pub(crate) num_params: u8,
+    pub(crate) has_varargs: bool,
+    pub(crate) upvalues: Vec<ChunkUpValue>,
 }
 
 impl<'source> Chunk<'source> {
-    pub fn new(
-        env: Arc<RwLock<LuaObject>>,
+    pub(crate) fn new(
+        name: LuaString,
         filename: Option<PathBuf>,
-        chunk_name: String,
-        source: Cow<'source, [u8]>,
+        source: Arc<Cow<'source, [u8]>>,
+        num_params: u8,
+        has_varargs: bool,
+        upvalues: Vec<ChunkUpValue>,
     ) -> Self {
         Self {
-            env,
-            // NOTE: This is set by the VM when the chunk is added
-            index: 0,
+            name,
             filename,
-            chunk_name,
             source,
             instructions: vec![],
             instruction_spans: HashMap::new(),
-            ip: 0,
             max_registers: 0,
+            num_params,
+            has_varargs,
+            upvalues,
         }
     }
 
     pub fn get_filename(&self) -> Option<&Path> {
         self.filename.as_deref()
+    }
+
+    pub fn get_name(&self) -> &[u8] {
+        &self.name
     }
 
     pub fn get_source(&self) -> &[u8] {
@@ -85,7 +98,7 @@ impl<'source> Chunk<'source> {
         jump_addr_ip
     }
 
-    pub fn push_call_instruction(
+    pub(crate) fn push_call_instruction(
         &mut self,
         function_register: u8,
         args_multres: bool,
@@ -117,7 +130,7 @@ impl<'source> Chunk<'source> {
         );
     }
 
-    pub fn push_callt_instruction(
+    pub(crate) fn push_callt_instruction(
         &mut self,
         args_from_register: u8,
         args_multres: bool,
@@ -165,10 +178,7 @@ impl<'source> Chunk<'source> {
     }
 
     pub fn named_source(&self) -> NamedSource<Vec<u8>> {
-        if let Some(filename) = &self.filename {
-            NamedSource::new(filename.to_string_lossy(), self.source.to_vec()).with_language("lua")
-        } else {
-            NamedSource::new(&self.chunk_name, self.source.to_vec()).with_language("lua")
-        }
+        NamedSource::new(String::from_utf8_lossy(&self.name), self.source.to_vec())
+            .with_language("lua")
     }
 }

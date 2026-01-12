@@ -1,6 +1,7 @@
 use std::{
+    borrow::Cow,
     fs,
-    path::Path,
+    path::{Path, PathBuf},
     sync::{
         Arc, LazyLock, RwLock,
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -13,7 +14,7 @@ use crate::{
     macros::{assert_string, assert_table, get_number, require_string, require_table},
     stdlib::package,
     value::{
-        LuaClosure, LuaNumber, LuaObject, LuaValue,
+        LuaClosure, LuaNumber, LuaObject, LuaValue, UpValue,
         callable::{Callable, Method},
         metatables,
     },
@@ -99,13 +100,13 @@ pub(crate) fn collectgarbage(vm: &mut VM, input: Vec<LuaValue>) -> crate::Result
             let mut mode = GC_MODE.write().unwrap();
             let previous_mode = *mode;
             *mode = "incremental";
-            vec![LuaValue::String(previous_mode.as_bytes().to_vec())]
+            vec![LuaValue::String(previous_mode.as_bytes().into())]
         }
         Some(LuaValue::String(s)) if s == b"generational" => {
             let mut mode = GC_MODE.write().unwrap();
             let previous_mode = *mode;
             *mode = "generational";
-            vec![LuaValue::String(previous_mode.as_bytes().to_vec())]
+            vec![LuaValue::String(previous_mode.as_bytes().into())]
         }
         Some(LuaValue::String(s)) if s == b"setpause" => {
             let val = get_number!(input, "collectgarbage", 1)
@@ -234,48 +235,51 @@ pub(crate) fn ipairs(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaV
 
 pub(crate) fn load(vm: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     let mut load_from_closure = false;
-    let source = match input.first() {
-        Some(LuaValue::String(s)) => s.clone(),
-        Some(LuaValue::Object(o)) => match &*o.read().unwrap() {
-            LuaObject::Closure(closure) => {
-                load_from_closure = true;
-                let mut result = Vec::new();
-                loop {
-                    let mut piece_result = vm.run_closure(closure.clone(), vec![])?;
-                    if piece_result.is_empty() {
-                        break;
-                    }
-
-                    let piece_result = piece_result.swap_remove(0);
-                    match piece_result {
-                        LuaValue::String(s) => {
-                            result.extend(s);
-                        }
-                        LuaValue::Nil => {
-                            break;
-                        }
-                        _ => {
-                            return Err(lua_error!(
-                                "unexpected return value from chunk loader (string or nil expected, got {})",
-                                piece_result.type_name()
-                            ));
-                        }
-                    }
-                }
-
-                result
-            }
-            LuaObject::NativeFunction(_, f) => {
-                let result = f(vm, vec![])?;
-                return Ok(result);
-            }
-            _ => {
+    let source: Vec<u8> = match input.first() {
+        Some(LuaValue::String(s)) => s.clone().into(),
+        Some(LuaValue::Object(o)) => {
+            let object = &*o.read().unwrap();
+            let callable: Result<Callable, _> = object.try_into();
+            let Ok(callable) = callable else {
                 return Err(lua_error!(
                     "bad argument #1 to 'load' (string or function expected, got {})",
                     o.read().unwrap().type_name(),
                 ));
+            };
+
+            let mut result = vec![];
+            loop {
+                let mut piece_result = match &callable.method {
+                    Method::Closure(closure) => {
+                        load_from_closure = true;
+                        vm.run_closure(closure.clone(), vec![])
+                    }
+                    Method::NativeFunction(_, f) => f(vm, vec![]),
+                }?;
+
+                if piece_result.is_empty() {
+                    break;
+                }
+
+                let piece_result = piece_result.swap_remove(0);
+                match piece_result {
+                    LuaValue::String(s) => {
+                        result.extend(s);
+                    }
+                    LuaValue::Nil => {
+                        break;
+                    }
+                    _ => {
+                        return Err(lua_error!(
+                            "unexpected return value from chunk loader (string or nil expected, got {})",
+                            piece_result.type_name()
+                        ));
+                    }
+                }
             }
-        },
+
+            result
+        }
         Some(value) => {
             return Err(lua_error!(
                 "bad argument #1 to 'load' (string expected, got {})",
@@ -290,13 +294,14 @@ pub(crate) fn load(vm: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaVa
     };
 
     let name = match input.get(1) {
-        Some(LuaValue::String(s)) => String::from_utf8_lossy(s).to_string(),
-        Some(LuaValue::Nil) | None => if load_from_closure {
-            "=(load)"
-        } else {
-            "chunk"
+        Some(LuaValue::String(s)) => s.clone(),
+        Some(LuaValue::Nil) | None => {
+            if load_from_closure {
+                b"=(load)".into()
+            } else {
+                b"chunk".into()
+            }
         }
-        .to_string(),
         Some(value) => {
             return Err(lua_error!(
                 "bad argument #2 to 'load' (string expected, got {})",
@@ -306,39 +311,38 @@ pub(crate) fn load(vm: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaVa
     };
 
     let env = match input.get(3) {
-        Some(LuaValue::Object(o)) => Some(o.clone()),
-        Some(LuaValue::Nil) | None => None,
-        Some(value) => {
-            return Err(lua_error!(
-                "bad argument #4 to 'load' (table expected, got {})",
-                value.type_name(),
-            ));
-        }
+        Some(value) => value.clone(),
+        None => vm.get_global_env(),
     };
 
-    let compiler = Compiler::new(vm, env, None, name.clone(), source.into());
-    let chunk_index = match compiler.compile(None) {
-        Ok(chunk_index) => chunk_index,
+    let filename: Option<PathBuf> = None;
+    let compiler = Compiler::new(
+        vm,
+        name,
+        filename,
+        None,
+        Arc::new(Cow::Owned(source)),
+        vec![],
+        true,
+    );
+    let compiled_chunk = match compiler.compile_chunk(None) {
+        Ok(compiled_chunk) => compiled_chunk,
         Err(e) => {
             return Ok(vec![
                 LuaValue::Nil,
-                LuaValue::String(format!("{}", e).into_bytes()),
+                LuaValue::String(format!("{}", e).into_bytes().into()),
             ]);
         }
     };
 
     // Return a function that runs the chunk
-    Ok(vec![LuaValue::Object(Arc::new(RwLock::new(
-        LuaObject::Closure(LuaClosure {
-            name: Some(name.into_bytes().to_vec()),
-            chunk: chunk_index,
-            ip: 0,
-            max_registers: vm.get_chunk(chunk_index).unwrap().max_registers,
-            upvalues: vec![],
-            num_params: 0,
-            has_varargs: false,
-        }),
-    )))])
+    let mut closure = LuaClosure::new(compiled_chunk.chunk_index);
+    // FIXME: This needs to capture the upvalue from the stack in the VM!
+    closure
+        .upvalues
+        .insert(0, Arc::new(RwLock::new(UpValue(env))));
+
+    Ok(vec![closure.into()])
 }
 
 pub(crate) fn next(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
@@ -434,7 +438,7 @@ pub(crate) fn pcall(vm: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaV
         }
         Err(e) => vec![
             LuaValue::Boolean(false),
-            LuaValue::String(e.to_string().into_bytes()),
+            LuaValue::String(e.to_string().into_bytes().into()),
         ],
     })
 }
@@ -547,29 +551,27 @@ pub(crate) fn require(vm: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<Lu
         }
     };
 
-    let name_str = String::from_utf8_lossy(name);
-
     // Allow loading stdlib modules via `require`
-    match name_str.as_ref() {
-        "debug" => {
+    match name.as_slice() {
+        b"debug" => {
             return Ok(vec![DEBUG.clone()]);
         }
-        "io" => {
+        b"io" => {
             return Ok(vec![IO.clone()]);
         }
-        "math" => {
+        b"math" => {
             return Ok(vec![MATH.clone()]);
         }
-        "os" => {
+        b"os" => {
             return Ok(vec![OS.clone()]);
         }
-        "string" => {
+        b"string" => {
             return Ok(vec![STRING.clone()]);
         }
-        "table" => {
+        b"table" => {
             return Ok(vec![TABLE.clone()]);
         }
-        "utf8" => {
+        b"utf8" => {
             return Ok(vec![UTF8.clone()]);
         }
         _ => {}
@@ -614,8 +616,9 @@ pub(crate) fn require(vm: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<Lu
                     .transpose()
                     .map_err(|err| {
                         lua_error!(
-                            "error loading module '{name_str}' from file '{source}': cannot resolve path '{}': {err}",
+                            "error loading module '{name}' from file '{source}': cannot resolve path '{}': {err}",
                             path.display(),
+                            name = String::from_utf8_lossy(name),
                             source = &filename.to_string_lossy(),
                         )
                     })?
@@ -628,8 +631,9 @@ pub(crate) fn require(vm: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<Lu
         }
         if path.is_dir() {
             return Err(lua_error!(
-                "error loading module '{name_str}' from file '{source}': cannot read '{dir_name}': is a directory",
+                "error loading module '{name}' from file '{source}': cannot read '{dir_name}': is a directory",
                 source = "<unknown>",
+                name = String::from_utf8_lossy(name),
                 dir_name = path
                     .file_name()
                     .map(|s| s.to_string_lossy())
@@ -638,7 +642,7 @@ pub(crate) fn require(vm: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<Lu
         }
 
         // Check if it's already loaded
-        let path_value = LuaValue::String(path_str.as_bytes().to_vec());
+        let path_value = LuaValue::String(path_str.as_bytes().into());
         assert_table!(&package, package_table, {
             let loaded = package_table
                 .get(&"loaded".into())
@@ -650,11 +654,24 @@ pub(crate) fn require(vm: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<Lu
             })
         });
 
-        let source = fs::read(&path).map_err(|_| lua_error!("unable to read module {name_str}"))?;
+        let source = fs::read(&path).map_err(|_| {
+            lua_error!(
+                "unable to read module {name}",
+                name = String::from_utf8_lossy(name)
+            )
+        })?;
 
-        let compiler = Compiler::new(vm, None, Some(path), name_str.to_string(), source.into());
-        let chunk_index = compiler.compile(None)?;
-        let mut result = vm.run_chunk(chunk_index)?;
+        let compiler = Compiler::new(
+            vm,
+            name.clone(),
+            Some(path),
+            None,
+            Arc::new(source.into()),
+            vec![],
+            false,
+        );
+        let compiled_chunk = compiler.compile_chunk(None)?;
+        let mut result = vm.run_chunk(compiled_chunk.chunk_index)?;
         let result = result.swap_remove(0);
 
         assert_table!(write, package, package_table, {
@@ -669,7 +686,10 @@ pub(crate) fn require(vm: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<Lu
         return Ok(vec![result, path_value]);
     }
 
-    Err(lua_error!("module '{name_str}' not found"))
+    Err(lua_error!(
+        "module '{name}' not found",
+        name = String::from_utf8_lossy(name)
+    ))
 }
 
 pub(crate) fn select(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
@@ -790,7 +810,9 @@ pub(crate) fn tonumber(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<Lu
 pub(crate) fn tostring(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     let value = input.first().unwrap_or(&LuaValue::Nil);
 
-    Ok(vec![LuaValue::String(value.to_string().into_bytes())])
+    Ok(vec![LuaValue::String(
+        value.to_string().into_bytes().into(),
+    )])
 }
 
 pub(crate) fn r#type(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
@@ -798,7 +820,9 @@ pub(crate) fn r#type(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaV
         return Err(lua_error!("bad argument #1 to 'type' (value expected)"));
     };
 
-    Ok(vec![LuaValue::String(value.type_name().bytes().collect())])
+    Ok(vec![LuaValue::String(
+        value.type_name().bytes().collect::<Vec<_>>().into(),
+    )])
 }
 
 static CONTROL_MESSAGES_ENABLED: AtomicBool = AtomicBool::new(false);
@@ -895,11 +919,12 @@ pub(crate) fn xpcall(vm: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<Lua
                 result = match &msgh.method {
                     Method::Closure(closure) => vm.run_closure(
                         closure.clone(),
-                        vec![LuaValue::String(e.to_string().into_bytes())],
+                        vec![LuaValue::String(e.to_string().into_bytes().into())],
                     ),
-                    Method::NativeFunction(_, f) => {
-                        f(vm, vec![LuaValue::String(e.to_string().into_bytes())])
-                    }
+                    Method::NativeFunction(_, f) => f(
+                        vm,
+                        vec![LuaValue::String(e.to_string().into_bytes().into())],
+                    ),
                 };
             }
         }
@@ -912,7 +937,7 @@ pub(crate) fn xpcall(vm: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<Lua
         }
         Err(e) => vec![
             LuaValue::Boolean(false),
-            LuaValue::String(e.to_string().into_bytes()),
+            LuaValue::String(e.to_string().into_bytes().into()),
         ],
     })
 }

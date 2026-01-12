@@ -4,8 +4,7 @@ use crate::{
     chunk::Chunk,
     error::RuntimeError,
     instruction::Instruction,
-    macros::assert_function_const,
-    value::{LuaConst, LuaFunctionDefinition},
+    value::LuaConst,
     vm::{ConstIndex, JumpAddr, VM},
 };
 
@@ -61,30 +60,16 @@ pub fn print_instructions(vm: &VM, chunk: &Chunk<'_>) {
             Instruction::LoadClosure => {
                 let const_index_bytes = &instructions
                     [instruction_pointer + 2..instruction_pointer + 2 + size_of::<ConstIndex>()];
-                let const_index = ConstIndex::from_be_bytes(const_index_bytes.try_into().unwrap());
+                let chunk_index = ConstIndex::from_be_bytes(const_index_bytes.try_into().unwrap());
                 instr!("LOAD_CLOSURE");
                 reg!();
-                print_const(&consts[const_index as usize]);
-                println!();
+                let chunk = vm.get_chunk(chunk_index).expect("valid chunk index");
+                println!(
+                    "FUNCTION<{name}:{chunk_index:04}>",
+                    name = String::from_utf8_lossy(&chunk.name)
+                );
 
-                let function = assert_function_const!(&consts[const_index as usize]);
-                let extra_bytes = function.upvalues * 2;
-                for i in 0..function.upvalues {
-                    let ip = instruction_pointer + 2 + size_of::<ConstIndex>() + i * 2;
-                    let is_local_byte = instructions[ip];
-                    let local_index = instructions[ip + 1];
-                    println!(
-                        "{ip:04}        |               {:7} {}",
-                        if is_local_byte == 0 {
-                            "upvalue"
-                        } else {
-                            "local"
-                        },
-                        local_index
-                    );
-                }
-
-                2 + size_of::<ConstIndex>() + extra_bytes
+                2 + size_of::<ConstIndex>()
             }
             Instruction::LoadNil => {
                 instr!("LOAD_NIL");
@@ -268,26 +253,6 @@ pub fn print_instructions(vm: &VM, chunk: &Chunk<'_>) {
             }
 
             // Variables
-            Instruction::SetGlobal => {
-                let name_index_bytes = &instructions
-                    [instruction_pointer + 2..instruction_pointer + 2 + size_of::<ConstIndex>()];
-                let name_index = ConstIndex::from_be_bytes(name_index_bytes.try_into().unwrap());
-                instr!("SET_GLOBAL");
-                reg!();
-                print_const(&consts[name_index as usize]);
-                println!("   ({name_index})");
-                2 + size_of::<ConstIndex>()
-            }
-            Instruction::GetGlobal => {
-                let name_index_bytes = &instructions
-                    [instruction_pointer + 2..instruction_pointer + 2 + size_of::<ConstIndex>()];
-                let name_index = ConstIndex::from_be_bytes(name_index_bytes.try_into().unwrap());
-                instr!("GET_GLOBAL");
-                reg!();
-                print_const(&consts[name_index as usize]);
-                println!("   ({name_index})");
-                2 + size_of::<ConstIndex>()
-            }
             Instruction::Mov => {
                 instr!("MOV");
                 reg!(1);
@@ -470,12 +435,6 @@ fn print_const(constant: &LuaConst) {
         LuaConst::Boolean(b) => print!("{b}"),
         LuaConst::Number(n) => print_number(n),
         LuaConst::String(s) => print!("STRING    \"{}\"", String::from_utf8_lossy(s)),
-        LuaConst::Function(LuaFunctionDefinition { name, ip, .. }) => {
-            print!(
-                "FUNCTION<{name}:{ip:04}>",
-                name = String::from_utf8_lossy(name.as_deref().unwrap_or(b"[anonymous]")),
-            )
-        }
         LuaConst::Table(table) => print!("TABLE ({} fields)", table.keys().count()),
     }
 }

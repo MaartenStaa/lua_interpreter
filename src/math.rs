@@ -287,15 +287,18 @@ impl LuaValue {
                 a.extend(b.to_string().as_bytes());
                 Ok(LuaValue::String(a))
             }
-            (LuaValue::Number(a), LuaValue::String(b)) => Ok(LuaValue::String(Vec::from_iter(
-                a.to_string().into_bytes().into_iter().chain(b),
-            ))),
-            (LuaValue::Number(a), LuaValue::Number(b)) => Ok(LuaValue::String(Vec::from_iter(
-                a.to_string()
-                    .into_bytes()
-                    .into_iter()
-                    .chain(b.to_string().into_bytes()),
-            ))),
+            (LuaValue::Number(a), LuaValue::String(b)) => Ok(LuaValue::String(
+                Vec::from_iter(a.to_string().into_bytes().into_iter().chain(b)).into(),
+            )),
+            (LuaValue::Number(a), LuaValue::Number(b)) => Ok(LuaValue::String(
+                Vec::from_iter(
+                    a.to_string()
+                        .into_bytes()
+                        .into_iter()
+                        .chain(b.to_string().into_bytes()),
+                )
+                .into(),
+            )),
             (self_, other) => {
                 let left_type = self_.type_name();
                 let right_type = other.type_name();

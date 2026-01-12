@@ -1,34 +1,38 @@
-use std::path::PathBuf;
+use std::{os::unix::ffi::OsStrExt, path::PathBuf};
 
-use lua_interpreter::{compiler::Compiler, optimizer::optimize, parser::Parser};
+use lua_interpreter::{compiler::Compiler, optimizer::optimize, parser::Parser, value::LuaString};
 use rstest::*;
 
 #[rstest]
 fn test_files(#[files("tests/resources/**/*.lua")] file: PathBuf) {
-    use std::sync::{Arc, RwLock};
+    use std::sync::Arc;
 
-    use lua_interpreter::{env, value::LuaObject, vm::VM};
+    use lua_interpreter::{env, vm::VM};
 
     let source = std::fs::read(&file).expect("failed to read source code file");
-    let mut parser = Parser::new(Some(&file), &source);
+    let chunk_name: LuaString = file
+        .file_name()
+        .map(|n| n.as_bytes().into())
+        .unwrap_or_else(|| b"<file>".into());
+
+    let mut parser = Parser::new(&chunk_name, &source);
 
     let ast = optimize(parser.parse().expect("parsing should succeed"));
-    let chunk_name = file
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| "<file>".to_string());
 
-    let global_env = Arc::new(RwLock::new(LuaObject::Table(env::create_global_env())));
-    let mut vm = VM::new(Arc::clone(&global_env), false);
+    let global_env = env::create_global_env();
+    let mut vm = VM::new(global_env, false);
     let chunk = Compiler::new(
         &mut vm,
-        Some(global_env),
-        Some(file),
         chunk_name,
-        source.into(),
+        Some(file),
+        None,
+        Arc::new(source.into()),
+        vec![],
+        true,
     )
-    .compile(Some(ast))
+    .compile_chunk(Some(ast))
     .expect("compiling should succeed");
 
-    vm.run_chunk(chunk).expect("running chunk should succeed");
+    vm.run_chunk(chunk.chunk_index)
+        .expect("running chunk should succeed");
 }

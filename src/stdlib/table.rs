@@ -114,7 +114,7 @@ fn concat(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
         }
     }
 
-    Ok(vec![LuaValue::String(result)])
+    Ok(vec![LuaValue::String(result.into())])
 }
 
 fn insert(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {

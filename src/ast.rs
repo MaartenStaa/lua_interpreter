@@ -2,7 +2,7 @@
 
 use std::fmt::Debug;
 
-use crate::token::Span;
+use crate::{token::Span, value::LuaString};
 
 #[derive(PartialEq, Clone)]
 pub struct TokenTree<T> {
@@ -65,7 +65,7 @@ pub enum Statement {
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub struct Name(pub Vec<u8>);
+pub struct Name(pub LuaString);
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct AttributedName {
@@ -146,7 +146,7 @@ pub enum Literal {
     Nil,
     Boolean(bool),
     Number(Number),
-    String(Vec<u8>),
+    String(LuaString),
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -225,8 +225,8 @@ pub enum Field {
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct FunctionDef {
-    pub name: Option<Vec<u8>>,
-    pub method_name: Option<Vec<u8>>,
+    pub name: Option<LuaString>,
+    pub method_name: Option<LuaString>,
     pub parameters: Vec<TokenTree<Name>>,
     pub varargs: Option<Span>,
     pub block: TokenTree<Block>,

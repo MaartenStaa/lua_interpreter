@@ -42,6 +42,6 @@ impl From<PackageConfig> for LuaValue {
             config.substitution_character,
         ];
 
-        LuaValue::String(str)
+        LuaValue::String(str.into())
     }
 }

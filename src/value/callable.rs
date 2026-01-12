@@ -12,7 +12,7 @@ pub(crate) struct Callable {
 pub(crate) enum Method {
     Closure(LuaClosure),
     NativeFunction(
-        String,
+        #[allow(unused)] String,
         fn(&mut VM, Vec<LuaValue>) -> crate::Result<Vec<LuaValue>>,
     ),
 }

@@ -1,6 +1,107 @@
+use std::{
+    fmt::{Debug, Display},
+    iter::Copied,
+    ops::{Deref, DerefMut},
+};
+
 use crate::{error::lua_error, stdlib, vm::VM};
 
 use super::{LuaNumber, LuaObject, LuaTable, LuaValue, metatables};
+
+#[derive(Clone, PartialEq, Eq, Hash, Default, PartialOrd)]
+pub struct LuaString(Vec<u8>);
+
+impl LuaString {
+    pub const fn new() -> Self {
+        LuaString(Vec::new())
+    }
+}
+
+impl Debug for LuaString {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match String::from_utf8(self.0.clone()) {
+            Ok(s) => write!(f, "{:?}", s),
+            Err(_) => write!(f, "{:?} (lossy)", String::from_utf8_lossy(&self.0)),
+        }
+    }
+}
+
+impl Display for LuaString {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match String::from_utf8(self.0.clone()) {
+            Ok(s) => write!(f, "{}", s),
+            Err(_) => write!(f, "{}", String::from_utf8_lossy(&self.0)),
+        }
+    }
+}
+
+impl From<Vec<u8>> for LuaString {
+    fn from(value: Vec<u8>) -> Self {
+        LuaString(value)
+    }
+}
+
+impl From<LuaString> for Vec<u8> {
+    fn from(value: LuaString) -> Self {
+        value.0
+    }
+}
+
+impl From<&[u8]> for LuaString {
+    fn from(value: &[u8]) -> Self {
+        LuaString(value.to_vec())
+    }
+}
+
+impl<const T: usize> From<&[u8; T]> for LuaString {
+    fn from(value: &[u8; T]) -> Self {
+        LuaString(value.to_vec())
+    }
+}
+
+impl Deref for LuaString {
+    type Target = Vec<u8>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for LuaString {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl PartialEq<&[u8]> for LuaString {
+    fn eq(&self, other: &&[u8]) -> bool {
+        &self.0 == other
+    }
+}
+
+impl<const T: usize> PartialEq<[u8; T]> for LuaString {
+    fn eq(&self, other: &[u8; T]) -> bool {
+        self.0 == other
+    }
+}
+
+impl<'a> IntoIterator for &'a LuaString {
+    type Item = u8;
+    type IntoIter = Copied<std::slice::Iter<'a, u8>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter().copied()
+    }
+}
+
+impl IntoIterator for LuaString {
+    type Item = u8;
+    type IntoIter = std::vec::IntoIter<u8>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
 
 pub(crate) fn get_string_metatable() -> LuaTable {
     let mut metatable = LuaTable::new();

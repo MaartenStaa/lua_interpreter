@@ -5,9 +5,9 @@ macro_rules! assert_closure(
                 LuaObject::Closure($closure) => {
                     $tt
                 },
-                _ => unreachable!("assert_object!() called on non-function object"),
+                _ => unreachable!("assert_closure!() called on non-function object"),
             },
-            _ => unreachable!("assert_object!() called on non-function value"),
+            _ => unreachable!("assert_closure!() called on non-function value"),
         }
     };
     (write, $value:expr, $closure:ident, $tt:stmt) => {
@@ -16,22 +16,13 @@ macro_rules! assert_closure(
                 LuaObject::Closure($closure) => {
                     $tt
                 },
-                _ => unreachable!("assert_object!() called on non-function object"),
+                _ => unreachable!("assert_closure!() called on non-function object"),
             },
-            _ => unreachable!("assert_object!() called on non-function value"),
+            _ => unreachable!("assert_closure!() called on non-function value"),
         }
     };
     ($value:expr, $closure:ident, $tt:stmt) => {
         assert_closure!(read, $value, $closure,  $tt)
-    }
-);
-
-macro_rules! assert_function_const(
-    ($constant:expr) => {
-        match $constant {
-            LuaConst::Function(f) => f,
-            _ => unreachable!("assert_function_const!() called on non-function constant"),
-        }
     }
 );
 
@@ -424,7 +415,7 @@ macro_rules! require_userdata_type {
 }
 
 pub(crate) use {
-    assert_closure, assert_function_const, assert_string, assert_table, assert_table_object,
-    get_number, get_string, require_closure, require_number, require_string, require_table,
-    require_userdata, require_userdata_type,
+    assert_closure, assert_string, assert_table, assert_table_object, get_number, get_string,
+    require_closure, require_number, require_string, require_table, require_userdata,
+    require_userdata_type,
 };

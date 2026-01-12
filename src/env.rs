@@ -1,9 +1,12 @@
+use std::sync::{Arc, RwLock};
+
 use crate::{
+    macros::assert_table,
     stdlib,
-    value::{LuaObject, LuaTable},
+    value::{LuaObject, LuaTable, LuaValue},
 };
 
-pub fn create_global_env() -> LuaTable {
+pub fn create_global_env() -> LuaValue {
     let mut env = LuaTable::new();
 
     // Global functions
@@ -109,5 +112,17 @@ pub fn create_global_env() -> LuaTable {
     env.insert("table".into(), stdlib::table::TABLE.clone());
     env.insert("utf8".into(), stdlib::utf8::UTF8.clone());
 
-    env
+    let mut metatable = LuaTable::new();
+    metatable.insert("__debug_repr".into(), "<global object _G>".into());
+    env.set_metatable(Some(LuaValue::Object(Arc::new(RwLock::new(
+        LuaObject::Table(metatable),
+    )))));
+
+    let object = LuaValue::Object(Arc::new(RwLock::new(LuaObject::Table(env))));
+    let g = object.clone();
+    assert_table!(write, &object, t, {
+        t.insert("_G".into(), g);
+    });
+
+    object
 }

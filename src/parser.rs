@@ -1,30 +1,29 @@
-use std::path::Path;
-
 use crate::ast::*;
 use crate::error::{Context, LuaError, lua_error};
 use crate::lexer::Lexer;
 use crate::token::{Span, Token, TokenKind};
+use crate::value::LuaString;
 use miette::LabeledSpan;
 
-pub struct Parser<'path, 'source> {
-    pub filename: Option<&'path Path>,
+pub struct Parser<'name, 'source> {
+    pub chunk_name: &'name [u8],
     source: &'source [u8],
-    lexer: Lexer<'path, 'source>,
+    lexer: Lexer<'name, 'source>,
 }
 
-impl<'path, 'source> Parser<'path, 'source> {
-    pub fn new(filename: Option<&'path Path>, source: &'source [u8]) -> Self {
+impl<'name, 'source> Parser<'name, 'source> {
+    pub fn new(chunk_name: &'name [u8], source: &'source [u8]) -> Self {
         Self {
-            filename,
+            chunk_name,
             source,
-            lexer: Lexer::new(filename, source),
+            lexer: Lexer::new(chunk_name, source),
         }
     }
 
     pub fn parse(&mut self) -> crate::Result<TokenTree<Block>> {
         let result = self
             // NOTE: Don't start a new scope right away at the top-level
-            .parse_block_inner(0, false)
+            .parse_block_inner(0, true)
             .map_err(|r| self.with_source_code(r))?;
 
         // Ensure we've consumed all tokens
@@ -42,14 +41,13 @@ impl<'path, 'source> Parser<'path, 'source> {
     }
 
     fn with_source_code(&self, report: LuaError) -> LuaError {
-        if let Some(filename) = self.filename {
-            report.with_source_code(
-                miette::NamedSource::new(filename.to_string_lossy(), self.source.to_vec())
-                    .with_language("lua"),
+        report.with_source_code(
+            miette::NamedSource::new(
+                String::from_utf8_lossy(self.chunk_name),
+                self.source.to_vec(),
             )
-        } else {
-            report.with_source_code(self.source.to_vec())
-        }
+            .with_language("lua"),
+        )
     }
 
     fn parse_block(
@@ -796,7 +794,7 @@ impl<'path, 'source> Parser<'path, 'source> {
                 kind: TokenKind::Identifier(ident),
                 span,
             }) => {
-                let name = Name(ident.to_vec());
+                let name = Name(ident.into());
                 TokenTree::new(
                     PrefixExpression::Variable(TokenTree::new(
                         Variable::Name(TokenTree::new(name, span)),
@@ -1454,15 +1452,15 @@ impl<'path, 'source> Parser<'path, 'source> {
     fn parse_function_body(
         &mut self,
         start_position: usize,
-        method_name: Option<Vec<u8>>,
-        name: Option<Vec<u8>>,
+        method_name: Option<LuaString>,
+        name: Option<LuaString>,
     ) -> crate::Result<TokenTree<FunctionDef>> {
         let open_paren = self.lexer.expect(|k| k == &TokenKind::OpenParen, "(")?;
 
         let mut parameters = Vec::new();
         if method_name.is_some() {
             parameters.push(TokenTree::new(
-                Name(b"self".to_vec()),
+                Name(b"self".into()),
                 Span::new(open_paren.span.end, open_paren.span.end),
             ));
         }
@@ -1545,7 +1543,7 @@ impl<'path, 'source> Parser<'path, 'source> {
             _ => unreachable!(),
         };
 
-        Ok(TokenTree::new(Name(name.to_vec()), token.span))
+        Ok(TokenTree::new(Name(name.into()), token.span))
     }
 }
 

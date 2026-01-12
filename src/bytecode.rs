@@ -1,4 +1,4 @@
-use crate::compiler::{ExpressionResultMode, Upvalue};
+use crate::compiler::ExpressionResultMode;
 use crate::error::RuntimeError;
 use crate::instruction::Instruction;
 use crate::vm::{ConstIndex, JumpAddr};
@@ -14,8 +14,7 @@ pub(crate) enum Bytecode {
     /// Load a closure (function) into a register, and specify its upvalues.
     LoadClosure {
         register: u8,
-        const_index: ConstIndex,
-        upvalues: Vec<Upvalue>,
+        chunk_index: ConstIndex,
     },
     /// Load `nil` into a range of registers.
     LoadNil {
@@ -133,16 +132,6 @@ pub(crate) enum Bytecode {
     },
 
     // Variables
-    /// Set a global variable from a register, using the name as specified in the constants table.
-    SetGlobal {
-        src_register: u8,
-        name_index: ConstIndex,
-    },
-    /// Get a global variable into a register, using the name as specified in the constants table.
-    GetGlobal {
-        dest_register: u8,
-        name_index: ConstIndex,
-    },
     /// Move/copy a value from one register to another.
     Mov {
         dest_register: u8,
@@ -307,15 +296,9 @@ impl Bytecode {
             }
             Bytecode::LoadClosure {
                 register,
-                const_index,
-                upvalues,
+                chunk_index,
             } => {
-                let mut b = bytes!(LoadClosure, register, bytes = const_index);
-                for u in upvalues {
-                    b.push(u.is_local as u8);
-                    b.push(u.index);
-                }
-                b
+                bytes!(LoadClosure, register, bytes = chunk_index)
             }
             Bytecode::LoadNil {
                 from_register,
@@ -476,18 +459,6 @@ impl Bytecode {
             }
 
             // Variables
-            Self::SetGlobal {
-                src_register,
-                name_index,
-            } => {
-                bytes!(SetGlobal, src_register, bytes = name_index)
-            }
-            Self::GetGlobal {
-                dest_register,
-                name_index,
-            } => {
-                bytes!(GetGlobal, dest_register, bytes = name_index)
-            }
             Self::Mov {
                 dest_register,
                 src_register,

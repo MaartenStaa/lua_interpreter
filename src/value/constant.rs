@@ -1,23 +1,13 @@
-use super::{LuaNumber, LuaTable};
+use crate::value::LuaString;
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct LuaFunctionDefinition {
-    pub name: Option<Vec<u8>>,
-    pub chunk: usize,
-    pub ip: u16,
-    pub upvalues: usize,
-    pub num_params: u8,
-    pub has_varargs: bool,
-    pub max_registers: u8,
-}
+use super::{LuaNumber, LuaTable};
 
 #[derive(Debug, Clone)]
 pub enum LuaConst {
     Nil,
     Boolean(bool),
     Number(LuaNumber),
-    String(Vec<u8>),
-    Function(LuaFunctionDefinition),
+    String(LuaString),
     Table(LuaTable),
 }
 
@@ -34,7 +24,6 @@ impl PartialEq for LuaConst {
                 (LuaNumber::Float(_), LuaNumber::Integer(_)) => false,
             },
             (LuaConst::String(a), LuaConst::String(b)) => a == b,
-            (LuaConst::Function(a), LuaConst::Function(b)) => a == b,
             (LuaConst::Table(a), LuaConst::Table(b)) => a == b,
             _ => false,
         }

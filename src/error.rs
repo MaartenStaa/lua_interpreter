@@ -39,7 +39,7 @@ pub struct LuaError {
     pub source_code: Option<Box<LuaSourceCode>>,
     pub labels: Option<Vec<LabeledSpan>>,
     pub source: Option<Box<LuaError>>,
-    pub chunk: Option<usize>,
+    pub chunk: Option<ConstIndex>,
 }
 
 impl Debug for LuaError {
@@ -216,3 +216,5 @@ macro_rules! lua_error {
 }
 
 pub(crate) use lua_error;
+
+use crate::vm::ConstIndex;

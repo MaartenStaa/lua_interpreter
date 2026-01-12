@@ -1,13 +1,14 @@
 use std::{
     borrow::Cow,
+    os::unix::ffi::OsStrExt,
     path::{Path, PathBuf},
-    sync::{Arc, RwLock},
+    sync::Arc,
 };
 
 use clap::Parser;
 use lua_interpreter::{
     compiler::Compiler, env, lexer::Lexer, optimizer::optimize as optimize_ast, parser,
-    token::TokenKind, value::LuaObject, vm::VM,
+    token::TokenKind, value::LuaString, vm::VM,
 };
 use miette::{LabeledSpan, NamedSource};
 
@@ -48,15 +49,19 @@ fn main() {
         std::process::exit(1);
     };
     let source = std::fs::read(&filename).expect("failed to read source code file");
+    let chunk_name: LuaString = filename
+        .file_name()
+        .map(|n| n.as_bytes().into())
+        .unwrap_or_else(|| b"<file>".into());
 
     if debug_lexer {
-        let lexer = Lexer::new(Some(&filename), &source);
+        let lexer = Lexer::new(&chunk_name, &source);
 
         run_debug_lexer(lexer, &filename, &source);
         return;
     }
 
-    let mut parser = parser::Parser::new(Some(&filename), &source);
+    let mut parser = parser::Parser::new(&chunk_name, &source);
     if debug_parser {
         run_debug_parser(parser);
         return;
@@ -75,29 +80,30 @@ fn main() {
         optimize_ast(ast)
     };
 
-    let chunk_name = filename
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| "<file>".to_string());
-
-    let global_env = Arc::new(RwLock::new(LuaObject::Table(env::create_global_env())));
-
-    let mut vm = VM::new(Arc::clone(&global_env), print_bytecode);
-    if let Err(e) = Compiler::new(
+    let mut vm = VM::new(env::create_global_env(), print_bytecode);
+    let chunk = match Compiler::new(
         &mut vm,
-        Some(global_env),
-        Some(filename),
         chunk_name.clone(),
-        Cow::Borrowed(&source),
+        Some(filename),
+        None,
+        Arc::new(Cow::Borrowed(&source)),
+        vec![],
+        true,
     )
-    .compile(Some(ast))
+    .compile_chunk(Some(ast))
     {
-        let e = e.with_source_code(NamedSource::new(chunk_name, source));
-        eprintln!("compilation failed: {e:?}");
-        std::process::exit(1);
-    }
+        Ok(c) => c,
+        Err(e) => {
+            let e = e.with_source_code(NamedSource::new(
+                String::from_utf8_lossy(&chunk_name),
+                source,
+            ));
+            eprintln!("compilation failed: {e:?}");
+            std::process::exit(1);
+        }
+    };
 
-    vm.run();
+    vm.run(chunk);
 }
 
 fn run_debug_lexer(lexer: Lexer, filename: &Path, source: &[u8]) {

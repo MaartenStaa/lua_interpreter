@@ -21,18 +21,7 @@ impl PartialEq for LuaObject {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (LuaObject::Table(a), LuaObject::Table(b)) => std::ptr::eq(a, b),
-            (
-                LuaObject::Closure(LuaClosure {
-                    chunk: chunk_a,
-                    ip: ip_a,
-                    ..
-                }),
-                LuaObject::Closure(LuaClosure {
-                    chunk: chunk_b,
-                    ip: ip_b,
-                    ..
-                }),
-            ) => chunk_a == chunk_b && ip_a == ip_b,
+            (LuaObject::Closure(a), LuaObject::Closure(b)) => std::ptr::eq(a, b),
             (LuaObject::NativeFunction(_, a), LuaObject::NativeFunction(_, b)) => {
                 std::ptr::fn_addr_eq(*a, *b)
             }
@@ -68,13 +57,12 @@ impl Display for LuaObject {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             LuaObject::Table(_) => write!(f, "table: 0x{:x}", self as *const _ as usize),
-            LuaObject::Closure(LuaClosure { name, .. }) => {
-                write!(f, "function: 0x{:x}", self as *const _ as usize)?;
-                if let Some(name) = name {
-                    write!(f, " ({name})", name = String::from_utf8_lossy(name))
-                } else {
-                    Ok(())
-                }
+            LuaObject::Closure(LuaClosure { chunk, .. }) => {
+                write!(
+                    f,
+                    "function: 0x{:x} ({chunk:04})",
+                    self as *const _ as usize
+                )
             }
             LuaObject::NativeFunction(name, func) => {
                 write!(f, "function: 0x{:x} ({name})", func as *const _ as usize)
