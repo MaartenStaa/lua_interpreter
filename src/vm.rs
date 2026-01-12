@@ -13,7 +13,7 @@ use crate::{
     instruction::Instruction,
     macros::{assert_closure, assert_table},
     value::{
-        LuaClosure, LuaConst, LuaObject, LuaString, LuaValue, UpValue,
+        LuaClosure, LuaConst, LuaObject, LuaValue, UpValue,
         callable::{Callable, Method},
         metatables::{self, INDEX_KEY, NEWINDEX_KEY},
     },
@@ -42,7 +42,6 @@ pub struct VM<'source> {
 
 #[derive(Debug)]
 struct CallFrame {
-    name: LuaString,
     chunk: ConstIndex,
     ip: usize,
     border_frame: bool,
@@ -60,7 +59,6 @@ struct CallFrame {
 impl CallFrame {
     const fn default() -> Self {
         Self {
-            name: LuaString::new(),
             chunk: 0,
             ip: 0,
             border_frame: false,
@@ -177,7 +175,6 @@ impl<'source> VM<'source> {
     #[allow(clippy::too_many_arguments)]
     fn push_call_frame(
         &mut self,
-        name: LuaString,
         chunk: ConstIndex,
         border_frame: bool,
         frame_pointer: usize,
@@ -194,7 +191,6 @@ impl<'source> VM<'source> {
         }
 
         // Reuse the existing object to keep the `upvalues` vec
-        self.call_stack[self.call_stack_index].name = name;
         self.call_stack[self.call_stack_index].chunk = chunk;
         self.call_stack[self.call_stack_index].ip = 0;
         self.call_stack[self.call_stack_index].border_frame = border_frame;
@@ -288,8 +284,9 @@ impl<'source> VM<'source> {
                 .iter()
                 .enumerate()
             {
+                let chunk = &self.chunks[frame.chunk as usize];
                 let mut frame_err =
-                    LuaError::new(format!("#{i} {}", String::from_utf8_lossy(&frame.name),));
+                    LuaError::new(format!("#{i} {}", String::from_utf8_lossy(&chunk.name)));
 
                 // The initial error should already have a span attached, beyond
                 // that we want to ensure that we attach labels for every frame
@@ -301,12 +298,11 @@ impl<'source> VM<'source> {
                 //   location.
                 // - We skip the top item in the call stack (see above), as there's no source for
                 //   that "call".
-                if i < self.call_stack_index - 1 {
-                    let chunk = &self.chunks[frame.chunk as usize];
-                    if let Some(span) = chunk.instruction_spans.get(&frame.ip) {
-                        let source = chunk.named_source();
-                        frame_err = frame_err.with_source_code(source).with_labels(*span);
-                    }
+                if i < self.call_stack_index - 1
+                    && let Some(span) = chunk.instruction_spans.get(&frame.ip)
+                {
+                    let source = chunk.named_source();
+                    frame_err = frame_err.with_source_code(source).with_labels(*span);
                 }
 
                 eprintln!("{frame_err:?}");
@@ -327,7 +323,6 @@ impl<'source> VM<'source> {
 
     pub fn run_chunk(&mut self, chunk_index: ConstIndex) -> crate::Result<Vec<LuaValue>> {
         self.push_call_frame(
-            self.chunks[chunk_index as usize].name.clone(),
             chunk_index,
             true,
             self.stack.len(),
@@ -369,7 +364,6 @@ impl<'source> VM<'source> {
 
         let chunk = &self.chunks[value.chunk as usize];
         self.push_call_frame(
-            chunk.name.clone(),
             value.chunk,
             true,
             frame_pointer,
@@ -1031,7 +1025,6 @@ impl<'source> VM<'source> {
                                             .frame_pointer;
                                         let chunk = &self.chunks[closure.chunk as usize];
                                         self.push_call_frame(
-                                            chunk.name.clone(),
                                             closure.chunk,
                                             false,
                                             parent_frame_pointer + table_r as usize,
@@ -1148,7 +1141,6 @@ impl<'source> VM<'source> {
                                 self.call_stack[self.call_stack_index - 1].frame_pointer;
                             let chunk = &self.chunks[closure.chunk as usize];
                             self.push_call_frame(
-                                chunk.name.clone(),
                                 closure.chunk,
                                 false,
                                 parent_frame_pointer + params_r as usize,
