@@ -1,5 +1,4 @@
 -- relation between _ENV and _G
-print(_ENV, _G)
 assert(_ENV == _G, "_ENV and _G should be the same table")
 assert(_ENV._G == _G, "_G is accessible through _ENV")
 assert(_G._ENV == nil, "_ENV is not accessible through _G")
@@ -36,4 +35,11 @@ do
 	assert(d == nil, "loaded chunk should not return anything")
 	assert(D == 1234, "D should be accessible via _G")
 	assert(D == _ENV.D, "D should be accessible via _ENV")
+end
+
+-- custom env affects access to _G
+do
+	local f = assert(load("return _G", nil, "t", {}))
+	local g = f()
+	assert(g == nil, "_G should not be accessible via the custom environment")
 end
