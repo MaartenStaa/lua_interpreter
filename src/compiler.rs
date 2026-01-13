@@ -1409,7 +1409,7 @@ impl<'vm, 'source> Compiler<'vm, 'source> {
         let (function_register, self_arg_n) =
             if let Some(method_name) = function_call.node.method_name {
                 let func_r = self.take_register();
-                let table_r = self
+                let target_r = self
                     .compile_prefix_expression(
                         *function_call.node.function,
                         ExpressionMode::Copy,
@@ -1422,13 +1422,11 @@ impl<'vm, 'source> Compiler<'vm, 'source> {
                 self.push_bytecode(
                     Bytecode::GetTableConstKey {
                         dest_register: func_r,
-                        table_register: table_r,
+                        table_register: target_r,
                         key_const_index: method_name_const_index,
                     },
                     Some(Span::new(function_call.span.start, method_name.span.end)),
                 );
-
-                self.release_registers_from(table_r);
 
                 // Account for one extra parameter (the `self` argument)
                 (func_r, 1)
