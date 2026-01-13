@@ -154,6 +154,17 @@ impl<'source> VM<'source> {
     }
 
     #[inline]
+    fn get_upvalue(&self, index: impl Into<usize>) -> LuaValue {
+        let upval_index = index.into();
+        let frame = &self.call_stack[self.call_stack_index - 1];
+        let upvalues = frame.upvalues.as_ref().expect("frame has no upvalues");
+        let upvalue = upvalues
+            .get(&upval_index)
+            .unwrap_or_else(|| panic!("upvalue {upval_index} not found"));
+        upvalue.read().unwrap().clone()
+    }
+
+    #[inline]
     fn get_ref(&self, register: impl Into<usize>) -> Cow<'_, LuaValue> {
         let frame_pointer = self.call_stack[self.call_stack_index - 1].frame_pointer;
         match &self.stack[frame_pointer + register.into()] {
@@ -238,6 +249,14 @@ impl<'source> VM<'source> {
         // takes 1 argument, but there are 5 values on the stack from
         // the parent call frame, we need to fill anything beyond the
         // first register with `Nil`.
+    }
+
+    /// Create extra space on the stack for the given values, returning the register where the
+    /// first value is located.
+    fn extend_stack(&mut self, values: impl IntoIterator<Item = LuaValue>) -> u8 {
+        let register = self.stack.len() as u8;
+        self.stack.extend(values);
+        register
     }
 
     fn pop_call_frame(&mut self) -> PoppedCallFrame {
@@ -477,11 +496,14 @@ impl<'source> VM<'source> {
                 };
             }
             macro_rules! const_index {
-                () => {{
+                ($offset:expr) => {{
                     let bytes = &self.chunks[chunk_index as usize].instructions
-                        [ip + 2..ip + 2 + size_of::<ConstIndex>()];
+                        [ip + $offset..ip + $offset + size_of::<ConstIndex>()];
                     ConstIndex::from_be_bytes(bytes.try_into().unwrap())
                 }};
+                () => {
+                    const_index!(2)
+                };
             }
             macro_rules! jump_addr {
                 ($offset:expr) => {{
@@ -869,15 +891,7 @@ impl<'source> VM<'source> {
                 Instruction::GetUpval => {
                     let register = register!();
                     let upval_index = instr_param!(2);
-                    let value = self.call_stack[self.call_stack_index - 1]
-                        .upvalues
-                        .as_ref()
-                        .unwrap()
-                        .get(&(upval_index as usize))
-                        .unwrap_or_else(|| panic!("upvalue {upval_index} not found"))
-                        .read()
-                        .unwrap()
-                        .clone();
+                    let value = self.get_upvalue(upval_index);
                     self.set(register, value);
 
                     3
@@ -927,14 +941,55 @@ impl<'source> VM<'source> {
                     self.set(register, table.into());
                     2
                 }
-                Instruction::SetTable => {
-                    let table_r = register!(1);
-                    let key_r = register!(2);
-                    let value_r = register!(3);
+                instr @ Instruction::SetTable
+                | instr @ Instruction::SetTableConstKey
+                | instr @ Instruction::SetTableUpval
+                | instr @ Instruction::SetTableUpvalConstKey => {
+                    let (table, key, value_r, increment) = match instr {
+                        Instruction::SetTable => {
+                            let table_r = register!(1);
+                            let key_r = register!(2);
+                            let value_r = register!(3);
 
-                    let table = self.get(table_r);
+                            let table = self.get(table_r);
+                            let key = self.get(key_r);
+
+                            (table, key, value_r, 4)
+                        }
+                        Instruction::SetTableConstKey => {
+                            let table_r = register!(1);
+                            let const_index = const_index!(2);
+                            let key = self.consts[const_index as usize].clone().into();
+                            let value_r = register!(2 + size_of::<ConstIndex>());
+
+                            let table = self.get(table_r);
+
+                            (table, key, value_r, 3 + size_of::<ConstIndex>())
+                        }
+                        Instruction::SetTableUpval => {
+                            let upval_index = instr_param!(1);
+                            let key_r = register!(2);
+                            let value_r = register!(3);
+
+                            let table = self.get_upvalue(upval_index);
+                            let key = self.get(key_r);
+
+                            (table, key, value_r, 4)
+                        }
+                        Instruction::SetTableUpvalConstKey => {
+                            let upval_index = instr_param!(1);
+                            let const_index = const_index!(2);
+                            let key = self.consts[const_index as usize].clone().into();
+                            let value_r = register!(2 + size_of::<ConstIndex>());
+
+                            let table = self.get_upvalue(upval_index);
+
+                            (table, key, value_r, 3 + size_of::<ConstIndex>())
+                        }
+                        _ => unreachable!(),
+                    };
+
                     let value = self.get(value_r);
-                    let key = self.get(key_r);
 
                     let mut target = table.clone();
                     let mut handled = false;
@@ -988,15 +1043,42 @@ impl<'source> VM<'source> {
                         return Err(self.err("attempt to index a non-table"));
                     }
 
-                    4
+                    increment
                 }
-                Instruction::GetTable => {
+                instr @ Instruction::GetTable
+                | instr @ Instruction::GetTableConstKey
+                | instr @ Instruction::GetTableUpval
+                | instr @ Instruction::GetTableUpvalConstKey => {
                     let dest_r = register!(1);
-                    let table_r = register!(2);
-                    let key_r = register!(3);
 
-                    let table = self.get(table_r);
-                    let key = self.get(key_r);
+                    let (table, key, increment) = match instr {
+                        Instruction::GetTable => {
+                            let table_r = register!(2);
+                            let key_r = register!(3);
+                            (self.get(table_r), self.get(key_r), 4)
+                        }
+                        Instruction::GetTableConstKey => {
+                            let table_r = register!(2);
+                            let const_index = const_index!(3);
+                            let key = self.consts[const_index as usize].clone().into();
+                            (self.get(table_r), key, 3 + size_of::<ConstIndex>())
+                        }
+                        Instruction::GetTableUpval => {
+                            let upval_index = instr_param!(2);
+                            let key_r = register!(3);
+                            let table = self.get_upvalue(upval_index);
+                            let key = self.get(key_r);
+                            (table, key, 4)
+                        }
+                        Instruction::GetTableUpvalConstKey => {
+                            let upval_index = instr_param!(2);
+                            let const_index = const_index!(3);
+                            let table = self.get_upvalue(upval_index);
+                            let key = self.consts[const_index as usize].clone().into();
+                            (table, key, 3 + size_of::<ConstIndex>())
+                        }
+                        _ => unreachable!(),
+                    };
 
                     let mut handled = false;
                     let mut valid_object = false;
@@ -1020,6 +1102,18 @@ impl<'source> VM<'source> {
                             if let Ok(__index) = __index_callable {
                                 match __index.method {
                                     Method::Closure(closure) => {
+                                        let table_r = match instr {
+                                            Instruction::GetTable => register!(2),
+                                            Instruction::GetTableConstKey
+                                            | Instruction::GetTableUpval
+                                            | Instruction::GetTableUpvalConstKey => {
+                                                // In these cases, the table and/or key are not yet
+                                                // loaded into registers, which it needs to be for
+                                                // the __index call.
+                                                self.extend_stack([table, key])
+                                            }
+                                            _ => unreachable!(),
+                                        };
                                         let parent_frame_pointer = self.call_stack
                                             [self.call_stack_index - 1]
                                             .frame_pointer;
@@ -1029,7 +1123,7 @@ impl<'source> VM<'source> {
                                             false,
                                             parent_frame_pointer + table_r as usize,
                                             chunk.max_registers,
-                                            ip + 4,
+                                            ip + increment,
                                             dest_r,
                                             Some(closure.upvalues.clone()),
                                             chunk.num_params,
@@ -1073,7 +1167,7 @@ impl<'source> VM<'source> {
                         }
                     }
 
-                    4
+                    increment
                 }
                 instr @ Instruction::AppendToTable | instr @ Instruction::AppendToTableM => {
                     // Append each value to the table at the stack right before the values

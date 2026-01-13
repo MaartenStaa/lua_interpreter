@@ -1,4 +1,4 @@
-use crate::value::LuaString;
+use crate::{ast::Literal, value::LuaString};
 
 use super::{LuaNumber, LuaTable};
 
@@ -26,6 +26,17 @@ impl PartialEq for LuaConst {
             (LuaConst::String(a), LuaConst::String(b)) => a == b,
             (LuaConst::Table(a), LuaConst::Table(b)) => a == b,
             _ => false,
+        }
+    }
+}
+
+impl From<Literal> for LuaConst {
+    fn from(literal: Literal) -> Self {
+        match literal {
+            Literal::Nil => LuaConst::Nil,
+            Literal::Boolean(b) => LuaConst::Boolean(b),
+            Literal::Number(n) => LuaConst::Number(n.into()),
+            Literal::String(s) => LuaConst::String(s),
         }
     }
 }

@@ -47,7 +47,13 @@ pub enum Instruction {
     // Table
     NewTable,
     SetTable,
+    SetTableConstKey,
+    SetTableUpval,
+    SetTableUpvalConstKey,
     GetTable,
+    GetTableConstKey,
+    GetTableUpval,
+    GetTableUpvalConstKey,
     AppendToTable,
     AppendToTableM,
 

@@ -503,65 +503,174 @@ impl<'vm, 'source> Compiler<'vm, 'source> {
                             self.write_variable(name, current_register + index as u8)?;
                         }
                         Variable::Indexed(target, target_index) => {
-                            // `SetTable` expects a stack head of:
-                            // [table, index, value]
-                            // We need to calculate the value first above, as it e.g. refer to the
-                            // old value of `table[index]`. So we push the index, and then the
-                            // table:
-                            // [value, index, table]
-                            // And then we swap the value and the table:
-                            // SWAP 2
-                            // [value, table, index]
-                            let target_r = self
-                                .compile_prefix_expression(
-                                    *target,
-                                    ExpressionMode::Ref,
-                                    ExpressionResultMode::Single,
-                                )?
-                                .get_register();
-                            let index_r = self
-                                .compile_expression(
-                                    *target_index,
-                                    ExpressionMode::Ref,
-                                    ExpressionResultMode::Single,
-                                )?
-                                .get_register();
-                            self.push_bytecode(
-                                Bytecode::SetTable {
-                                    table_register: target_r,
-                                    key_register: index_r,
-                                    value_register: current_register + index as u8,
-                                },
-                                Some(span),
-                            );
+                            match (*target, *target_index) {
+                                (
+                                    TokenTree {
+                                        node:
+                                            PrefixExpression::Variable(TokenTree {
+                                                node: Variable::Name(name),
+                                                ..
+                                            }),
+                                        ..
+                                    },
+                                    TokenTree {
+                                        node: Expression::Literal(literal),
+                                        ..
+                                    },
+                                ) => {
+                                    let key_const_index =
+                                        self.get_const_index(literal.node.clone().into());
+
+                                    match self.frame.resolve_name(&name.node.0) {
+                                        ResolvedName::Upvalue {
+                                            index: upval_index, ..
+                                        } => {
+                                            self.push_bytecode(
+                                                Bytecode::SetTableUpvalConstKey {
+                                                    table_upval_index: upval_index,
+                                                    key_const_index,
+                                                    value_register: current_register + index as u8,
+                                                },
+                                                Some(span),
+                                            );
+                                        }
+                                        _ => {
+                                            let target_r =
+                                                self.read_variable(name, VariableMode::Ref)?;
+                                            self.push_bytecode(
+                                                Bytecode::SetTableConstKey {
+                                                    table_register: target_r,
+                                                    key_const_index,
+                                                    value_register: current_register + index as u8,
+                                                },
+                                                Some(span),
+                                            );
+                                        }
+                                    }
+                                }
+                                (
+                                    TokenTree {
+                                        node:
+                                            PrefixExpression::Variable(TokenTree {
+                                                node: Variable::Name(name),
+                                                ..
+                                            }),
+                                        ..
+                                    },
+                                    target_index,
+                                ) if matches!(
+                                    self.frame.resolve_name(&name.node.0),
+                                    ResolvedName::Upvalue { .. }
+                                ) =>
+                                {
+                                    // TODO: Can we fix the double-lookup here? We can't capture
+                                    // the upval_index from the match guard, it seems.
+                                    let ResolvedName::Upvalue {
+                                        index: upval_index, ..
+                                    } = self.frame.resolve_name(&name.node.0)
+                                    else {
+                                        unreachable!()
+                                    };
+                                    let index_r = self
+                                        .compile_expression(
+                                            target_index,
+                                            ExpressionMode::Ref,
+                                            ExpressionResultMode::Single,
+                                        )?
+                                        .get_register();
+                                    self.push_bytecode(
+                                        Bytecode::SetTableUpval {
+                                            table_upval_index: upval_index,
+                                            key_register: index_r,
+                                            value_register: current_register + index as u8,
+                                        },
+                                        Some(span),
+                                    );
+                                }
+                                (target, target_index) => {
+                                    let target_r = self
+                                        .compile_prefix_expression(
+                                            target,
+                                            ExpressionMode::Ref,
+                                            ExpressionResultMode::Single,
+                                        )?
+                                        .get_register();
+                                    let index_r = self
+                                        .compile_expression(
+                                            target_index,
+                                            ExpressionMode::Ref,
+                                            ExpressionResultMode::Single,
+                                        )?
+                                        .get_register();
+                                    self.push_bytecode(
+                                        Bytecode::SetTable {
+                                            table_register: target_r,
+                                            key_register: index_r,
+                                            value_register: current_register + index as u8,
+                                        },
+                                        Some(span),
+                                    );
+                                }
+                            }
                         }
                         Variable::Field(target, name) => {
                             // Same story as above, but with a string key
-                            let target_r = self
-                                .compile_prefix_expression(
-                                    *target,
-                                    ExpressionMode::Ref,
-                                    ExpressionResultMode::Single,
-                                )?
-                                .get_register();
                             let const_index = self.get_const_index(LuaConst::String(name.node.0));
-                            let const_r = self.take_register();
-                            self.push_bytecode(
-                                Bytecode::LoadConst {
-                                    register: const_r,
-                                    const_index,
-                                },
-                                Some(span),
-                            );
 
-                            self.push_bytecode(
-                                Bytecode::SetTable {
-                                    table_register: target_r,
-                                    key_register: const_r,
-                                    value_register: current_register + index as u8,
+                            match *target {
+                                TokenTree {
+                                    node:
+                                        PrefixExpression::Variable(TokenTree {
+                                            node: Variable::Name(name),
+                                            ..
+                                        }),
+                                    ..
+                                } => match self.frame.resolve_name(&name.node.0) {
+                                    ResolvedName::Upvalue {
+                                        index: upval_index, ..
+                                    } => {
+                                        self.push_bytecode(
+                                            Bytecode::SetTableUpvalConstKey {
+                                                table_upval_index: upval_index,
+                                                key_const_index: const_index,
+                                                value_register: current_register + index as u8,
+                                            },
+                                            Some(span),
+                                        );
+                                    }
+                                    _ => {
+                                        let target_r =
+                                            self.read_variable(name, VariableMode::Ref)?;
+
+                                        self.push_bytecode(
+                                            Bytecode::SetTableConstKey {
+                                                table_register: target_r,
+                                                key_const_index: const_index,
+                                                value_register: current_register + index as u8,
+                                            },
+                                            Some(span),
+                                        );
+                                    }
                                 },
-                                Some(span),
-                            );
+                                target => {
+                                    let target_r = self
+                                        .compile_prefix_expression(
+                                            target,
+                                            ExpressionMode::Ref,
+                                            ExpressionResultMode::Single,
+                                        )?
+                                        .get_register();
+
+                                    self.push_bytecode(
+                                        Bytecode::SetTableConstKey {
+                                            table_register: target_r,
+                                            key_const_index: const_index,
+                                            value_register: current_register + index as u8,
+                                        },
+                                        Some(span),
+                                    );
+                                }
+                            }
                         }
                     }
                 }
@@ -1310,25 +1419,16 @@ impl<'vm, 'source> Compiler<'vm, 'source> {
 
                 let method_name_const_index =
                     self.get_const_index(LuaConst::String(method_name.node.0));
-                let method_name_r = self.take_register();
                 self.push_bytecode(
-                    Bytecode::LoadConst {
-                        register: method_name_r,
-                        const_index: method_name_const_index,
-                    },
-                    Some(function_call.span),
-                );
-
-                self.push_bytecode(
-                    Bytecode::GetTable {
+                    Bytecode::GetTableConstKey {
                         dest_register: func_r,
                         table_register: table_r,
-                        key_register: method_name_r,
+                        key_const_index: method_name_const_index,
                     },
                     Some(Span::new(function_call.span.start, method_name.span.end)),
                 );
 
-                self.release_registers_from(method_name_r);
+                self.release_registers_from(table_r);
 
                 // Account for one extra parameter (the `self` argument)
                 (func_r, 1)
@@ -1664,32 +1764,118 @@ impl<'vm, 'source> Compiler<'vm, 'source> {
                         },
                     )?,
                     Variable::Indexed(prefix, index) => {
-                        let dest_r = self.take_register();
-                        let table_r = self
-                            .compile_prefix_expression(
-                                *prefix,
-                                ExpressionMode::Ref,
-                                ExpressionResultMode::Single,
-                            )?
-                            .get_register();
-                        let index_r = self
-                            .compile_expression(
-                                *index,
-                                ExpressionMode::Ref,
-                                ExpressionResultMode::Single,
-                            )?
-                            .get_register();
-                        self.push_bytecode(
-                            Bytecode::GetTable {
-                                dest_register: dest_r,
-                                table_register: table_r,
-                                key_register: index_r,
-                            },
-                            Some(prefix_expression.span),
-                        );
-                        self.release_registers_from(dest_r + 1);
+                        if let PrefixExpression::Variable(TokenTree {
+                            node: Variable::Name(name),
+                            ..
+                        }) = &prefix.node
+                            && let ResolvedName::Upvalue {
+                                index: upval_index, ..
+                            } = self.frame.resolve_name(&name.node.0)
+                        {
+                            if let Expression::Literal(TokenTree {
+                                node: Literal::String(key),
+                                ..
+                            }) = index.node
+                            {
+                                let const_index = self.get_const_index(LuaConst::String(key));
+                                let index_r = self.take_register();
 
-                        dest_r
+                                self.push_bytecode(
+                                    Bytecode::GetTableUpvalConstKey {
+                                        dest_register: index_r,
+                                        table_upval_index: upval_index,
+                                        key_const_index: const_index,
+                                    },
+                                    Some(prefix_expression.span),
+                                );
+                                index_r
+                            } else {
+                                let index_r = self
+                                    .compile_expression(
+                                        *index,
+                                        ExpressionMode::Ref,
+                                        ExpressionResultMode::Single,
+                                    )?
+                                    .get_register();
+
+                                self.push_bytecode(
+                                    Bytecode::GetTableUpval {
+                                        dest_register: index_r,
+                                        table_upval_index: upval_index,
+                                        key_register: index_r,
+                                    },
+                                    Some(prefix_expression.span),
+                                );
+                                index_r
+                            }
+                        } else if let Expression::Literal(TokenTree {
+                            node: Literal::String(key),
+                            ..
+                        }) = index.node
+                        {
+                            let current_r = self.register_index;
+                            let table_r = self
+                                .compile_prefix_expression(
+                                    *prefix,
+                                    ExpressionMode::Ref,
+                                    ExpressionResultMode::Single,
+                                )?
+                                .get_register();
+                            let const_index = self.get_const_index(LuaConst::String(key));
+                            let dest_r = if table_r == current_r {
+                                table_r
+                            } else {
+                                self.take_register()
+                            };
+                            self.push_bytecode(
+                                Bytecode::GetTableConstKey {
+                                    dest_register: dest_r,
+                                    table_register: table_r,
+                                    key_const_index: const_index,
+                                },
+                                Some(prefix_expression.span),
+                            );
+
+                            self.release_registers_from(dest_r + 1);
+
+                            dest_r
+                        } else {
+                            let current_r = self.register_index;
+                            let table_r = self
+                                .compile_prefix_expression(
+                                    *prefix,
+                                    ExpressionMode::Ref,
+                                    ExpressionResultMode::Single,
+                                )?
+                                .get_register();
+                            let index_r = self
+                                .compile_expression(
+                                    *index,
+                                    ExpressionMode::Ref,
+                                    ExpressionResultMode::Single,
+                                )?
+                                .get_register();
+
+                            let dest_r = if table_r == current_r {
+                                table_r
+                            } else if index_r == current_r {
+                                index_r
+                            } else {
+                                self.take_register()
+                            };
+
+                            self.push_bytecode(
+                                Bytecode::GetTable {
+                                    dest_register: dest_r,
+                                    table_register: table_r,
+                                    key_register: index_r,
+                                },
+                                Some(prefix_expression.span),
+                            );
+                            self.release_registers_from(dest_r + 1);
+
+                            dest_r
+                        }
                     }
                     Variable::Field(prefix, name) => {
                         let current_r = self.register_index;
@@ -1702,24 +1888,16 @@ impl<'vm, 'source> Compiler<'vm, 'source> {
                             .get_register();
 
                         let const_index = self.get_const_index(LuaConst::String(name.node.0));
-                        let name_r = self.take_register();
-                        self.push_bytecode(
-                            Bytecode::LoadConst {
-                                register: name_r,
-                                const_index,
-                            },
-                            Some(name.span),
-                        );
                         let dest_r = if table_r == current_r {
                             table_r
                         } else {
-                            name_r
+                            self.take_register()
                         };
                         self.push_bytecode(
-                            Bytecode::GetTable {
+                            Bytecode::GetTableConstKey {
                                 dest_register: dest_r,
                                 table_register: table_r,
-                                key_register: name_r,
+                                key_const_index: const_index,
                             },
                             Some(prefix_expression.span),
                         );
@@ -2157,51 +2335,54 @@ impl<'vm, 'source> Compiler<'vm, 'source> {
             ResolvedName::None => {
                 // Unbounded variable access:
                 // "any reference to a free name (that is, a name not bound to any declaration) var is syntactically translated to _ENV.var"
-                if name.node.0 == ENV_NAME {
-                    unreachable!("the _ENV variable should always be bound to a local or upvalue");
-                }
-
-                // Resolve the name `_ENV`. Note that in the future we may want to implement a
-                // specialized `GETTABUP` opcode like Lua has, to fetch a table key from an
-                // upvalue directly, without moving the upvalue into a register.
-                let current_r = self.register_index;
-                let env_register = self.read_variable(
-                    TokenTree {
-                        node: Name(ENV_NAME.into()),
-                        span: name.span,
-                    },
-                    VariableMode::Ref,
-                )?;
-
                 let const_index = self.get_global_name_index(name.node.0.clone());
+                match self.frame.resolve_name(&ENV_NAME.into()) {
+                    ResolvedName::Local { .. } => {
+                        // Resolve the name `_ENV`.
+                        let current_r = self.register_index;
+                        let env_register = self.read_variable(
+                            TokenTree {
+                                node: Name(ENV_NAME.into()),
+                                span: name.span,
+                            },
+                            VariableMode::Ref,
+                        )?;
 
-                match mode {
-                    VariableMode::Read | VariableMode::Ref => {
                         let dest_r = if env_register == current_r {
                             env_register
                         } else {
                             self.take_register()
                         };
 
-                        let key_r = self.take_register();
-                        self.push_bytecode(
-                            Bytecode::LoadConst {
-                                register: key_r,
-                                const_index,
-                            },
-                            Some(span),
-                        );
-
                         self.release_registers_from(dest_r + 1);
 
                         (
-                            Bytecode::GetTable {
+                            Bytecode::GetTableConstKey {
                                 table_register: env_register,
                                 dest_register: dest_r,
-                                key_register: key_r,
+                                key_const_index: const_index,
                             },
                             dest_r,
                         )
+                    }
+                    ResolvedName::Upvalue {
+                        index: upval_index, ..
+                    } => {
+                        let dest_r = self.take_register();
+
+                        (
+                            Bytecode::GetTableUpvalConstKey {
+                                dest_register: dest_r,
+                                table_upval_index: upval_index,
+                                key_const_index: const_index,
+                            },
+                            dest_r,
+                        )
+                    }
+                    ResolvedName::None => {
+                        unreachable!(
+                            "the _ENV variable should always be bound to a local or upvalue"
+                        );
                     }
                 }
             }

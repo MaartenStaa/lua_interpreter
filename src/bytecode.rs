@@ -173,11 +173,47 @@ pub(crate) enum Bytecode {
         key_register: u8,
         value_register: u8,
     },
+    /// Set a key-value pair in a table, where the key is a constant.
+    SetTableConstKey {
+        table_register: u8,
+        key_const_index: ConstIndex,
+        value_register: u8,
+    },
+    /// Set a key-value pair in an upvalue table.
+    SetTableUpval {
+        table_upval_index: u8,
+        key_register: u8,
+        value_register: u8,
+    },
+    /// Set a key-value pair in an upvalue table, where the key is a constant.
+    SetTableUpvalConstKey {
+        table_upval_index: u8,
+        key_const_index: ConstIndex,
+        value_register: u8,
+    },
     /// Get a value from a table by key.
     GetTable {
         dest_register: u8,
         table_register: u8,
         key_register: u8,
+    },
+    /// Get a value from a table by a constant key
+    GetTableConstKey {
+        dest_register: u8,
+        table_register: u8,
+        key_const_index: ConstIndex,
+    },
+    /// Get a value from an upvalue table
+    GetTableUpval {
+        dest_register: u8,
+        table_upval_index: u8,
+        key_register: u8,
+    },
+    /// Get a value from an upvalue table by a constant key
+    GetTableUpvalConstKey {
+        dest_register: u8,
+        table_upval_index: u8,
+        key_const_index: ConstIndex,
     },
     /// Append values to the end of a table (array part).
     AppendToTable {
@@ -501,12 +537,84 @@ impl Bytecode {
             } => {
                 bytes!(SetTable, table_register, key_register, value_register)
             }
+            Self::SetTableConstKey {
+                table_register,
+                key_const_index,
+                value_register,
+            } => {
+                bytes!(
+                    SetTableConstKey,
+                    table_register,
+                    bytes = key_const_index,
+                    value_register
+                )
+            }
+            Self::SetTableUpval {
+                table_upval_index,
+                key_register,
+                value_register,
+            } => {
+                bytes!(
+                    SetTableUpval,
+                    table_upval_index,
+                    key_register,
+                    value_register
+                )
+            }
+            Self::SetTableUpvalConstKey {
+                table_upval_index,
+                key_const_index,
+                value_register,
+            } => {
+                bytes!(
+                    SetTableUpvalConstKey,
+                    table_upval_index,
+                    bytes = key_const_index,
+                    value_register
+                )
+            }
             Self::GetTable {
                 dest_register,
                 table_register,
                 key_register,
             } => {
                 bytes!(GetTable, dest_register, table_register, key_register)
+            }
+            Self::GetTableConstKey {
+                dest_register,
+                table_register,
+                key_const_index,
+            } => {
+                bytes!(
+                    GetTableConstKey,
+                    dest_register,
+                    table_register,
+                    bytes = key_const_index
+                )
+            }
+            Self::GetTableUpval {
+                dest_register,
+                table_upval_index,
+                key_register,
+            } => {
+                bytes!(
+                    GetTableUpval,
+                    dest_register,
+                    table_upval_index,
+                    key_register
+                )
+            }
+            Self::GetTableUpvalConstKey {
+                dest_register,
+                table_upval_index,
+                key_const_index,
+            } => {
+                bytes!(
+                    GetTableUpvalConstKey,
+                    dest_register,
+                    table_upval_index,
+                    bytes = key_const_index
+                )
             }
             Self::AppendToTable {
                 table_register,

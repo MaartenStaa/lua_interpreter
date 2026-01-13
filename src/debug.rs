@@ -310,6 +310,38 @@ pub fn print_instructions(vm: &VM, chunk: &Chunk<'_>) {
                 println!();
                 4
             }
+            Instruction::SetTableConstKey => {
+                let const_index_bytes = &instructions
+                    [instruction_pointer + 2..instruction_pointer + 2 + size_of::<ConstIndex>()];
+                let const_index = ConstIndex::from_be_bytes(const_index_bytes.try_into().unwrap());
+                instr!("SET_TABLE_CK");
+                reg!(1);
+                print_const(&consts[const_index as usize]);
+                reg!(2 + size_of::<ConstIndex>());
+                println!();
+                3 + size_of::<ConstIndex>()
+            }
+            Instruction::SetTableUpval => {
+                let upval_index = instructions[instruction_pointer + 2];
+                instr!("SET_TABLE_UP");
+                reg!(1);
+                print!("{upval_index}");
+                reg!(3);
+                println!();
+                4
+            }
+            Instruction::SetTableUpvalConstKey => {
+                let const_index_bytes = &instructions
+                    [instruction_pointer + 2..instruction_pointer + 2 + size_of::<ConstIndex>()];
+                let const_index = ConstIndex::from_be_bytes(const_index_bytes.try_into().unwrap());
+                instr!("SET_TABLE_UP_CK");
+                let upval_index = instructions[instruction_pointer + 1];
+                print!("{upval_index} ");
+                print_const(&consts[const_index as usize]);
+                reg!(2 + size_of::<ConstIndex>());
+                println!();
+                3 + size_of::<ConstIndex>()
+            }
             Instruction::GetTable => {
                 instr!("GET_TABLE");
                 reg!(1);
@@ -317,6 +349,38 @@ pub fn print_instructions(vm: &VM, chunk: &Chunk<'_>) {
                 reg!(3);
                 println!();
                 4
+            }
+            Instruction::GetTableConstKey => {
+                let const_index_bytes = &instructions
+                    [instruction_pointer + 3..instruction_pointer + 3 + size_of::<ConstIndex>()];
+                let const_index = ConstIndex::from_be_bytes(const_index_bytes.try_into().unwrap());
+                instr!("GET_TABLE_CK");
+                reg!(1);
+                reg!(2);
+                print_const(&consts[const_index as usize]);
+                println!();
+                3 + size_of::<ConstIndex>()
+            }
+            Instruction::GetTableUpval => {
+                let upval_index = instructions[instruction_pointer + 3];
+                instr!("GET_TABLE_UP");
+                reg!(1);
+                print!("{upval_index}");
+                reg!(3);
+                println!();
+                4
+            }
+            Instruction::GetTableUpvalConstKey => {
+                let const_index_bytes = &instructions
+                    [instruction_pointer + 3..instruction_pointer + 3 + size_of::<ConstIndex>()];
+                let const_index = ConstIndex::from_be_bytes(const_index_bytes.try_into().unwrap());
+                instr!("GET_TABLE_UP_CK");
+                reg!(1);
+                let upval_index = instructions[instruction_pointer + 2];
+                print!("{upval_index} ");
+                print_const(&consts[const_index as usize]);
+                println!();
+                3 + size_of::<ConstIndex>()
             }
             Instruction::AppendToTable => {
                 instr!("APPEND_TO_TABLE");
