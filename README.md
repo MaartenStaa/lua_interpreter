@@ -182,14 +182,14 @@ Legend:
     9. 🚫 os.setlocale
     10. ✅ os.time
     11. 🚫 os.tmpname
-10. Debug library \[1/15]
+10. Debug library \[2/15]
     1. 🚫 debug.debug
     2. 🚫 debug.gethook
     3. 🚫 debug.getinfo
     4. 🚫 debug.getlocal
     5. 🚫 debug.getmetatable
     6. 🚫 debug.getregistry
-    7. 🚫 debug.getupvalue
+    7. ✅ debug.getupvalue
     8. 🚫 debug.sethook
     9. 🚫 debug.setlocal
     10. 🚫 debug.setmetatable
