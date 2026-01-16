@@ -3,10 +3,10 @@ use std::sync::{Arc, RwLock};
 use crate::{
     macros::assert_table,
     stdlib,
-    value::{LuaObject, LuaTable, LuaValue},
+    value::{LuaObject, LuaTable, LuaValue, UpValue},
 };
 
-pub fn create_global_env() -> LuaValue {
+pub fn create_global_env() -> Arc<RwLock<UpValue>> {
     let mut env = LuaTable::new();
 
     // Global functions
@@ -124,5 +124,5 @@ pub fn create_global_env() -> LuaValue {
         t.insert("_G".into(), g);
     });
 
-    object
+    Arc::new(RwLock::new(UpValue(object)))
 }

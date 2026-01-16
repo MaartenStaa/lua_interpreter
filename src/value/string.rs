@@ -176,13 +176,13 @@ pub(crate) fn coerce_number(value: LuaValue) -> crate::Result<LuaNumber> {
     }
 }
 
-fn value_numbers(mut values: Vec<LuaValue>) -> crate::Result<(LuaNumber, LuaNumber)> {
-    if values.len() != 2 {
+fn value_numbers(vm: &mut VM) -> crate::Result<(LuaNumber, LuaNumber)> {
+    if vm.num_args() != 2 {
         return Err(lua_error!("metamethod expects 2 arguments"));
     }
 
-    let b = values.remove(1);
-    let a = values.remove(0);
+    let a = vm.arg(0);
+    let b = vm.arg(1);
 
     let a = coerce_number(a)?;
     let b = coerce_number(b)?;
@@ -190,72 +190,72 @@ fn value_numbers(mut values: Vec<LuaValue>) -> crate::Result<(LuaNumber, LuaNumb
     Ok((a, b))
 }
 
-fn add(_: &mut VM, values: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
-    let (a, b) = value_numbers(values)?;
+fn add(vm: &mut VM) -> crate::Result<Vec<LuaValue>> {
+    let (a, b) = value_numbers(vm)?;
 
     Ok(vec![LuaValue::Number(a + b)])
 }
 
-fn sub(_: &mut VM, values: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
-    let (a, b) = value_numbers(values)?;
+fn sub(vm: &mut VM) -> crate::Result<Vec<LuaValue>> {
+    let (a, b) = value_numbers(vm)?;
 
     Ok(vec![LuaValue::Number(a - b)])
 }
 
-fn mul(_: &mut VM, values: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
-    let (a, b) = value_numbers(values)?;
+fn mul(vm: &mut VM) -> crate::Result<Vec<LuaValue>> {
+    let (a, b) = value_numbers(vm)?;
 
     Ok(vec![LuaValue::Number(a * b)])
 }
 
-fn div(_: &mut VM, values: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
-    let (a, b) = value_numbers(values)?;
+fn div(vm: &mut VM) -> crate::Result<Vec<LuaValue>> {
+    let (a, b) = value_numbers(vm)?;
 
     Ok(vec![LuaValue::Number(a / b)])
 }
 
-fn mod_(_: &mut VM, values: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
-    let (a, b) = value_numbers(values)?;
+fn mod_(vm: &mut VM) -> crate::Result<Vec<LuaValue>> {
+    let (a, b) = value_numbers(vm)?;
 
     Ok(vec![LuaValue::Number(a % b)])
 }
 
-fn pow(_: &mut VM, values: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
-    let (a, b) = value_numbers(values)?;
+fn pow(vm: &mut VM) -> crate::Result<Vec<LuaValue>> {
+    let (a, b) = value_numbers(vm)?;
 
     Ok(vec![LuaValue::Number(a.pow(&b))])
 }
 
-fn unm(_: &mut VM, mut values: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
-    if values.len() != 1 {
+fn unm(vm: &mut VM) -> crate::Result<Vec<LuaValue>> {
+    if vm.num_args() != 1 {
         return Err(lua_error!("__unm expects 1 argument"));
     }
 
-    let a = coerce_number(values.remove(0))?;
+    let a = coerce_number(vm.arg(0))?;
 
     Ok(vec![LuaValue::Number(-a)])
 }
 
-fn idiv(_: &mut VM, values: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
-    let (a, b) = value_numbers(values)?;
+fn idiv(vm: &mut VM) -> crate::Result<Vec<LuaValue>> {
+    let (a, b) = value_numbers(vm)?;
 
     Ok(vec![LuaValue::Number(a.idiv(&b))])
 }
 
-fn band(_: &mut VM, values: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
-    let (a, b) = value_numbers(values)?;
+fn band(vm: &mut VM) -> crate::Result<Vec<LuaValue>> {
+    let (a, b) = value_numbers(vm)?;
 
     Ok(vec![LuaValue::Number((a & b)?)])
 }
 
-fn bor(_: &mut VM, values: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
-    let (a, b) = value_numbers(values)?;
+fn bor(vm: &mut VM) -> crate::Result<Vec<LuaValue>> {
+    let (a, b) = value_numbers(vm)?;
 
     Ok(vec![LuaValue::Number((a | b)?)])
 }
 
-fn bxor(_: &mut VM, values: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
-    let (a, b) = value_numbers(values)?;
+fn bxor(vm: &mut VM) -> crate::Result<Vec<LuaValue>> {
+    let (a, b) = value_numbers(vm)?;
 
     Ok(vec![LuaValue::Number((a ^ b)?)])
 }

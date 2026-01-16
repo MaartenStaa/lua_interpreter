@@ -76,8 +76,8 @@ macro_rules! assert_table(
 );
 
 macro_rules! require_closure {
-    ($values:expr, $name:expr, $index:expr, $closure:ident, $tt:tt) => {
-        match $values.get($index) {
+    ($value:expr, $name:expr, $index:expr, $closure:ident, $tt:tt) => {
+        match $value {
             Some(LuaValue::Object(o)) => match &*o.read().unwrap() {
                 LuaObject::Closure($closure) => $tt,
                 _ => {
@@ -106,14 +106,14 @@ macro_rules! require_closure {
             }
         }
     };
-    ($values:expr, $name:expr, $closure:ident, $tt:tt) => {
-        require_closure!($values, $name, 0, $closure, $tt)
+    ($value:expr, $name:expr, $closure:ident, $tt:tt) => {
+        require_closure!($value, $name, 0, $closure, $tt)
     };
 }
 
 macro_rules! get_number {
-    ($values:expr, $name:expr, $index:expr) => {
-        match $values.get($index) {
+    ($value:expr, $name:expr, $index:expr) => {
+        match $value {
             Some(LuaValue::Number(n)) => Some(n),
             Some(LuaValue::Nil) | None => None,
             Some(v) => {
@@ -126,86 +126,14 @@ macro_rules! get_number {
             }
         }
     };
-    ($values:expr, $name:expr) => {
-        get_number!($values, $name, 0)
-    };
-}
-
-macro_rules! require_number {
-    ($values:expr, $name:expr, $index:expr) => {
-        match $values.get($index) {
-            Some(LuaValue::Number(n)) => n,
-            Some(v) => {
-                return Err($crate::error::lua_error!(
-                    "bad argument #{} to '{}', expected number, got {}",
-                    $index + 1,
-                    $name,
-                    v.type_name()
-                ))
-            }
-            _ => {
-                return Err($crate::error::lua_error!(
-                    "bad argument #{} to '{}', expected number, got no value",
-                    $index + 1,
-                    $name
-                ))
-            }
-        }
-    };
-    ($values:expr, $name:expr) => {
-        require_number!($values, $name, 0)
-    };
-}
-
-macro_rules! get_string {
-    ($values:expr, $name:expr, $index:expr) => {
-        match $values.get($index) {
-            Some(LuaValue::String(s)) => Some(s),
-            Some(v) => {
-                return Err($crate::error::lua_error!(
-                    "bad argument #{} to '{}', expected string, got {}",
-                    $index + 1,
-                    $name,
-                    v.type_name()
-                ))
-            }
-            _ => None,
-        }
-    };
-    ($values:expr, $name:expr) => {
-        get_string!($values, $name, 0)
-    };
-}
-
-macro_rules! require_string {
-    ($input:expr, $name:expr, $i:expr) => {
-        match $input.get($i) {
-            Some(LuaValue::String(s)) => s,
-            Some(v) => {
-                return Err($crate::error::lua_error!(
-                    "bad argument #{n} to '{name}' (string expected, got {type_name})",
-                    n = $i + 1,
-                    name = $name,
-                    type_name = v.type_name()
-                ));
-            }
-            None => {
-                return Err($crate::error::lua_error!(
-                    "bad argument #{n} to '{name}' (value expected)",
-                    n = $i + 1,
-                    name = $name
-                ));
-            }
-        }
-    };
-    ($input:expr, $name:expr) => {
-        require_string!($input, $name, 0)
+    ($value:expr, $name:expr) => {
+        get_number!($value, $name, 0)
     };
 }
 
 macro_rules! require_table {
-    (read, $values:expr, $name:expr, $index:expr, $table:ident, $tt:tt) => {
-        match $values.get($index) {
+    (read, $value:expr, $name:expr, $index:expr, $table:ident, $tt:tt) => {
+        match $value {
             Some(LuaValue::Object(o)) => match &*o.read().unwrap() {
                 LuaObject::Table($table) => $tt,
                 _ => {
@@ -234,8 +162,8 @@ macro_rules! require_table {
             }
         }
     };
-    (write, $values:expr, $name:expr, $index:expr, $table:ident, $tt:tt) => {
-        match $values.get($index) {
+    (write, $value:expr, $name:expr, $index:expr, $table:ident, $tt:tt) => {
+        match $value {
             Some(LuaValue::Object(o)) => match &mut *o.write().unwrap() {
                 LuaObject::Table($table) => $tt,
                 _ => {
@@ -264,8 +192,8 @@ macro_rules! require_table {
             }
         }
     };
-    ($values:expr, $name:expr, $index:expr, $userdata:ident, $tt:tt) => {
-        require_table!(read, $values, $name, $index, $userdata, $tt)
+    ($value:expr, $name:expr, $index:expr, $userdata:ident, $tt:tt) => {
+        require_table!(read, $value, $name, $index, $userdata, $tt)
     };
 }
 
@@ -273,8 +201,8 @@ macro_rules! require_table {
 // which is invalid.
 #[rustfmt::skip]
 macro_rules! require_userdata {
-    (read, $values:expr, $name:expr, $index:expr, $userdata:ident, $tt:stmt) => {
-        match $values.get($index) {
+    (read, $value:expr, $name:expr, $index:expr, $userdata:ident, $tt:stmt) => {
+        match $value {
             Some(LuaValue::Object(o)) => match &*o.read().unwrap() {
                 LuaObject::UserData($userdata) => {
                     $tt
@@ -308,8 +236,8 @@ macro_rules! require_userdata {
             }
         }
     };
-    (write, $values:expr, $name:expr, $index:expr, $userdata:ident, $tt:stmt) => {
-        match $values.get($index) {
+    (write, $value:expr, $name:expr, $index:expr, $userdata:ident, $tt:stmt) => {
+        match $value {
             Some(LuaValue::Object(o)) => match &mut *o.write().unwrap() {
                 LuaObject::UserData($userdata) => {
                     $tt
@@ -343,8 +271,8 @@ macro_rules! require_userdata {
             }
         }
     };
-    ($values:expr, $name:expr, $index:expr, $userdata:ident, $tt:stmt) => {
-        require_userdata!(read, $values, $name, $index, $userdata, $tt)
+    ($value:expr, $name:expr, $index:expr, $userdata:ident, $tt:stmt) => {
+        require_userdata!(read, $value, $name, $index, $userdata, $tt)
     };
 }
 
@@ -415,7 +343,6 @@ macro_rules! require_userdata_type {
 }
 
 pub(crate) use {
-    assert_closure, assert_string, assert_table, assert_table_object, get_number, get_string,
-    require_closure, require_number, require_string, require_table, require_userdata,
-    require_userdata_type,
+    assert_closure, assert_string, assert_table, assert_table_object, get_number, require_closure,
+    require_table, require_userdata, require_userdata_type,
 };

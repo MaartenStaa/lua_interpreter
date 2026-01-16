@@ -99,8 +99,11 @@ pub fn handle(
                         result.swap_remove(0)
                     }));
                 }
-                LuaObject::NativeFunction(_, f) => {
-                    let mut result = match f(vm, input) {
+                LuaObject::NativeFunction(name, f) => {
+                    let num_args = input.len();
+                    let args_r = vm.extend_stack(input);
+                    let mut result = match vm.run_native_function(name, *f, args_r, num_args as u16)
+                    {
                         Ok(value) => value,
                         Err(e) => return Some(Err(e)),
                     };

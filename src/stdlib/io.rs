@@ -71,12 +71,12 @@ fn create_file(handle: FileHandle) -> LuaValue {
     UserData::new_full(File { methods, handle }, FILE_METATABLE.clone()).into()
 }
 
-fn file_index(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
-    require_userdata!(input, "file:__index", 0, userdata, {
+fn file_index(vm: &mut VM) -> crate::Result<Vec<LuaValue>> {
+    require_userdata!(vm.try_arg(0), "file:__index", 0, userdata, {
         require_userdata_type!(userdata, "file:__index", 0, File, file, _metatable, {
             Ok(vec![
                 file.methods
-                    .get(input.get(1).unwrap_or(&LuaValue::Nil))
+                    .get(&vm.arg_ref(1))
                     .cloned()
                     .unwrap_or(LuaValue::Nil),
             ])
@@ -84,10 +84,10 @@ fn file_index(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> 
     })
 }
 
-fn file_write(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
-    require_userdata!(write, input, "file:write", 0, userdata, {
+fn file_write(vm: &mut VM) -> crate::Result<Vec<LuaValue>> {
+    require_userdata!(write, vm.try_arg(0), "file:write", 0, userdata, {
         require_userdata_type!(write, userdata, "file:write", 0, File, file, _metatable, {
-            for (i, value) in input.iter().enumerate().skip(1) {
+            for (i, value) in vm.args().iter().enumerate().skip(1) {
                 match value {
                     LuaValue::String(s) => {
                         file.handle.write_all(s).unwrap();
@@ -105,7 +105,7 @@ fn file_write(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> 
                 }
             }
 
-            Ok(vec![input.first().unwrap().clone()])
+            Ok(vec![vm.ensure_arg(0)?])
         })
     })
 }

@@ -63,7 +63,7 @@ impl<'source> Chunk<'source> {
         self.filename.as_deref()
     }
 
-    pub fn get_name(&self) -> &[u8] {
+    pub fn get_name(&self) -> &LuaString {
         &self.name
     }
 

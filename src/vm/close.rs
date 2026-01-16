@@ -1,5 +1,5 @@
 use crate::{
-    error::LuaError,
+    error::{LuaError, lua_error},
     value::{
         LuaValue,
         callable::{Callable, Method},
@@ -14,7 +14,7 @@ impl<'source> VM<'source> {
         from_register: u8,
         error: Option<&LuaError>,
     ) -> crate::Result<()> {
-        // This close is unfortunate, but otherwise the borrow-checker won't be happy
+        // This clone is unfortunate, but otherwise the borrow-checker won't be happy
         // with us calling `run_closure` or `run_native_function` below.
         let to_close = self.call_stack[self.call_stack_index - 1].to_close.clone();
 
@@ -35,7 +35,7 @@ impl<'source> VM<'source> {
             if let Some(__close) = value.get_metavalue(&crate::value::metatables::CLOSE_KEY) {
                 let close: Callable = (&__close)
                     .try_into()
-                    .map_err(|_| self.err("__close metamethod must be a callable value"))?;
+                    .map_err(|_| lua_error!("__close metamethod must be a callable value"))?;
 
                 let error = error
                     .map(|e| e.message.clone().into_bytes().into())
@@ -49,12 +49,16 @@ impl<'source> VM<'source> {
                     Method::Closure(closure) => {
                         self.run_closure(closure, args)?;
                     }
-                    Method::NativeFunction(_, func) => {
-                        self.run_native_function(func, args)?;
+                    Method::NativeFunction(name, func) => {
+                        let num_args = args.len();
+                        let args_r = self.extend_stack(args);
+                        self.run_native_function(name, func, args_r, num_args as u16)?;
                     }
                 }
             } else {
-                return Err(self.err("variable marked for closing has a non-closable value"));
+                return Err(lua_error!(
+                    "variable marked for closing has a non-closable value"
+                ));
             }
         }
 

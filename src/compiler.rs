@@ -485,7 +485,7 @@ impl<'vm, 'source> Compiler<'vm, 'source> {
                 // The statement `local function f () body end` translates to `local f; f =
                 // function () body end`, not to `local f = function () body end` (This only makes
                 // a difference when the body of the function contains references to f.)
-                let name_r = self.push_load_nil(Some(name.span));
+                let name_r = self.push_load_nil(Some(span));
                 self.add_local(name.node.0, name_r, 0, Some(name.span));
 
                 self.compile_function_def(function_def, Some(name_r))?;

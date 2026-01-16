@@ -37,13 +37,15 @@ impl<'name, 'source> Lexer<'name, 'source> {
         LabeledSpan::at(position..position, message)
     }
 
-    pub fn with_source_code(&self, report: LuaError) -> LuaError {
-        report.with_source_code(
-            miette::NamedSource::new(
-                String::from_utf8_lossy(self.chunk_name),
-                self.source.to_vec(),
-            )
-            .with_language("lua"),
+    pub fn with_source_code(&self, report: LuaError) -> Box<LuaError> {
+        Box::new(
+            report.with_source_code(
+                miette::NamedSource::new(
+                    String::from_utf8_lossy(self.chunk_name),
+                    self.source.to_vec(),
+                )
+                .with_language("lua"),
+            ),
         )
     }
 }
@@ -233,7 +235,7 @@ impl<'path, 'source> Iterator for Lexer<'path, 'source> {
                 c if c.is_ascii_whitespace() => continue,
 
                 _ => {
-                    return Some(Err(self.with_source_code(lua_error!(
+                    return Some(Err(self.with_source_code(*lua_error!(
                         labels = vec![LabeledSpan::at(
                             c_start..self.position,
                             "unexpected character"
@@ -453,7 +455,7 @@ impl<'path, 'source> Lexer<'path, 'source> {
                         let mut hex = [b'0'; 2];
                         (0..2).try_for_each(|i| -> crate::Result<()> {
                             hex[i] = chars.next().copied().ok_or_else(|| {
-                                self.with_source_code(lua_error!(
+                                self.with_source_code(*lua_error!(
                                     labels = vec![LabeledSpan::at(
                                         self.position..self.position + 2,
                                         "expected two hex digits"
@@ -470,7 +472,7 @@ impl<'path, 'source> Lexer<'path, 'source> {
                         hex.iter().try_fold(0u8, |acc, c| {
                             c.to_digit(16)
                                 .ok_or_else(|| {
-                                    self.with_source_code(lua_error!(
+                                    self.with_source_code(*lua_error!(
                                         labels = vec![LabeledSpan::at(
                                             self.position - 2..self.position + 1,
                                             "invalid hex escape"
@@ -485,7 +487,7 @@ impl<'path, 'source> Lexer<'path, 'source> {
                         let escape_start = self.position - 1;
 
                         if !matches!(chars.next(), Some(b'{')) {
-                            return Err(self.with_source_code(lua_error!(
+                            return Err(self.with_source_code(*lua_error!(
                                 labels = vec![LabeledSpan::at(
                                     self.position - 1..self.position + 1,
                                     "expected { after \\u"
@@ -505,7 +507,7 @@ impl<'path, 'source> Lexer<'path, 'source> {
                             }
 
                             if !c.is_ascii_hexdigit() {
-                                return Err(self.with_source_code(lua_error!(
+                                return Err(self.with_source_code(*lua_error!(
                                     labels = vec![LabeledSpan::at(
                                         self.position - 1..self.position + 1,
                                         "expected hex digit"
@@ -515,7 +517,7 @@ impl<'path, 'source> Lexer<'path, 'source> {
                             }
 
                             if n == 8 {
-                                return Err(self.with_source_code(lua_error!(
+                                return Err(self.with_source_code(*lua_error!(
                                     labels = vec![LabeledSpan::at(
                                         escape_start..self.position + 1,
                                         "too many hex digits"
@@ -529,7 +531,7 @@ impl<'path, 'source> Lexer<'path, 'source> {
                         }
 
                         if n == 0 {
-                            return Err(self.with_source_code(lua_error!(
+                            return Err(self.with_source_code(*lua_error!(
                                 labels = vec![LabeledSpan::at(
                                     escape_start..self.position + 1,
                                     "expected at least one hex digit"
@@ -537,7 +539,7 @@ impl<'path, 'source> Lexer<'path, 'source> {
                                 "expected at least one hex digit"
                             )));
                         } else if !seen_close_brace {
-                            return Err(self.with_source_code(lua_error!(
+                            return Err(self.with_source_code(*lua_error!(
                                 labels = vec![LabeledSpan::at(
                                     escape_start..self.position + 1,
                                     "expected } to close escape"
@@ -573,7 +575,7 @@ impl<'path, 'source> Lexer<'path, 'source> {
                         digits[..n].iter().try_fold(0u8, |acc, c| {
                             c.to_digit(10)
                                 .ok_or_else(|| {
-                                    self.with_source_code(lua_error!(
+                                    self.with_source_code(*lua_error!(
                                         labels = vec![LabeledSpan::at(
                                             self.position - n..self.position + 1,
                                             "invalid decimal escape"
@@ -585,7 +587,7 @@ impl<'path, 'source> Lexer<'path, 'source> {
                         })?
                     }
                     _ => {
-                        return Err(self.with_source_code(lua_error!(
+                        return Err(self.with_source_code(*lua_error!(
                             labels = vec![LabeledSpan::at(
                                 self.position - 1..self.position + 1,
                                 "invalid escape sequence"
@@ -645,7 +647,7 @@ impl<'path, 'source> Lexer<'path, 'source> {
                     }
                 }
                 b'\r' | b'\n' if long_form.is_none() => {
-                    return Err(self.with_source_code(lua_error!(
+                    return Err(self.with_source_code(*lua_error!(
                         labels = vec![LabeledSpan::at(
                             self.position - 1..self.position,
                             "unexpected newline in string"
@@ -673,7 +675,7 @@ impl<'path, 'source> Lexer<'path, 'source> {
             self.position += 1;
         }
 
-        Err(self.with_source_code(lua_error!(
+        Err(self.with_source_code(*lua_error!(
             labels = vec![LabeledSpan::at(
                 self.position..self.position + 1,
                 if let Some(equals) = long_form {

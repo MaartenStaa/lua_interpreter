@@ -6,6 +6,8 @@ use miette::{
 };
 use thiserror::Error;
 
+use crate::vm::CallFrameKind;
+
 #[derive(Debug, Diagnostic, Error)]
 #[repr(u8)]
 pub(crate) enum RuntimeError {
@@ -21,13 +23,25 @@ impl From<RuntimeError> for u8 {
 }
 
 impl TryFrom<u8> for RuntimeError {
-    type Error = LuaError;
+    type Error = Box<LuaError>;
 
     fn try_from(value: u8) -> std::result::Result<Self, Self::Error> {
         match value {
             0 => Ok(Self::ForLoopLimitIsZero),
             _ => Err(lua_error!("invalid RuntimeError")),
         }
+    }
+}
+
+/// A call frame that was popped but whose information is still needed for error reporting.
+pub(crate) struct PendingCallFrame {
+    pub(crate) kind: CallFrameKind,
+    pub(crate) index: usize,
+}
+
+impl PendingCallFrame {
+    pub(crate) fn new(kind: CallFrameKind, index: usize) -> Self {
+        Self { kind, index }
     }
 }
 
@@ -39,7 +53,12 @@ pub struct LuaError {
     pub source_code: Option<Box<LuaSourceCode>>,
     pub labels: Option<Vec<LabeledSpan>>,
     pub source: Option<Box<LuaError>>,
-    pub chunk: Option<ConstIndex>,
+    /// The call frame where the error originated, filled in cases where the call frame was popped
+    /// before propagating the error.
+    pub(crate) origin: Option<CallFrameKind>,
+    /// Similar to above, but contains all pending call frames that were popped before propagating
+    /// the error.
+    pub(crate) pending_frames: Vec<PendingCallFrame>,
 }
 
 impl Debug for LuaError {
@@ -57,7 +76,8 @@ impl From<RuntimeError> for LuaError {
             source_code: None,
             source: None,
             labels: None,
-            chunk: None,
+            origin: None,
+            pending_frames: vec![],
         }
     }
 }
@@ -98,15 +118,11 @@ impl SourceCode for LuaSourceCode {
     }
 }
 
-pub type Result<T = ()> = std::result::Result<T, LuaError>;
+pub type Result<T = ()> = std::result::Result<T, Box<LuaError>>;
 
 impl Display for LuaError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut target = self;
-        while let Some(source) = target.source.as_deref() {
-            target = source;
-        }
-        write!(f, "{}", target.message)
+        write!(f, "{}", self.message)
     }
 }
 
@@ -134,7 +150,8 @@ impl LuaError {
             source_code: None,
             labels: None,
             source: None,
-            chunk: None,
+            origin: None,
+            pending_frames: vec![],
         }
     }
 
@@ -145,7 +162,8 @@ impl LuaError {
             source_code: None,
             labels: None,
             source: Some(Box::new(self)),
-            chunk: None,
+            origin: None,
+            pending_frames: vec![],
         }
     }
 
@@ -179,7 +197,7 @@ pub trait Context {
 
 impl<T> Context for Result<T> {
     fn wrap_err(self, message: impl Into<String>) -> Result<T> {
-        self.map_err(|e| e.wrap_err(message.into()))
+        self.map_err(|e| Box::new(e.wrap_err(message.into())))
     }
 
     fn wrap_err_with<M, F>(self, function: F) -> Self
@@ -188,7 +206,7 @@ impl<T> Context for Result<T> {
         F: FnOnce() -> M,
         Self: Sized,
     {
-        self.map_err(|e| e.wrap_err(function().into()))
+        self.map_err(|e| Box::new(e.wrap_err(function().into())))
     }
 }
 
@@ -200,7 +218,7 @@ impl<T, E: std::error::Error + Send + Sync + 'static> IntoLuaError<T>
     for std::result::Result<T, E>
 {
     fn into_lua_error(self) -> Result<T> {
-        self.map_err(|e| LuaError::new(format!("{e}")))
+        self.map_err(|e| Box::new(LuaError::new(format!("{e}"))))
     }
 }
 
@@ -211,10 +229,8 @@ macro_rules! lua_error {
         $(
         error.$key = $value.into();
         )*
-        error
+        Box::new(error)
     }}
 }
 
 pub(crate) use lua_error;
-
-use crate::vm::ConstIndex;

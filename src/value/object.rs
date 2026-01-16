@@ -1,16 +1,13 @@
-use crate::vm::VM;
+use crate::value::NativeLuaFunction;
 use std::{fmt::Display, hash::Hash};
 
-use super::{LuaValue, UserData, closure::LuaClosure, table::LuaTable};
+use super::{UserData, closure::LuaClosure, table::LuaTable};
 
 #[derive(Debug)]
 pub enum LuaObject {
     Table(LuaTable),
     Closure(LuaClosure),
-    NativeFunction(
-        &'static str,
-        fn(&mut VM, Vec<LuaValue>) -> crate::Result<Vec<LuaValue>>,
-    ),
+    NativeFunction(&'static str, NativeLuaFunction),
     UserData(UserData),
 
     // TODO: Implement this
