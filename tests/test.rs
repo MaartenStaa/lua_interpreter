@@ -20,7 +20,7 @@ fn test_files(#[files("tests/resources/**/*.lua")] file: PathBuf) {
     let ast = optimize(parser.parse().expect("parsing should succeed"));
 
     let global_env = env::create_global_env();
-    let mut vm = VM::new(global_env, false);
+    let mut vm = VM::new(global_env, false, false);
     let chunk = Compiler::new(
         &mut vm,
         chunk_name,

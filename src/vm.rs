@@ -17,7 +17,10 @@ use crate::{
         callable::{Callable, Method},
         metatables::{self, INDEX_KEY, NEWINDEX_KEY},
     },
-    vm::call_frame::{CallFrame, PoppedCallFrame},
+    vm::{
+        call_frame::{CallFrame, PoppedCallFrame},
+        trace::VMTracer,
+    },
 };
 
 pub(crate) use call_frame::CallFrameKind;
@@ -26,6 +29,7 @@ mod arg;
 mod call_frame;
 mod close;
 mod error;
+mod trace;
 
 const MAX_STACK_SIZE: usize = 256;
 
@@ -44,10 +48,11 @@ pub struct VM<'source> {
     call_stack: [CallFrame; MAX_STACK_SIZE],
     call_stack_index: usize,
     print_bytecode: bool,
+    tracer: Option<VMTracer>,
 }
 
 impl<'source> VM<'source> {
-    pub fn new(global_env: Arc<RwLock<UpValue>>, print_bytecode: bool) -> Self {
+    pub fn new(global_env: Arc<RwLock<UpValue>>, print_bytecode: bool, trace_vm: bool) -> Self {
         Self {
             global_env,
             chunks: vec![],
@@ -58,6 +63,7 @@ impl<'source> VM<'source> {
             call_stack: [const { CallFrame::default() }; MAX_STACK_SIZE],
             call_stack_index: 0,
             print_bytecode,
+            tracer: trace_vm.then(VMTracer::new),
         }
     }
 
@@ -446,6 +452,18 @@ impl<'source> VM<'source> {
                 unreachable!("native function call frame in run_inner");
             };
             let instruction = self.chunks[chunk_index as usize].instructions[ip];
+
+            if let Some(tracer) = &mut self.tracer {
+                tracer.trace_instruction(
+                    &self.stack[self.call_stack[self.call_stack_index - 1].frame_pointer..],
+                    &self.call_stack[self.call_stack_index - 1].varargs,
+                    self.call_stack[self.call_stack_index - 1].upvalues.as_ref(),
+                    &self.chunks[chunk_index as usize],
+                    chunk_index,
+                    ip,
+                    self.multres,
+                );
+            }
 
             macro_rules! instr_param {
                 ($offset:expr) => {

@@ -33,6 +33,10 @@ struct Input {
     /// Print the bytecode instructions before executing them.
     #[clap(long, default_value = "false")]
     print_bytecode: bool,
+
+    /// Print the execution steps of the VM.
+    #[clap(long, default_value = "false")]
+    trace_vm: bool,
 }
 
 fn main() {
@@ -42,6 +46,7 @@ fn main() {
         debug_parser,
         disable_optimizer,
         print_bytecode,
+        trace_vm,
     } = Input::parse();
 
     let Ok(filename) = filename.canonicalize() else {
@@ -80,7 +85,7 @@ fn main() {
         optimize_ast(ast)
     };
 
-    let mut vm = VM::new(env::create_global_env(), print_bytecode);
+    let mut vm = VM::new(env::create_global_env(), print_bytecode, trace_vm);
     let chunk = match Compiler::new(
         &mut vm,
         chunk_name.clone(),
