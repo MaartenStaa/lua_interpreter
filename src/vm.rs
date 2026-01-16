@@ -83,6 +83,10 @@ impl<'source> VM<'source> {
 
         self.chunks.push(chunk);
 
+        if self.print_bytecode {
+            debug::print_instructions(self, &self.chunks[index]);
+        }
+
         Ok(index as ConstIndex)
     }
 
