@@ -214,12 +214,6 @@ impl<'source> VM<'source> {
             self.stack
                 .resize(frame_pointer + max_registers, LuaValue::Nil);
         }
-
-        // FIXME: If the stack is already big enough, we might need to
-        // clear out old values. For example, if we have a function that
-        // takes 1 argument, but there are 5 values on the stack from
-        // the parent call frame, we need to fill anything beyond the
-        // first register with `Nil`.
     }
 
     /// Create extra space on the stack for the given values, returning the register where the
