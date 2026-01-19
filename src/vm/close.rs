@@ -1,13 +1,13 @@
 use crate::{
+    LuaState,
     error::{LuaError, lua_error},
     value::{
         LuaValue,
         callable::{Callable, Method},
     },
-    vm::VM,
 };
 
-impl<'source> VM<'source> {
+impl LuaState {
     #[inline]
     pub(crate) fn close(
         &mut self,

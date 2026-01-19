@@ -177,7 +177,17 @@ impl LuaError {
         self
     }
 
+    pub fn set_source_code(&mut self, src: impl Into<LuaSourceCode>) -> &mut Self {
+        self.source_code = Some(Box::new(src.into()));
+        self
+    }
+
     pub(crate) fn with_labels(mut self, labels: impl Into<Vec<LabeledSpan>>) -> Self {
+        self.labels = Some(labels.into());
+        self
+    }
+
+    pub(crate) fn set_labels(&mut self, labels: impl Into<Vec<LabeledSpan>>) -> &mut Self {
         self.labels = Some(labels.into());
         self
     }

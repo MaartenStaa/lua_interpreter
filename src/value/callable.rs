@@ -1,4 +1,4 @@
-use crate::vm::VM;
+use crate::value::NativeLuaFunction;
 
 use super::{LuaClosure, LuaObject, LuaValue, metatables};
 
@@ -11,7 +11,7 @@ pub(crate) struct Callable {
 #[derive(Debug)]
 pub(crate) enum Method {
     Closure(LuaClosure),
-    NativeFunction(&'static str, fn(&mut VM) -> crate::Result<Vec<LuaValue>>),
+    NativeFunction(&'static str, NativeLuaFunction),
 }
 
 impl TryFrom<LuaValue> for Callable {

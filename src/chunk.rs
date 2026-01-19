@@ -1,5 +1,4 @@
 use std::{
-    borrow::Cow,
     collections::HashMap,
     mem::size_of,
     path::{Path, PathBuf},
@@ -24,11 +23,11 @@ pub(crate) struct ChunkUpValue {
 }
 
 #[derive(Debug, Clone)]
-pub struct Chunk<'source> {
+pub struct Chunk {
     pub(crate) name: LuaString,
     // TODO: Maybe this can be a Cow<'source, Path>?
     pub(crate) filename: Option<PathBuf>,
-    pub(crate) source: Arc<Cow<'source, [u8]>>,
+    pub(crate) source: Arc<Vec<u8>>,
     pub(crate) instructions: Vec<u8>,
     pub(crate) instruction_spans: HashMap<usize, Span>,
     pub(crate) max_registers: u8,
@@ -37,11 +36,11 @@ pub struct Chunk<'source> {
     pub(crate) upvalues: Vec<ChunkUpValue>,
 }
 
-impl<'source> Chunk<'source> {
+impl Chunk {
     pub(crate) fn new(
         name: LuaString,
         filename: Option<PathBuf>,
-        source: Arc<Cow<'source, [u8]>>,
+        source: Arc<Vec<u8>>,
         num_params: u8,
         has_varargs: bool,
         upvalues: Vec<ChunkUpValue>,

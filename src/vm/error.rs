@@ -1,16 +1,14 @@
 use std::borrow::Cow;
 
 use crate::{
+    LuaState,
     error::{LuaError, PendingCallFrame, lua_error},
     value::LuaValue,
-    vm::{
-        VM,
-        call_frame::{CallFrameKind, PoppedCallFrame},
-    },
+    vm::call_frame::{CallFrameKind, PoppedCallFrame},
 };
 
-impl<'source> VM<'source> {
-    pub(crate) fn print_backtrace(&mut self, mut err: LuaError) {
+impl LuaState {
+    pub(crate) fn print_backtrace(&mut self, err: &mut LuaError) {
         let print_until = if err.origin.is_some() {
             self.call_stack_index
         } else {
@@ -42,10 +40,10 @@ impl<'source> VM<'source> {
         };
 
         if let CallFrameKind::Lua { chunk, ip } = origin_kind {
-            let chunk = &self.chunks[chunk as usize];
+            let chunk = self.get_chunk(chunk).unwrap();
             if let Some(span) = chunk.instruction_spans.get(&ip) {
                 let source = chunk.named_source();
-                err = err.with_source_code(source).with_labels(*span);
+                err.set_source_code(source).set_labels(*span);
             }
         }
 
@@ -104,7 +102,7 @@ impl<'source> VM<'source> {
     fn error_for_frame(&self, kind: CallFrameKind, index: usize) -> LuaError {
         match kind {
             CallFrameKind::Lua { chunk, ip } => {
-                let chunk = &self.chunks[chunk as usize];
+                let chunk = self.get_chunk(chunk).unwrap();
                 let mut err =
                     LuaError::new(format!("#{index} {}", String::from_utf8_lossy(&chunk.name)));
 

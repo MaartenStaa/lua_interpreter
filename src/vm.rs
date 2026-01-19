@@ -7,116 +7,59 @@ use std::{
 
 use crate::{
     chunk::Chunk,
-    compiler::CompiledChunk,
-    debug,
     error::{IntoLuaError, RuntimeError, lua_error},
     instruction::Instruction,
     macros::{assert_closure, assert_table},
+    state::{GlobalState, LuaState},
     value::{
         LuaClosure, LuaConst, LuaObject, LuaValue, NativeLuaFunction, UpValue,
         callable::{Callable, Method},
         metatables::{self, INDEX_KEY, NEWINDEX_KEY},
     },
-    vm::{
-        call_frame::{CallFrame, PoppedCallFrame},
-        trace::VMTracer,
-    },
+    vm::call_frame::{CallFrame, PoppedCallFrame},
 };
 
 pub(crate) use call_frame::CallFrameKind;
 
 mod arg;
-mod call_frame;
+pub(crate) mod call_frame;
 mod close;
 mod error;
-mod trace;
+pub(crate) mod trace;
 
-const MAX_STACK_SIZE: usize = 256;
+pub(crate) const MAX_STACK_SIZE: usize = 256;
 
 pub type JumpAddr = u16;
 pub type ConstIndex = u16;
 
-#[derive(Debug)]
-pub struct VM<'source> {
-    global_env: Arc<RwLock<UpValue>>,
-    chunks: Vec<Chunk<'source>>,
-    consts: Vec<LuaConst>,
-    const_index: ConstIndex,
-    stack: Vec<LuaValue>,
-    // Ephemeral result count for multi-return value calls
-    multres: usize,
-    call_stack: [CallFrame; MAX_STACK_SIZE],
-    call_stack_index: usize,
-    print_bytecode: bool,
-    tracer: Option<VMTracer>,
-}
-
-impl<'source> VM<'source> {
-    pub fn new(global_env: Arc<RwLock<UpValue>>, print_bytecode: bool, trace_vm: bool) -> Self {
-        Self {
-            global_env,
-            chunks: vec![],
-            consts: vec![],
-            const_index: 0,
-            stack: vec![],
-            multres: 0,
-            call_stack: [const { CallFrame::default() }; MAX_STACK_SIZE],
-            call_stack_index: 0,
-            print_bytecode,
-            tracer: trace_vm.then(VMTracer::new),
-        }
-    }
-
+impl LuaState {
     pub fn get_global_env(&self) -> Arc<RwLock<UpValue>> {
-        self.global_env.clone()
+        self.global.read().unwrap().get_global_env()
     }
 
-    pub fn get_next_chunk_index(&self) -> usize {
-        self.chunks.len()
-    }
+    pub(crate) fn get_chunk(&self, index: ConstIndex) -> Option<&Chunk> {
+        // SAFETY: The returned value has its lifetime tied to `&self`, and chunks
+        // are never written to after they are added. So there is no risk of a
+        // future write lock writing into the data we're returning here.
+        unsafe {
+            let global_ptr = self.global.as_ref() as *const RwLock<GlobalState>;
+            let global_ref = &*global_ptr;
+            let guard = global_ref.read().unwrap();
+            let chunk_ref = guard.chunks.get(index as usize)?;
 
-    pub fn add_chunk(&mut self, chunk: Chunk<'source>) -> crate::Result<ConstIndex> {
-        let index = self.chunks.len();
-        if index >= ConstIndex::MAX as usize {
-            return Err(lua_error!("too many chunks"));
+            #[allow(clippy::missing_transmute_annotations)]
+            Some(std::mem::transmute(chunk_ref))
         }
-
-        self.chunks.push(chunk);
-
-        if self.print_bytecode {
-            debug::print_instructions(self, &self.chunks[index]);
-        }
-
-        Ok(index as ConstIndex)
     }
 
-    pub fn get_chunk(&self, index: ConstIndex) -> Option<&Chunk<'source>> {
-        self.chunks.get(index as usize)
-    }
-
-    pub fn get_current_chunk(&self) -> Option<&Chunk<'source>> {
+    pub fn get_current_chunk(&self) -> Option<&Chunk> {
         match self.call_stack[self.call_stack_index - 1].kind {
-            CallFrameKind::Lua { chunk, .. } => Some(&self.chunks[chunk as usize]),
+            CallFrameKind::Lua { chunk, .. } => self.get_chunk(chunk),
             CallFrameKind::Native { .. } => None,
         }
     }
 
-    pub fn register_const(&mut self, constant: LuaConst) -> ConstIndex {
-        let index = self.const_index;
-        self.consts.push(constant);
-        self.const_index += 1;
-        index
-    }
-
-    pub fn lookup_const(&self, constant: &LuaConst) -> Option<ConstIndex> {
-        // TODO: Maybe a hashmap would be better
-        self.consts[..self.const_index as usize]
-            .iter()
-            .position(|c| c == constant)
-            .map(|i| i as ConstIndex)
-    }
-
-    pub fn get_stack(&self) -> &[LuaValue] {
+    pub(crate) fn get_stack(&self) -> &[LuaValue] {
         &self.stack
     }
 
@@ -155,12 +98,8 @@ impl<'source> VM<'source> {
         self.stack[frame_pointer + register.into()] = value;
     }
 
-    pub fn get_consts(&self) -> &[LuaConst] {
-        &self.consts
-    }
-
     #[allow(clippy::too_many_arguments)]
-    fn push_call_frame(
+    pub(crate) fn push_call_frame(
         &mut self,
         kind: CallFrameKind,
         border_frame: bool,
@@ -264,45 +203,26 @@ impl<'source> VM<'source> {
         upvalue
     }
 
-    pub fn run(&mut self, chunk: CompiledChunk) {
-        assert!(!self.chunks.is_empty(), "no chunks to run");
-
-        if let Err(err) = self.run_chunk(chunk.chunk_index) {
-            self.print_backtrace(*err);
-        }
+    // Helper method to get const values
+    #[inline]
+    fn get_const(&self, index: ConstIndex) -> LuaConst {
+        let global = self.global.read().unwrap();
+        global.consts[index as usize].clone()
     }
 
-    pub fn run_chunk(&mut self, chunk: ConstIndex) -> crate::Result<Vec<LuaValue>> {
-        self.push_call_frame(
-            CallFrameKind::for_chunk(chunk),
-            true,
-            self.stack.len(),
-            self.chunks[chunk as usize].max_registers,
-            0,
-            0,
-            None,
-            0,
-            false,
-            false,
-        )?;
+    pub fn run(&mut self) -> crate::Result<Vec<LuaValue>> {
+        assert!(
+            self.call_stack_index > 0,
+            "no call frame to run the chunk in"
+        );
 
-        if self.call_stack[self.call_stack_index - 1]
-            .upvalues
-            .is_none()
-        {
-            self.call_stack[self.call_stack_index - 1].upvalues = Some(HashMap::new());
+        match self.run_inner() {
+            Ok(v) => Ok(v),
+            Err(mut err) => {
+                self.print_backtrace(&mut err);
+                Err(err)
+            }
         }
-
-        // FIXME: this needs to be handled elsewhere
-        let env = self.get_global_env();
-        self.call_stack[self.call_stack_index - 1]
-            .upvalues
-            .as_mut()
-            .and_then(|u| u.insert(0, env));
-
-        // NOTE: Don't pop the call frame here. Chunks always end in a `return`
-        // statement (implicit or explicit), which will pop the call frame.
-        self.run_inner()
     }
 
     pub(crate) fn run_closure(
@@ -313,30 +233,32 @@ impl<'source> VM<'source> {
         let original_call_stack_index = self.call_stack_index;
         let frame_pointer = self.stack.len();
 
-        let chunk = &self.chunks[value.chunk as usize];
+        let chunk = self.get_chunk(value.chunk).unwrap();
+        let max_registers = chunk.max_registers;
+        let num_params = chunk.num_params as u16;
+        let has_varargs = chunk.has_varargs;
+
         self.push_call_frame(
             CallFrameKind::for_chunk(value.chunk),
             true,
             frame_pointer,
-            chunk.max_registers,
+            max_registers,
             // NOTE: `return_addr` and `return_value_register` don't matter for a border frame
             0,
             0,
             Some(value.upvalues.clone()),
-            chunk.num_params as u16,
-            chunk.has_varargs,
+            num_params,
+            has_varargs,
             false,
         )?;
 
-        let chunk = &self.chunks[value.chunk as usize];
         let num_args = args.len();
-        self.ensure_stack_space(chunk.max_registers.max(num_args as u8));
+        self.ensure_stack_space(max_registers.max(num_args as u8));
         for (index, arg) in args.into_iter().enumerate() {
             self.set(index, arg);
         }
 
-        let chunk = &self.chunks[value.chunk as usize];
-        self.align_closure_args(chunk.num_params, num_args, chunk.has_varargs);
+        self.align_closure_args(num_params, num_args, has_varargs);
 
         let result = match self.run_inner() {
             Ok(r) => {
@@ -354,7 +276,7 @@ impl<'source> VM<'source> {
             original_call_stack_index,
             self.call_stack_index,
             "unbalanced call stack after closure call '{name}'",
-            name = self.chunks[value.chunk as usize].name
+            name = self.get_chunk(value.chunk).unwrap().name
         );
 
         result
@@ -449,23 +371,33 @@ impl<'source> VM<'source> {
             else {
                 unreachable!("native function call frame in run_inner");
             };
-            let instruction = self.chunks[chunk_index as usize].instructions[ip];
 
-            if let Some(tracer) = &mut self.tracer {
-                tracer.trace_instruction(
-                    &self.stack[self.call_stack[self.call_stack_index - 1].frame_pointer..],
-                    &self.call_stack[self.call_stack_index - 1].varargs,
-                    self.call_stack[self.call_stack_index - 1].upvalues.as_ref(),
-                    &self.chunks[chunk_index as usize],
-                    chunk_index,
-                    ip,
-                    self.multres,
-                );
-            }
+            // Get instruction and handle tracing
+            let instruction = {
+                let global = self.global.read().unwrap();
+                let chunk_ref = &global.chunks[chunk_index as usize];
+                let instr = chunk_ref.instructions[ip];
+
+                if let Some(tracer) = &mut self.tracer {
+                    tracer.trace_instruction(
+                        &self.stack[self.call_stack[self.call_stack_index - 1].frame_pointer..],
+                        &self.call_stack[self.call_stack_index - 1].varargs,
+                        self.call_stack[self.call_stack_index - 1].upvalues.as_ref(),
+                        chunk_ref,
+                        chunk_index,
+                        ip,
+                        self.multres,
+                    );
+                }
+
+                instr
+            };
+
+            let chunk = self.get_chunk(chunk_index).unwrap();
 
             macro_rules! instr_param {
                 ($offset:expr) => {
-                    self.chunks[chunk_index as usize].instructions[ip + $offset]
+                    chunk.instructions[ip + $offset]
                 };
                 () => {
                     instr_param!(1)
@@ -473,7 +405,7 @@ impl<'source> VM<'source> {
             }
             macro_rules! register {
                 ($offset:expr) => {
-                    self.chunks[chunk_index as usize].instructions[ip + $offset]
+                    chunk.instructions[ip + $offset]
                 };
                 () => {
                     register!(1)
@@ -481,8 +413,8 @@ impl<'source> VM<'source> {
             }
             macro_rules! const_index {
                 ($offset:expr) => {{
-                    let bytes = &self.chunks[chunk_index as usize].instructions
-                        [ip + $offset..ip + $offset + size_of::<ConstIndex>()];
+                    let bytes =
+                        &chunk.instructions[ip + $offset..ip + $offset + size_of::<ConstIndex>()];
                     ConstIndex::from_be_bytes(bytes.try_into().unwrap())
                 }};
                 () => {
@@ -491,8 +423,8 @@ impl<'source> VM<'source> {
             }
             macro_rules! jump_addr {
                 ($offset:expr) => {{
-                    let bytes = &self.chunks[chunk_index as usize].instructions
-                        [ip + $offset..ip + $offset + size_of::<JumpAddr>()];
+                    let bytes =
+                        &chunk.instructions[ip + $offset..ip + $offset + size_of::<JumpAddr>()];
                     JumpAddr::from_be_bytes(bytes.try_into().unwrap())
                 }};
             }
@@ -609,7 +541,7 @@ impl<'source> VM<'source> {
                 Instruction::LoadConst => {
                     let register = register!();
                     let const_index = const_index!();
-                    let constant = self.consts[const_index as usize].clone();
+                    let constant = self.get_const(const_index);
                     self.set(register, constant.into());
                     2 + size_of::<ConstIndex>()
                 }
@@ -624,7 +556,8 @@ impl<'source> VM<'source> {
                     self.set(register, closure.into());
 
                     assert_closure!(write, self.get(register), closure, {
-                        for (i, upvalue) in self.chunks[chunk_index as usize]
+                        let chunk_for_upvalues = self.get_chunk(chunk_index).unwrap();
+                        for (i, upvalue) in chunk_for_upvalues
                             .upvalues
                             // NOTE: Need to clone here since we're borrowing `&mut self` below for
                             // `capture_upvalue`.
@@ -943,7 +876,7 @@ impl<'source> VM<'source> {
                         Instruction::SetTableConstKey => {
                             let table_r = register!(1);
                             let const_index = const_index!(2);
-                            let key = self.consts[const_index as usize].clone().into();
+                            let key = self.get_const(const_index).into();
                             let value_r = register!(2 + size_of::<ConstIndex>());
 
                             let table = self.get(table_r);
@@ -963,7 +896,7 @@ impl<'source> VM<'source> {
                         Instruction::SetTableUpvalConstKey => {
                             let upval_index = instr_param!(1);
                             let const_index = const_index!(2);
-                            let key = self.consts[const_index as usize].clone().into();
+                            let key = self.get_const(const_index).into();
                             let value_r = register!(2 + size_of::<ConstIndex>());
 
                             let table = self.get_upvalue(upval_index);
@@ -1044,7 +977,7 @@ impl<'source> VM<'source> {
                         Instruction::GetTableConstKey => {
                             let table_r = register!(2);
                             let const_index = const_index!(3);
-                            let key = self.consts[const_index as usize].clone().into();
+                            let key = self.get_const(const_index).into();
                             (self.get(table_r), key, 3 + size_of::<ConstIndex>())
                         }
                         Instruction::GetTableUpval => {
@@ -1058,7 +991,7 @@ impl<'source> VM<'source> {
                             let upval_index = instr_param!(2);
                             let const_index = const_index!(3);
                             let table = self.get_upvalue(upval_index);
-                            let key = self.consts[const_index as usize].clone().into();
+                            let key = self.get_const(const_index).into();
                             (table, key, 3 + size_of::<ConstIndex>())
                         }
                         _ => unreachable!(),
@@ -1101,7 +1034,7 @@ impl<'source> VM<'source> {
                                         let parent_frame_pointer = self.call_stack
                                             [self.call_stack_index - 1]
                                             .frame_pointer;
-                                        let chunk = &self.chunks[closure.chunk as usize];
+                                        let chunk = self.get_chunk(closure.chunk).unwrap();
                                         self.push_call_frame(
                                             CallFrameKind::for_chunk(closure.chunk),
                                             false,
@@ -1114,7 +1047,7 @@ impl<'source> VM<'source> {
                                             chunk.has_varargs,
                                             false,
                                         )?;
-                                        let chunk = &self.chunks[closure.chunk as usize];
+                                        let chunk = self.get_chunk(closure.chunk).unwrap();
                                         self.align_closure_args(
                                             chunk.num_params,
                                             1usize,
@@ -1218,7 +1151,7 @@ impl<'source> VM<'source> {
                         Some(Method::Closure(closure)) => {
                             let parent_frame_pointer =
                                 self.call_stack[self.call_stack_index - 1].frame_pointer;
-                            let chunk = &self.chunks[closure.chunk as usize];
+                            let chunk = self.get_chunk(closure.chunk).unwrap();
                             self.push_call_frame(
                                 CallFrameKind::for_chunk(closure.chunk),
                                 false,
@@ -1231,7 +1164,7 @@ impl<'source> VM<'source> {
                                 chunk.has_varargs,
                                 !is_single_return,
                             )?;
-                            let chunk = &self.chunks[closure.chunk as usize];
+                            let chunk = self.get_chunk(closure.chunk).unwrap();
                             self.align_closure_args(chunk.num_params, num_args, chunk.has_varargs);
 
                             continue;

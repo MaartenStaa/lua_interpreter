@@ -1,12 +1,13 @@
 use std::borrow::Cow;
 
 use crate::{
+    LuaState,
     error::lua_error,
     value::{LuaNumber, LuaString, LuaValue},
-    vm::{CallFrameKind, VM},
+    vm::CallFrameKind,
 };
 
-impl<'source> VM<'source> {
+impl LuaState {
     /// Get the number of arguments passed to the current function call.
     pub fn num_args(&self) -> usize {
         self.call_stack[self.call_stack_index - 1].num_args as usize
@@ -124,7 +125,7 @@ impl<'source> VM<'source> {
         let frame = &self.call_stack[self.call_stack_index - 1];
         let name: Cow<'_, str> = match frame.kind {
             CallFrameKind::Lua { chunk, .. } => {
-                Cow::Owned(self.chunks[chunk as usize].name.to_string())
+                Cow::Owned(self.get_chunk(chunk).unwrap().name.to_string())
             }
             CallFrameKind::Native { name } => Cow::Borrowed(name),
         };

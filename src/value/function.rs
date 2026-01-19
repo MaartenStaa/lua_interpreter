@@ -1,3 +1,3 @@
-use crate::{value::LuaValue, vm::VM};
+use crate::{LuaState, value::LuaValue};
 
-pub type NativeLuaFunction = fn(&mut VM) -> crate::Result<Vec<LuaValue>>;
+pub type NativeLuaFunction = fn(&mut LuaState) -> crate::Result<Vec<LuaValue>>;

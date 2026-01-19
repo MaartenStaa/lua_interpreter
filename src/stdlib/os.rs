@@ -3,8 +3,8 @@ use std::{ffi::OsString, sync::LazyLock};
 
 use crate::{
     error::lua_error,
+    state::LuaState,
     value::{LuaObject, LuaTable, LuaValue},
-    vm::VM,
 };
 
 pub static OS: LazyLock<LuaValue> = LazyLock::new(|| {
@@ -28,12 +28,12 @@ pub static OS: LazyLock<LuaValue> = LazyLock::new(|| {
 
 pub static CLOCK_START: LazyLock<ProcessTime> = LazyLock::new(ProcessTime::now);
 
-fn clock(_: &mut VM) -> crate::Result<Vec<LuaValue>> {
+fn clock(_: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
     Ok(vec![CLOCK_START.elapsed().as_secs_f64().into()])
 }
 
-fn getenv(vm: &mut VM) -> crate::Result<Vec<LuaValue>> {
-    let name = vm.arg_as_string(0)?;
+fn getenv(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+    let name = state.arg_as_string(0)?;
     let name_os_str = OsString::from(String::from_utf8_lossy(name.as_slice()).to_string());
 
     match std::env::var(name_os_str) {
@@ -42,8 +42,8 @@ fn getenv(vm: &mut VM) -> crate::Result<Vec<LuaValue>> {
     }
 }
 
-fn time(vm: &mut VM) -> crate::Result<Vec<LuaValue>> {
-    if vm.num_args() > 0 {
+fn time(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+    if state.num_args() > 0 {
         return Err(lua_error!(
             "passing arguments to 'os.time' is not yet supported"
         ));

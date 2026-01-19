@@ -3,8 +3,8 @@ use std::sync::LazyLock;
 use crate::{
     error::lua_error,
     macros::require_table,
+    state::LuaState,
     value::{LuaObject, LuaTable, LuaValue},
-    vm::VM,
 };
 
 pub static TABLE: LazyLock<LuaValue> = LazyLock::new(|| {
@@ -30,11 +30,11 @@ pub static TABLE: LazyLock<LuaValue> = LazyLock::new(|| {
     table.into()
 });
 
-fn concat(vm: &mut VM) -> crate::Result<Vec<LuaValue>> {
+fn concat(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
     // Temporary storage for number conversion, avoids needing to clone a string separator to match
     // the Vec<u8> type.
     let temp;
-    let sep = vm.try_arg(1);
+    let sep = state.try_arg(1);
     let sep = match sep.as_ref() {
         Some(LuaValue::String(s)) => Some(s.as_slice()),
         Some(LuaValue::Number(n)) => {
@@ -49,12 +49,12 @@ fn concat(vm: &mut VM) -> crate::Result<Vec<LuaValue>> {
             ));
         }
     };
-    let i = vm.try_arg_as_integer(2)?.unwrap_or(1);
-    let j = vm.try_arg_as_integer(3)?;
+    let i = state.try_arg_as_integer(2)?.unwrap_or(1);
+    let j = state.try_arg_as_integer(3)?;
 
     let mut result = Vec::new();
 
-    require_table!(vm.try_arg(0), "table.concat", 0, t, {
+    require_table!(state.try_arg(0), "table.concat", 0, t, {
         let j = j.unwrap_or_else(|| t.len() as i64);
         for k in i..=j {
             if k > i
@@ -80,17 +80,17 @@ fn concat(vm: &mut VM) -> crate::Result<Vec<LuaValue>> {
     Ok(vec![LuaValue::String(result.into())])
 }
 
-fn insert(vm: &mut VM) -> crate::Result<Vec<LuaValue>> {
-    require_table!(write, vm.try_arg(0), "table.insert", 0, table, {
+fn insert(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+    require_table!(write, state.try_arg(0), "table.insert", 0, table, {
         let len = table.len() as i64;
 
-        match vm.try_arg(1) {
+        match state.try_arg(1) {
             Some(LuaValue::Number(n)) => {
                 let i = n.integer_repr()?;
-                let value = vm.ensure_arg(2)?;
+                let value = state.ensure_arg(2)?;
 
                 if i < 1 || i > len + 1 {
-                    return vm.arg_err(1, "position out of bounds");
+                    return state.arg_err(1, "position out of bounds");
                 }
 
                 for k in (i..=len).rev() {
@@ -112,12 +112,12 @@ fn insert(vm: &mut VM) -> crate::Result<Vec<LuaValue>> {
     })
 }
 
-fn pack(vm: &mut VM) -> crate::Result<Vec<LuaValue>> {
+fn pack(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
     let mut result = LuaTable::new();
 
-    let len = vm.num_args();
+    let len = state.num_args();
     for i in 0..len {
-        let v = vm.arg(i);
+        let v = state.arg(i);
         result.insert((i as i64 + 1).into(), v);
     }
 
@@ -126,10 +126,10 @@ fn pack(vm: &mut VM) -> crate::Result<Vec<LuaValue>> {
     Ok(vec![result.into()])
 }
 
-fn unpack(vm: &mut VM) -> crate::Result<Vec<LuaValue>> {
-    require_table!(read, vm.try_arg(0), "table.unpack", 0, table, {
-        let i = vm.try_arg_as_integer(1)?.unwrap_or(1);
-        let j = vm.try_arg_as_integer(2)?.unwrap_or(table.len() as i64);
+fn unpack(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+    require_table!(read, state.try_arg(0), "table.unpack", 0, table, {
+        let i = state.try_arg_as_integer(1)?.unwrap_or(1);
+        let j = state.try_arg_as_integer(2)?.unwrap_or(table.len() as i64);
 
         let mut result = Vec::new();
         for k in i..=j {

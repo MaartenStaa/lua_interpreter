@@ -34,12 +34,12 @@ impl VMTracer {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn trace_instruction<'source>(
+    pub(crate) fn trace_instruction(
         &mut self,
         frame_stack: &[LuaValue],
         frame_varargs: &[LuaValue],
         frame_upvalues: Option<&HashMap<usize, Arc<RwLock<UpValue>>>>,
-        chunk: &Chunk<'source>,
+        chunk: &Chunk,
         chunk_index: u16,
         ip: usize,
         multres: usize,

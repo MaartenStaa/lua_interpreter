@@ -4,8 +4,8 @@ use std::sync::{LazyLock, RwLock};
 use crate::{
     error::lua_error,
     macros::get_number,
+    state::LuaState,
     value::{LuaNumber, LuaObject, LuaTable, LuaValue},
-    vm::VM,
 };
 use rand::{prelude::*, rng};
 
@@ -127,8 +127,8 @@ pub static MATH: LazyLock<LuaValue> = LazyLock::new(|| {
     math.into()
 });
 
-fn abs(vm: &mut VM) -> crate::Result<Vec<LuaValue>> {
-    let value = vm.arg_as_number(0)?;
+fn abs(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+    let value = state.arg_as_number(0)?;
 
     Ok(vec![match value {
         LuaNumber::Integer(i) => LuaValue::Number(LuaNumber::Integer(i.abs())),
@@ -136,8 +136,8 @@ fn abs(vm: &mut VM) -> crate::Result<Vec<LuaValue>> {
     }])
 }
 
-fn acos(vm: &mut VM) -> crate::Result<Vec<LuaValue>> {
-    let value = vm.arg_as_number(0)?;
+fn acos(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+    let value = state.arg_as_number(0)?;
 
     Ok(vec![match value {
         LuaNumber::Integer(i) => LuaValue::Number(LuaNumber::Float((i as f64).acos())),
@@ -145,8 +145,8 @@ fn acos(vm: &mut VM) -> crate::Result<Vec<LuaValue>> {
     }])
 }
 
-fn asin(vm: &mut VM) -> crate::Result<Vec<LuaValue>> {
-    let value = vm.arg_as_number(0)?;
+fn asin(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+    let value = state.arg_as_number(0)?;
 
     Ok(vec![match value {
         LuaNumber::Integer(i) => LuaValue::Number(LuaNumber::Float((i as f64).asin())),
@@ -154,13 +154,13 @@ fn asin(vm: &mut VM) -> crate::Result<Vec<LuaValue>> {
     }])
 }
 
-fn atan(vm: &mut VM) -> crate::Result<Vec<LuaValue>> {
-    let _ = vm.arg_as_number(0)?;
+fn atan(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+    let _ = state.arg_as_number(0)?;
     todo!("implement atan")
 }
 
-fn ceil(vm: &mut VM) -> crate::Result<Vec<LuaValue>> {
-    let value = vm.arg_as_number(0)?;
+fn ceil(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+    let value = state.arg_as_number(0)?;
 
     Ok(vec![match value {
         LuaNumber::Integer(i) => LuaValue::Number(LuaNumber::Integer(i)),
@@ -168,8 +168,8 @@ fn ceil(vm: &mut VM) -> crate::Result<Vec<LuaValue>> {
     }])
 }
 
-fn cos(vm: &mut VM) -> crate::Result<Vec<LuaValue>> {
-    let value = vm.arg_as_number(0)?;
+fn cos(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+    let value = state.arg_as_number(0)?;
 
     Ok(vec![match value {
         LuaNumber::Integer(i) => LuaValue::Number(LuaNumber::Float((i as f64).cos())),
@@ -177,8 +177,8 @@ fn cos(vm: &mut VM) -> crate::Result<Vec<LuaValue>> {
     }])
 }
 
-fn deg(vm: &mut VM) -> crate::Result<Vec<LuaValue>> {
-    let value = vm.arg_as_number(0)?;
+fn deg(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+    let value = state.arg_as_number(0)?;
 
     Ok(vec![match value {
         LuaNumber::Integer(i) => LuaValue::Number(LuaNumber::Float((i as f64).to_degrees())),
@@ -186,8 +186,8 @@ fn deg(vm: &mut VM) -> crate::Result<Vec<LuaValue>> {
     }])
 }
 
-fn exp(vm: &mut VM) -> crate::Result<Vec<LuaValue>> {
-    let value = vm.arg_as_number(0)?;
+fn exp(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+    let value = state.arg_as_number(0)?;
 
     Ok(vec![match value {
         LuaNumber::Integer(i) => LuaValue::Number(LuaNumber::Float((i as f64).exp())),
@@ -195,8 +195,8 @@ fn exp(vm: &mut VM) -> crate::Result<Vec<LuaValue>> {
     }])
 }
 
-fn floor(vm: &mut VM) -> crate::Result<Vec<LuaValue>> {
-    let value = vm.arg_as_number(0)?;
+fn floor(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+    let value = state.arg_as_number(0)?;
 
     Ok(vec![match value {
         LuaNumber::Integer(i) => LuaValue::Number(LuaNumber::Integer(i)),
@@ -204,14 +204,14 @@ fn floor(vm: &mut VM) -> crate::Result<Vec<LuaValue>> {
     }])
 }
 
-fn fmod(_: &mut VM) -> crate::Result<Vec<LuaValue>> {
+fn fmod(_: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
     todo!("implement fmod")
 }
 
-fn log(vm: &mut VM) -> crate::Result<Vec<LuaValue>> {
-    let x = vm.arg_as_number(0)?;
+fn log(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+    let x = state.arg_as_number(0)?;
     let base =
-        get_number!(vm.try_arg(1), "math.log", 1).unwrap_or(LuaNumber::Float(f64::consts::E));
+        get_number!(state.try_arg(1), "math.log", 1).unwrap_or(LuaNumber::Float(f64::consts::E));
 
     Ok(vec![match (x, base) {
         (LuaNumber::Integer(x), LuaNumber::Integer(base)) => {
@@ -229,11 +229,11 @@ fn log(vm: &mut VM) -> crate::Result<Vec<LuaValue>> {
     }])
 }
 
-fn max(vm: &mut VM) -> crate::Result<Vec<LuaValue>> {
+fn max(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
     let mut max = None;
 
-    for i in 0..vm.num_args() {
-        let number = vm.arg_as_number(i)?;
+    for i in 0..state.num_args() {
+        let number = state.arg_as_number(i)?;
 
         match (&max, number) {
             (None, n) => max = Some(n),
@@ -265,11 +265,11 @@ fn max(vm: &mut VM) -> crate::Result<Vec<LuaValue>> {
     ))])
 }
 
-fn min(vm: &mut VM) -> crate::Result<Vec<LuaValue>> {
+fn min(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
     let mut min = None;
 
-    for i in 0..vm.num_args() {
-        let number = vm.arg_as_number(i)?;
+    for i in 0..state.num_args() {
+        let number = state.arg_as_number(i)?;
 
         match (&min, number) {
             (None, n) => min = Some(n),
@@ -301,8 +301,8 @@ fn min(vm: &mut VM) -> crate::Result<Vec<LuaValue>> {
     ))])
 }
 
-fn modf(vm: &mut VM) -> crate::Result<Vec<LuaValue>> {
-    let value = vm.arg_as_number(0)?;
+fn modf(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+    let value = state.arg_as_number(0)?;
 
     Ok(match value {
         LuaNumber::Integer(i) => vec![
@@ -330,8 +330,8 @@ fn modf(vm: &mut VM) -> crate::Result<Vec<LuaValue>> {
     })
 }
 
-fn rad(vm: &mut VM) -> crate::Result<Vec<LuaValue>> {
-    let value = vm.arg_as_number(0)?;
+fn rad(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+    let value = state.arg_as_number(0)?;
 
     Ok(vec![match value {
         LuaNumber::Integer(i) => LuaValue::Number(LuaNumber::Float((i as f64).to_radians())),
@@ -342,15 +342,15 @@ fn rad(vm: &mut VM) -> crate::Result<Vec<LuaValue>> {
 static RANDOM: LazyLock<RwLock<StdRng>> =
     LazyLock::new(|| RwLock::new(StdRng::from_rng(&mut rng())));
 
-fn random(vm: &mut VM) -> crate::Result<Vec<LuaValue>> {
-    if vm.num_args() == 0 {
+fn random(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+    if state.num_args() == 0 {
         return Ok(vec![LuaValue::Number(LuaNumber::Float(
             RANDOM.write().unwrap().random_range(0f64..1f64),
         ))]);
     }
 
-    let m = vm.arg_as_integer(0)?;
-    if vm.num_args() == 1 {
+    let m = state.arg_as_integer(0)?;
+    if state.num_args() == 1 {
         return match m.partial_cmp(&0) {
             Some(std::cmp::Ordering::Less) => Err(lua_error!(
                 "bad argument #1 to 'math.random' (interval is empty)"
@@ -364,7 +364,7 @@ fn random(vm: &mut VM) -> crate::Result<Vec<LuaValue>> {
         };
     }
 
-    let n = vm.arg_as_integer(1)?;
+    let n = state.arg_as_integer(1)?;
     if n < m {
         return Err(lua_error!(
             "bad argument #2 to 'math.random' (interval is empty)"
@@ -379,13 +379,13 @@ fn random(vm: &mut VM) -> crate::Result<Vec<LuaValue>> {
     ))])
 }
 
-fn randomseed(vm: &mut VM) -> crate::Result<Vec<LuaValue>> {
-    let x = get_number!(vm.try_arg(0), "math.randomseed").unwrap_or_else(|| {
+fn randomseed(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+    let x = get_number!(state.try_arg(0), "math.randomseed").unwrap_or_else(|| {
         LuaNumber::Integer(i64::from_le_bytes(
             RANDOM.write().unwrap().next_u64().to_le_bytes(),
         ))
     });
-    let y = get_number!(vm.try_arg(1), "math.randomseed", 1).unwrap_or(LuaNumber::Integer(0));
+    let y = get_number!(state.try_arg(1), "math.randomseed", 1).unwrap_or(LuaNumber::Integer(0));
 
     macro_rules! bytes {
         ($x:expr) => {
@@ -408,8 +408,8 @@ fn randomseed(vm: &mut VM) -> crate::Result<Vec<LuaValue>> {
     Ok(vec![LuaValue::Number(x), LuaValue::Number(y)])
 }
 
-fn sin(vm: &mut VM) -> crate::Result<Vec<LuaValue>> {
-    let value = vm.arg_as_number(0)?;
+fn sin(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+    let value = state.arg_as_number(0)?;
 
     Ok(vec![match value {
         LuaNumber::Integer(i) => LuaValue::Number(LuaNumber::Float((i as f64).sin())),
@@ -417,8 +417,8 @@ fn sin(vm: &mut VM) -> crate::Result<Vec<LuaValue>> {
     }])
 }
 
-fn sqrt(vm: &mut VM) -> crate::Result<Vec<LuaValue>> {
-    let value = vm.arg_as_number(0)?;
+fn sqrt(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+    let value = state.arg_as_number(0)?;
 
     Ok(vec![match value {
         LuaNumber::Integer(i) => LuaValue::Number(LuaNumber::Float((i as f64).sqrt())),
@@ -426,8 +426,8 @@ fn sqrt(vm: &mut VM) -> crate::Result<Vec<LuaValue>> {
     }])
 }
 
-fn tan(vm: &mut VM) -> crate::Result<Vec<LuaValue>> {
-    let value = vm.arg_as_number(0)?;
+fn tan(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+    let value = state.arg_as_number(0)?;
 
     Ok(vec![match value {
         LuaNumber::Integer(i) => LuaValue::Number(LuaNumber::Float((i as f64).tan())),
@@ -435,8 +435,8 @@ fn tan(vm: &mut VM) -> crate::Result<Vec<LuaValue>> {
     }])
 }
 
-fn tointeger(vm: &mut VM) -> crate::Result<Vec<LuaValue>> {
-    match vm.try_arg(0) {
+fn tointeger(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+    match state.try_arg(0) {
         Some(LuaValue::Number(LuaNumber::Integer(i))) => {
             Ok(vec![LuaValue::Number(LuaNumber::Integer(i))])
         }
@@ -454,8 +454,8 @@ fn tointeger(vm: &mut VM) -> crate::Result<Vec<LuaValue>> {
     }
 }
 
-fn r#type(vm: &mut VM) -> crate::Result<Vec<LuaValue>> {
-    match vm.try_arg(0) {
+fn r#type(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+    match state.try_arg(0) {
         Some(LuaValue::Number(LuaNumber::Integer(_))) => Ok(vec!["integer".into()]),
         Some(LuaValue::Number(LuaNumber::Float(_))) => Ok(vec!["float".into()]),
         _ => Ok(vec![LuaValue::Nil]),
@@ -463,9 +463,9 @@ fn r#type(vm: &mut VM) -> crate::Result<Vec<LuaValue>> {
 }
 
 // Returns a boolean, true if and only if integer m is below integer n when they are compared as unsigned integers.
-fn ult(vm: &mut VM) -> crate::Result<Vec<LuaValue>> {
-    let a = vm.arg_as_number(0)?;
-    let b = vm.arg_as_number(1)?;
+fn ult(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+    let a = state.arg_as_number(0)?;
+    let b = state.arg_as_number(1)?;
 
     match (a, b) {
         (LuaNumber::Integer(a), LuaNumber::Integer(b)) if a >= 0 && b >= 0 => {

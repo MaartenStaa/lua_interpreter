@@ -2,11 +2,11 @@ use std::sync::LazyLock;
 
 use crate::{
     macros::require_closure,
+    state::LuaState,
     value::{
         LuaObject, LuaTable, LuaValue,
         callable::{Callable, Method},
     },
-    vm::VM,
 };
 
 pub static DEBUG: LazyLock<LuaValue> = LazyLock::new(|| {
@@ -24,9 +24,9 @@ pub static DEBUG: LazyLock<LuaValue> = LazyLock::new(|| {
     debug.into()
 });
 
-fn getupvalue(vm: &mut VM) -> crate::Result<Vec<LuaValue>> {
+fn getupvalue(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
     // TODO: Will produce error "value expected" rather than "function expected, got no value"
-    let value = vm.ensure_arg(0)?;
+    let value = state.ensure_arg(0)?;
     let callable: Result<Callable, _> = value.clone().try_into();
     let Ok(callable) = callable else {
         return Err(crate::error::lua_error!(
@@ -35,7 +35,7 @@ fn getupvalue(vm: &mut VM) -> crate::Result<Vec<LuaValue>> {
         ));
     };
 
-    let n = vm.arg_as_integer(1)? - 1;
+    let n = state.arg_as_integer(1)? - 1;
 
     let Method::Closure(closure) = callable.method else {
         return Ok(vec![]);
@@ -47,7 +47,7 @@ fn getupvalue(vm: &mut VM) -> crate::Result<Vec<LuaValue>> {
 
     if let Some(upvalue) = &closure.upvalues.get(&(n as usize)) {
         let chunk = closure.chunk;
-        let name = vm.get_chunk(chunk).expect("invalid chunk").upvalues[n as usize]
+        let name = state.get_chunk(chunk).expect("invalid chunk").upvalues[n as usize]
             .name
             .clone()
             .unwrap_or_else(|| b"?".into());
@@ -58,9 +58,9 @@ fn getupvalue(vm: &mut VM) -> crate::Result<Vec<LuaValue>> {
     }
 }
 
-fn upvalueid(vm: &mut VM) -> crate::Result<Vec<LuaValue>> {
-    require_closure!(vm.try_arg(0), "debug.upvalueid", closure, {
-        let n = vm.arg_as_integer(1)? - 1;
+fn upvalueid(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+    require_closure!(state.try_arg(0), "debug.upvalueid", closure, {
+        let n = state.arg_as_integer(1)? - 1;
         if n < 0 || n as usize >= closure.upvalues.len() {
             return Ok(vec![LuaValue::Nil]);
         }

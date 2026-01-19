@@ -12,9 +12,11 @@ mod macros;
 mod math;
 pub mod optimizer;
 pub mod parser;
+pub mod state;
 mod stdlib;
 pub mod token;
 pub mod value;
 pub mod vm;
 
 pub use error::Result;
+pub use state::{GlobalState, LuaState, ThreadStatus};
