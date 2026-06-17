@@ -11,14 +11,14 @@ macro_rules! assert_closure(
         }
     };
     (write, $value:expr, $closure:ident, $tt:stmt) => {
-        match $value {
-            LuaValue::Object(o) => match &mut*o.write().unwrap() {
-                LuaObject::Closure($closure) => {
-                    $tt
-                },
-                _ => unreachable!("assert_closure!() called on non-function object"),
-            },
-            _ => unreachable!("assert_closure!() called on non-function value"),
+        let v = $value;
+        if v.is_object()
+            && let o = unsafe { v.as_object() }
+            && let LuaObject::Closure($closure) = &mut *o.write().unwrap()
+        {
+            $tt
+        } else {
+            unreachable!("assert_closure!() called on non-function value")
         }
     };
     ($value:expr, $closure:ident, $tt:stmt) => {
@@ -28,9 +28,10 @@ macro_rules! assert_closure(
 
 macro_rules! assert_string {
     ($value:expr) => {
-        match $value {
-            LuaValue::String(s) => s,
-            _ => unreachable!("assert_string!() called on non-string value"),
+        if $value.is_string() {
+            unsafe { $value.as_string() }
+        } else {
+            unreachable!("assert_string!() called on non-string value")
         }
     };
 }
@@ -59,15 +60,19 @@ macro_rules! assert_table_object(
 
 macro_rules! assert_table(
     (read, $value:expr, $table:ident, $tt:stmt) => {
-        match $value {
-            LuaValue::Object(o) => $crate::macros::assert_table_object!(read, o, $table, $tt),
-            _ => unreachable!("assert_object!() called on non-object value"),
+        if $value.is_object() {
+            let o = unsafe { $value.as_object() };
+            $crate::macros::assert_table_object!(read, o, $table, $tt)
+        } else {
+            unreachable!("assert_object!() called on non-object value")
         }
     };
     (write, $value:expr, $table:ident, $tt:stmt) => {
-        match $value {
-            LuaValue::Object(o) => $crate::macros::assert_table_object!(write, o, $table, $tt),
-            _ => unreachable!("assert_object!() called on non-object value"),
+        if $value.is_object() {
+            let o = unsafe { $value.as_object() };
+            $crate::macros::assert_table_object!(write, o, $table, $tt)
+        } else {
+            unreachable!("assert_object!() called on non-object value")
         }
     };
     ($value:expr, $table:ident, $tt:stmt) => {
@@ -78,14 +83,14 @@ macro_rules! assert_table(
 macro_rules! require_closure {
     ($values:expr, $name:expr, $index:expr, $closure:ident, $tt:tt) => {
         match $values.get($index) {
-            Some(LuaValue::Object(o)) => match &*o.read().unwrap() {
+            Some(v) if v.is_table() => match &*unsafe { v.as_object() }.read().unwrap() {
                 LuaObject::Closure($closure) => $tt,
-                _ => {
+                o => {
                     return Err($crate::error::lua_error!(
                         "bad argument #{} to '{}', expected function, got {}",
                         $index + 1,
                         $name,
-                        o.read().unwrap().type_name()
+                        o.type_name()
                     ))
                 }
             },
@@ -114,8 +119,9 @@ macro_rules! require_closure {
 macro_rules! get_number {
     ($values:expr, $name:expr, $index:expr) => {
         match $values.get($index) {
-            Some(LuaValue::Number(n)) => Some(n),
-            Some(LuaValue::Nil) | None => None,
+            Some(v) if v.is_number() => Some(unsafe { v.as_number() }),
+            Some(v) if v.is_nil() => None,
+            None => None,
             Some(v) => {
                 return Err($crate::error::lua_error!(
                     "bad argument #{} to '{}', expected number, got {}",
@@ -134,7 +140,7 @@ macro_rules! get_number {
 macro_rules! require_number {
     ($values:expr, $name:expr, $index:expr) => {
         match $values.get($index) {
-            Some(LuaValue::Number(n)) => n,
+            Some(v) if v.is_number() => unsafe { v.as_number() },
             Some(v) => {
                 return Err($crate::error::lua_error!(
                     "bad argument #{} to '{}', expected number, got {}",
@@ -160,7 +166,7 @@ macro_rules! require_number {
 macro_rules! get_string {
     ($values:expr, $name:expr, $index:expr) => {
         match $values.get($index) {
-            Some(LuaValue::String(s)) => Some(s),
+            Some(v) if v.is_string() => Some(unsafe { v.as_string() }),
             Some(v) => {
                 return Err($crate::error::lua_error!(
                     "bad argument #{} to '{}', expected string, got {}",
@@ -180,7 +186,7 @@ macro_rules! get_string {
 macro_rules! require_string {
     ($input:expr, $name:expr, $i:expr) => {
         match $input.get($i) {
-            Some(LuaValue::String(s)) => s,
+            Some(v) if v.is_string() => unsafe { v.as_string() },
             Some(v) => {
                 return Err($crate::error::lua_error!(
                     "bad argument #{n} to '{name}' (string expected, got {type_name})",
@@ -206,14 +212,14 @@ macro_rules! require_string {
 macro_rules! require_table {
     (read, $values:expr, $name:expr, $index:expr, $table:ident, $tt:tt) => {
         match $values.get($index) {
-            Some(LuaValue::Object(o)) => match &*o.read().unwrap() {
+            Some(v) if v.is_object() => match &*unsafe { v.as_object() }.read().unwrap() {
                 LuaObject::Table($table) => $tt,
-                _ => {
+                o => {
                     return Err($crate::error::lua_error!(
                         "bad argument #{n} to '{name}' (table expected, got {actual_type})",
                         n = $index + 1,
                         name = $name,
-                        actual_type = o.read().unwrap().type_name()
+                        actual_type = o.type_name()
                     ));
                 }
             },
@@ -236,14 +242,14 @@ macro_rules! require_table {
     };
     (write, $values:expr, $name:expr, $index:expr, $table:ident, $tt:tt) => {
         match $values.get($index) {
-            Some(LuaValue::Object(o)) => match &mut *o.write().unwrap() {
+            Some(v) if v.is_table() => match &mut *unsafe { v.as_object() }.write().unwrap() {
                 LuaObject::Table($table) => $tt,
-                _ => {
+                o => {
                     return Err($crate::error::lua_error!(
                         "bad argument #{n} to '{name}' (table expected, got {actual_type})",
                         n = $index + 1,
                         name = $name,
-                        actual_type = o.read().unwrap().type_name()
+                        actual_type = o.type_name()
                     ));
                 }
             },
@@ -275,17 +281,17 @@ macro_rules! require_table {
 macro_rules! require_userdata {
     (read, $values:expr, $name:expr, $index:expr, $userdata:ident, $tt:stmt) => {
         match $values.get($index) {
-            Some(LuaValue::Object(o)) => match &*o.read().unwrap() {
+            Some(v) if v.is_object() => match &*unsafe { v.as_object() }.read().unwrap() {
                 LuaObject::UserData($userdata) => {
                     $tt
                 }
-                _ => {
+                o => {
                     return Err($crate::error::lua_error!(
                         "bad argument #{n} to '{name}' ({type_name} expected, got {actual_type})",
                         n = $index + 1,
                         name = $name,
                         type_name = stringify!($type),
-                        actual_type = o.read().unwrap().type_name()
+                        actual_type = o.type_name()
                     ));
                 }
             },
@@ -310,17 +316,17 @@ macro_rules! require_userdata {
     };
     (write, $values:expr, $name:expr, $index:expr, $userdata:ident, $tt:stmt) => {
         match $values.get($index) {
-            Some(LuaValue::Object(o)) => match &mut *o.write().unwrap() {
+            Some(v) if v.is_object() => match &mut *unsafe { v.as_object() }.write().unwrap() {
                 LuaObject::UserData($userdata) => {
                     $tt
                 },
-                _ => {
+                o => {
                     return Err($crate::error::lua_error!(
                         "bad argument #{n} to '{name}' ({type_name} expected, got {actual_type})",
                         n = $index + 1,
                         name = $name,
                         type_name = stringify!($type),
-                        actual_type = o.read().unwrap().type_name()
+                        actual_type = o.type_name()
                     ));
                 }
             },

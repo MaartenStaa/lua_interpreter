@@ -11,49 +11,67 @@ pub(crate) static GLOBAL_NUMBER_METATABLE: LazyLock<LuaValue> =
 pub(crate) static GLOBAL_STRING_METATABLE: LazyLock<LuaValue> =
     LazyLock::new(|| super::string::get_string_metatable().into());
 
-pub(crate) static ADD_KEY: LazyLock<LuaValue> = LazyLock::new(|| LuaValue::String(b"__add".into()));
-pub(crate) static SUB_KEY: LazyLock<LuaValue> = LazyLock::new(|| LuaValue::String(b"__sub".into()));
-pub(crate) static MUL_KEY: LazyLock<LuaValue> = LazyLock::new(|| LuaValue::String(b"__mul".into()));
-pub(crate) static DIV_KEY: LazyLock<LuaValue> = LazyLock::new(|| LuaValue::String(b"__div".into()));
-pub(crate) static MOD_KEY: LazyLock<LuaValue> = LazyLock::new(|| LuaValue::String(b"__mod".into()));
-pub(crate) static POW_KEY: LazyLock<LuaValue> = LazyLock::new(|| LuaValue::String(b"__pow".into()));
-pub(crate) static UNM_KEY: LazyLock<LuaValue> = LazyLock::new(|| LuaValue::String(b"__unm".into()));
+pub(crate) static ADD_KEY: LazyLock<LuaValue> =
+    LazyLock::new(|| LuaValue::from_string(b"__add".into()));
+pub(crate) static SUB_KEY: LazyLock<LuaValue> =
+    LazyLock::new(|| LuaValue::from_string(b"__sub".into()));
+pub(crate) static MUL_KEY: LazyLock<LuaValue> =
+    LazyLock::new(|| LuaValue::from_string(b"__mul".into()));
+pub(crate) static DIV_KEY: LazyLock<LuaValue> =
+    LazyLock::new(|| LuaValue::from_string(b"__div".into()));
+pub(crate) static MOD_KEY: LazyLock<LuaValue> =
+    LazyLock::new(|| LuaValue::from_string(b"__mod".into()));
+pub(crate) static POW_KEY: LazyLock<LuaValue> =
+    LazyLock::new(|| LuaValue::from_string(b"__pow".into()));
+pub(crate) static UNM_KEY: LazyLock<LuaValue> =
+    LazyLock::new(|| LuaValue::from_string(b"__unm".into()));
 pub(crate) static IDIV_KEY: LazyLock<LuaValue> =
-    LazyLock::new(|| LuaValue::String(b"__idiv".into()));
+    LazyLock::new(|| LuaValue::from_string(b"__idiv".into()));
 pub(crate) static BAND_KEY: LazyLock<LuaValue> =
-    LazyLock::new(|| LuaValue::String(b"__band".into()));
-pub(crate) static BOR_KEY: LazyLock<LuaValue> = LazyLock::new(|| LuaValue::String(b"__bor".into()));
+    LazyLock::new(|| LuaValue::from_string(b"__band".into()));
+pub(crate) static BOR_KEY: LazyLock<LuaValue> =
+    LazyLock::new(|| LuaValue::from_string(b"__bor".into()));
 pub(crate) static BXOR_KEY: LazyLock<LuaValue> =
-    LazyLock::new(|| LuaValue::String(b"__bxor".into()));
+    LazyLock::new(|| LuaValue::from_string(b"__bxor".into()));
 pub(crate) static BNOT_KEY: LazyLock<LuaValue> =
-    LazyLock::new(|| LuaValue::String(b"__bnot".into()));
-pub(crate) static SHL_KEY: LazyLock<LuaValue> = LazyLock::new(|| LuaValue::String(b"__shl".into()));
-pub(crate) static SHR_KEY: LazyLock<LuaValue> = LazyLock::new(|| LuaValue::String(b"__shr".into()));
+    LazyLock::new(|| LuaValue::from_string(b"__bnot".into()));
+pub(crate) static SHL_KEY: LazyLock<LuaValue> =
+    LazyLock::new(|| LuaValue::from_string(b"__shl".into()));
+pub(crate) static SHR_KEY: LazyLock<LuaValue> =
+    LazyLock::new(|| LuaValue::from_string(b"__shr".into()));
 pub(crate) static CONCAT_KEY: LazyLock<LuaValue> =
-    LazyLock::new(|| LuaValue::String(b"__concat".into()));
-pub(crate) static LEN_KEY: LazyLock<LuaValue> = LazyLock::new(|| LuaValue::String(b"__len".into()));
-pub(crate) static EQ_KEY: LazyLock<LuaValue> = LazyLock::new(|| LuaValue::String(b"__eq".into()));
-pub(crate) static LT_KEY: LazyLock<LuaValue> = LazyLock::new(|| LuaValue::String(b"__lt".into()));
-pub(crate) static LE_KEY: LazyLock<LuaValue> = LazyLock::new(|| LuaValue::String(b"__le".into()));
+    LazyLock::new(|| LuaValue::from_string(b"__concat".into()));
+pub(crate) static LEN_KEY: LazyLock<LuaValue> =
+    LazyLock::new(|| LuaValue::from_string(b"__len".into()));
+pub(crate) static EQ_KEY: LazyLock<LuaValue> =
+    LazyLock::new(|| LuaValue::from_string(b"__eq".into()));
+pub(crate) static LT_KEY: LazyLock<LuaValue> =
+    LazyLock::new(|| LuaValue::from_string(b"__lt".into()));
+pub(crate) static LE_KEY: LazyLock<LuaValue> =
+    LazyLock::new(|| LuaValue::from_string(b"__le".into()));
 pub(crate) static INDEX_KEY: LazyLock<LuaValue> =
-    LazyLock::new(|| LuaValue::String(b"__index".into()));
+    LazyLock::new(|| LuaValue::from_string(b"__index".into()));
 pub(crate) static NEWINDEX_KEY: LazyLock<LuaValue> =
-    LazyLock::new(|| LuaValue::String(b"__newindex".into()));
+    LazyLock::new(|| LuaValue::from_string(b"__newindex".into()));
 pub(crate) static CALL_KEY: LazyLock<LuaValue> =
-    LazyLock::new(|| LuaValue::String(b"__call".into()));
+    LazyLock::new(|| LuaValue::from_string(b"__call".into()));
 pub(crate) static CLOSE_KEY: LazyLock<LuaValue> =
-    LazyLock::new(|| LuaValue::String(b"__close".into()));
+    LazyLock::new(|| LuaValue::from_string(b"__close".into()));
 pub(crate) static PAIRS_KEY: LazyLock<LuaValue> =
-    LazyLock::new(|| LuaValue::String(b"__pairs".into()));
+    LazyLock::new(|| LuaValue::from_string(b"__pairs".into()));
 
 impl LuaValue {
     pub fn get_metatable(&self) -> Option<LuaValue> {
-        match self {
-            LuaValue::Boolean(_) => Some(GLOBAL_BOOLEAN_METATABLE.clone()),
-            LuaValue::Number(_) => Some(GLOBAL_NUMBER_METATABLE.clone()),
-            LuaValue::String(_) => Some(GLOBAL_STRING_METATABLE.clone()),
-            LuaValue::Object(o) => o.read().unwrap().get_metatable(),
-            _ => None,
+        if self.is_bool() {
+            Some(GLOBAL_BOOLEAN_METATABLE.clone())
+        } else if self.is_number() {
+            Some(GLOBAL_NUMBER_METATABLE.clone())
+        } else if self.is_string() {
+            Some(GLOBAL_STRING_METATABLE.clone())
+        } else if self.is_object() {
+            unsafe { self.as_object() }.read().unwrap().get_metatable()
+        } else {
+            None
         }
     }
 
@@ -86,15 +104,17 @@ pub fn handle(
     assert!(!input.is_empty());
 
     for value in input.iter() {
-        if let Some(LuaValue::Object(o)) = value.get_metavalue(key) {
-            match &*o.read().unwrap() {
+        if let Some(mv) = value.get_metavalue(key)
+            && mv.is_object()
+        {
+            match &*unsafe { mv.as_object() }.read().unwrap() {
                 LuaObject::Closure(c) => {
                     let mut result = match vm.run_closure(c.clone(), input) {
                         Ok(value) => value,
                         Err(e) => return Some(Err(e)),
                     };
                     return Some(Ok(if result.is_empty() {
-                        LuaValue::Nil
+                        LuaValue::NIL
                     } else {
                         result.swap_remove(0)
                     }));
@@ -105,7 +125,7 @@ pub fn handle(
                         Err(e) => return Some(Err(e)),
                     };
                     return Some(Ok(if result.is_empty() {
-                        LuaValue::Nil
+                        LuaValue::NIL
                     } else {
                         result.swap_remove(0)
                     }));

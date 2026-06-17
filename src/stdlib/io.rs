@@ -76,9 +76,9 @@ fn file_index(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> 
         require_userdata_type!(userdata, "file:__index", 0, File, file, _metatable, {
             Ok(vec![
                 file.methods
-                    .get(input.get(1).unwrap_or(&LuaValue::Nil))
+                    .get(input.get(1).unwrap_or(&LuaValue::NIL))
                     .cloned()
-                    .unwrap_or(LuaValue::Nil),
+                    .unwrap_or(LuaValue::NIL),
             ])
         })
     })
@@ -88,20 +88,18 @@ fn file_write(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> 
     require_userdata!(write, input, "file:write", 0, userdata, {
         require_userdata_type!(write, userdata, "file:write", 0, File, file, _metatable, {
             for (i, value) in input.iter().enumerate().skip(1) {
-                match value {
-                    LuaValue::String(s) => {
-                        file.handle.write_all(s).unwrap();
-                    }
-                    LuaValue::Number(n) => {
-                        file.handle.write_all(n.to_string().as_bytes()).unwrap();
-                    }
-                    _ => {
-                        return Err(lua_error!(
-                            "bad argument #{} to 'write' (string or number expected, got {})",
-                            i + 1,
-                            value.type_name()
-                        ));
-                    }
+                if value.is_string() {
+                    file.handle.write_all(unsafe { value.as_string() }).unwrap();
+                } else if value.is_number() {
+                    file.handle
+                        .write_all(unsafe { value.as_number() }.to_string().as_bytes())
+                        .unwrap();
+                } else {
+                    return Err(lua_error!(
+                        "bad argument #{} to 'write' (string or number expected, got {})",
+                        i + 1,
+                        value.type_name()
+                    ));
                 }
             }
 

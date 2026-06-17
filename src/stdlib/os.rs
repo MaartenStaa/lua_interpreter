@@ -39,7 +39,7 @@ fn getenv(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
 
     match std::env::var(name_os_str) {
         Ok(value) => Ok(vec![value.into()]),
-        Err(_) => Ok(vec![LuaValue::Nil]),
+        Err(_) => Ok(vec![LuaValue::NIL]),
     }
 }
 

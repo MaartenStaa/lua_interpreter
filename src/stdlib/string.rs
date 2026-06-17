@@ -203,10 +203,10 @@ fn pattern_to_regex(pattern: &[u8]) -> crate::Result<LuaPattern> {
 fn byte(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     let s = require_string!(input, "string.byte");
     let i = get_number!(input, "string.byte", 1)
-        .unwrap_or(&LuaNumber::Integer(1))
+        .unwrap_or(LuaNumber::Integer(1))
         .integer_repr()?;
     let j = get_number!(input, "string.byte", 2)
-        .unwrap_or(&LuaNumber::Integer(i))
+        .unwrap_or(LuaNumber::Integer(i))
         .integer_repr()?;
 
     let i = match i.cmp(&0) {
@@ -232,7 +232,7 @@ fn byte(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
         .map(|v| (v as i64).into())
         .collect();
     Ok(if result.is_empty() {
-        vec![LuaValue::Nil]
+        vec![LuaValue::NIL]
     } else {
         result
     })
@@ -251,16 +251,17 @@ fn char(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
         str.push(i as u8);
     }
 
-    Ok(vec![LuaValue::String(str.into())])
+    Ok(vec![LuaValue::from_string(str.into())])
 }
 
 fn find(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     let s = require_string!(input, "string.find");
     let pattern = require_string!(input, "string.find", 1);
     let init = match input.get(2) {
-        Some(LuaValue::Number(LuaNumber::Integer(i))) => *i,
-        Some(LuaValue::Number(f @ LuaNumber::Float(_))) => f.integer_repr()?,
-        Some(LuaValue::Nil) | None => 1,
+        Some(v) if v.is_integer() => unsafe { v.as_integer() },
+        Some(v) if v.is_float() => unsafe { v.as_number() }.integer_repr()?,
+        Some(v) if v.is_nil() => 1,
+        None => 1,
         Some(v) => {
             return Err(lua_error!(
                 "bad argument #3 to 'find' (number expected, got {type_name})",
@@ -276,19 +277,19 @@ fn find(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     };
 
     if init > s.len() as i64 + 1 {
-        return Ok(vec![LuaValue::Nil]);
+        return Ok(vec![LuaValue::NIL]);
     }
 
     if pattern.is_empty() {
         return Ok(vec![
-            LuaValue::Number(LuaNumber::Integer(init)),
-            LuaValue::Number(LuaNumber::Integer(init - 1)),
+            LuaValue::from_integer(init),
+            LuaValue::from_integer(init - 1),
         ]);
     }
 
     let s = &s[(init - 1) as usize..];
 
-    let plain = input.get(3).is_some_and(|v| v.as_boolean());
+    let plain = input.get(3).is_some_and(|v| v.cast_to_bool());
     let pattern = if plain {
         LuaPattern::Plain(pattern.clone())
     } else {
@@ -304,11 +305,11 @@ fn find(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     Ok(match start_end {
         Some((start, end)) => {
             vec![
-                LuaValue::Number(LuaNumber::Integer(start + init)),
-                LuaValue::Number(LuaNumber::Integer(end + init - 1)),
+                LuaValue::from_integer(start + init),
+                LuaValue::from_integer(end + init - 1),
             ]
         }
-        None => vec![LuaValue::Nil],
+        None => vec![LuaValue::NIL],
     })
 }
 
@@ -338,16 +339,17 @@ fn format(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
 
         let formatted_value = match format {
             's' => v.to_string(),
-            'd' => match v {
-                LuaValue::Number(n) => n.to_string(),
-                _ => {
+            'd' => {
+                if v.is_number() {
+                    unsafe { v.as_number() }.to_string()
+                } else {
                     return Err(lua_error!(
                         "bad argument #{} to 'format' (number expected, got {type_name})",
                         input.iter().position(|x| x == v).unwrap() + 1,
                         type_name = v.type_name()
                     ));
                 }
-            },
+            }
             other => return Err(lua_error!("unsupported format specifier: {:?}", other)),
         };
 
@@ -355,15 +357,13 @@ fn format(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
         format_from = index + formatted_value.len();
     }
 
-    Ok(vec![LuaValue::String(format_string)])
+    Ok(vec![LuaValue::from_string(format_string)])
 }
 
 fn len(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     let input = require_string!(input, "string.len");
 
-    Ok(vec![LuaValue::Number(LuaNumber::Integer(
-        input.len() as i64
-    ))])
+    Ok(vec![LuaValue::from_integer(input.len() as i64)])
 }
 
 fn lower(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
@@ -371,7 +371,7 @@ fn lower(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     let string = String::from_utf8_lossy(input);
     let lower = string.to_lowercase();
 
-    Ok(vec![LuaValue::String(lower.into_bytes().into())])
+    Ok(vec![LuaValue::from_string(lower.into_bytes().into())])
 }
 
 fn r#match(_: &mut VM, mut input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
@@ -382,10 +382,10 @@ fn r#match(_: &mut VM, mut input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>>
     let pattern = pattern_to_regex(pattern)?;
     match pattern {
         LuaPattern::Plain(pattern) => match s.find(&pattern) {
-            Some(start) => Ok(vec![LuaValue::String(
+            Some(start) => Ok(vec![LuaValue::from_string(
                 s[start..start + pattern.len()].into(),
             )]),
-            None => Ok(vec![LuaValue::Nil]),
+            None => Ok(vec![LuaValue::NIL]),
         },
         LuaPattern::Regex(regex) => {
             let captures = regex.captures(s);
@@ -393,12 +393,12 @@ fn r#match(_: &mut VM, mut input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>>
             match captures {
                 Some(captures) => {
                     if let Some(capture) = captures.get(0) {
-                        Ok(vec![LuaValue::String(capture.as_bytes().into())])
+                        Ok(vec![LuaValue::from_string(capture.as_bytes().into())])
                     } else {
                         Ok(vec![input.swap_remove(0)])
                     }
                 }
-                None => Ok(vec![LuaValue::Nil]),
+                None => Ok(vec![LuaValue::NIL]),
             }
         }
     }
@@ -411,7 +411,7 @@ fn rep(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
         .map(|s| s.as_slice())
         .unwrap_or(b"");
     if n < 1 {
-        return Ok(vec![LuaValue::String(LuaString::new())]);
+        return Ok(vec![LuaValue::from_string(LuaString::new())]);
     }
 
     let mut result = s.clone();
@@ -420,7 +420,7 @@ fn rep(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
         result.extend_from_slice(s);
     }
 
-    Ok(vec![LuaValue::String(result)])
+    Ok(vec![LuaValue::from_string(result)])
 }
 
 fn reverse(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
@@ -428,7 +428,7 @@ fn reverse(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
 
     let mut reversed = input.clone();
     reversed.reverse();
-    Ok(vec![LuaValue::String(reversed)])
+    Ok(vec![LuaValue::from_string(reversed)])
 }
 
 fn pack(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
@@ -565,7 +565,7 @@ fn pack(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
         }
     }
 
-    Ok(vec![LuaValue::String(result)])
+    Ok(vec![LuaValue::from_string(result)])
 }
 
 fn packsize(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
@@ -614,15 +614,15 @@ fn packsize(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
         item += 1;
     }
 
-    Ok(vec![LuaValue::Number(LuaNumber::Integer(result as i64))])
+    Ok(vec![LuaValue::from_integer(result as i64)])
 }
 
 fn sub(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     let s = require_string!(input, "string.sub");
     let i = require_number!(input, "string.sub", 1).integer_repr()?;
     let j = match input.get(2) {
-        Some(LuaValue::Number(LuaNumber::Integer(i))) => *i,
-        Some(LuaValue::Number(f @ LuaNumber::Float(_))) => f.integer_repr()?,
+        Some(v) if v.is_integer() => unsafe { v.as_integer() },
+        Some(v) if v.is_float() => unsafe { v.as_number() }.integer_repr()?,
         Some(v) => {
             return Err(lua_error!(
                 "bad argument #3 to 'string.sub' (number expected, got {type_name})",
@@ -642,7 +642,7 @@ fn sub(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
         Ordering::Less => s.len() as i64 + j + 1,
         Ordering::Greater if j >= s.len() as i64 => s.len() as i64,
         Ordering::Greater => j,
-        Ordering::Equal => return Ok(vec![LuaValue::String(LuaString::new())]),
+        Ordering::Equal => return Ok(vec![LuaValue::from_string(LuaString::new())]),
     };
     let j = if j > s.len() as i64 {
         s.len() as i64
@@ -651,10 +651,10 @@ fn sub(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     };
 
     if i > j {
-        return Ok(vec![LuaValue::String(LuaString::new())]);
+        return Ok(vec![LuaValue::from_string(LuaString::new())]);
     }
 
-    Ok(vec![LuaValue::String(
+    Ok(vec![LuaValue::from_string(
         s[(i - 1) as usize..=(j - 1) as usize].into(),
     )])
 }
@@ -775,7 +775,7 @@ fn unpack(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
                     ));
                 }
 
-                result.push(LuaValue::String(s[pos..pos + size].into()));
+                result.push(LuaValue::from_string(s[pos..pos + size].into()));
                 pos += size;
             }
             PackOption::String => {
@@ -795,7 +795,7 @@ fn unpack(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
                 }
 
                 let string = Vec::from(&s[pos..pos + len]);
-                result.push(LuaValue::String(string.into()));
+                result.push(LuaValue::from_string(string.into()));
                 pos += len;
             }
             PackOption::Zstr => {
@@ -807,7 +807,7 @@ fn unpack(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
                 };
 
                 let string = Vec::from(&s[pos..pos + len]);
-                result.push(LuaValue::String(string.into()));
+                result.push(LuaValue::from_string(string.into()));
                 // skip past string and the null terminator
                 pos += len + 1;
             }
@@ -840,5 +840,5 @@ fn upper(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     let string = String::from_utf8_lossy(input);
     let upper = string.to_uppercase();
 
-    Ok(vec![LuaValue::String(upper.into_bytes().into())])
+    Ok(vec![LuaValue::from_string(upper.into_bytes().into())])
 }

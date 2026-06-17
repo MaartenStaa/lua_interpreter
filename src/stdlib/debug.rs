@@ -67,7 +67,7 @@ fn upvalueid(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     require_closure!(input, "debug.upvalueid", closure, {
         let n = require_number!(input, "debug.upvalueid", 1).integer_repr()? - 1;
         if n < 0 || n as usize >= closure.upvalues.len() {
-            return Ok(vec![LuaValue::Nil]);
+            return Ok(vec![LuaValue::NIL]);
         }
 
         if let Some(upvalue) = &closure.upvalues.get(&(n as usize)) {
@@ -75,7 +75,7 @@ fn upvalueid(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
             // TODO: This should be a "light userdata" value
             Ok(vec![id.into()])
         } else {
-            Ok(vec![LuaValue::Nil])
+            Ok(vec![LuaValue::NIL])
         }
     })
 }

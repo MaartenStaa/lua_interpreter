@@ -114,11 +114,11 @@ pub fn create_global_env() -> LuaValue {
 
     let mut metatable = LuaTable::new();
     metatable.insert("__debug_repr".into(), "<global object _G>".into());
-    env.set_metatable(Some(LuaValue::Object(Arc::new(RwLock::new(
+    env.set_metatable(Some(LuaValue::from_object(Arc::new(RwLock::new(
         LuaObject::Table(metatable),
     )))));
 
-    let object = LuaValue::Object(Arc::new(RwLock::new(LuaObject::Table(env))));
+    let object = LuaValue::from_object(Arc::new(RwLock::new(LuaObject::Table(env))));
     let g = object.clone();
     assert_table!(write, &object, t, {
         t.insert("_G".into(), g);

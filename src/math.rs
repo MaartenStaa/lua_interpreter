@@ -206,11 +206,7 @@ impl ops::Not for LuaValue {
     type Output = bool;
 
     fn not(self) -> bool {
-        match self {
-            LuaValue::Boolean(b) => !b,
-            LuaValue::Nil => true,
-            _ => false,
-        }
+        !(&self)
     }
 }
 
@@ -218,10 +214,12 @@ impl ops::Not for &LuaValue {
     type Output = bool;
 
     fn not(self) -> bool {
-        match self {
-            LuaValue::Boolean(b) => !b,
-            LuaValue::Nil => true,
-            _ => false,
+        if self.is_bool() {
+            !unsafe { self.as_bool() }
+        } else if self.is_nil() {
+            true
+        } else {
+            false
         }
     }
 }
@@ -231,7 +229,9 @@ impl ops::Shl for &LuaValue {
 
     fn shl(self, other: Self) -> Self::Output {
         match (self, &other) {
-            (LuaValue::Number(a), LuaValue::Number(b)) => Ok(LuaValue::Number((a << b)?)),
+            (a, b) if a.is_number() && b.is_number() => Ok(LuaValue::from_number(
+                (unsafe { a.as_number() } << unsafe { b.as_number() })?,
+            )),
             _ => {
                 let left_type = self.type_name();
                 let right_type = other.type_name();
@@ -251,7 +251,9 @@ impl ops::Shr for &LuaValue {
 
     fn shr(self, other: Self) -> Self::Output {
         match (self, &other) {
-            (LuaValue::Number(a), LuaValue::Number(b)) => Ok(LuaValue::Number((a >> b)?)),
+            (a, b) if a.is_number() && b.is_number() => Ok(LuaValue::from_number(
+                (unsafe { a.as_number() } >> unsafe { b.as_number() })?,
+            )),
             _ => {
                 let left_type = self.type_name();
                 let right_type = other.type_name();
@@ -269,8 +271,12 @@ impl ops::Shr for &LuaValue {
 impl PartialOrd for LuaValue {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         match (self, other) {
-            (LuaValue::Number(a), LuaValue::Number(b)) => a.partial_cmp(b),
-            (LuaValue::String(a), LuaValue::String(b)) => a.partial_cmp(b),
+            (a, b) if a.is_number() && b.is_number() => {
+                unsafe { a.as_number() }.partial_cmp(&unsafe { b.as_number() })
+            }
+            (a, b) if a.is_string() && b.is_string() => {
+                unsafe { a.as_string() }.partial_cmp(unsafe { b.as_string() })
+            }
             _ => todo!("LuaValue::partial_cmp (metatables)"),
         }
     }
@@ -279,23 +285,35 @@ impl PartialOrd for LuaValue {
 impl LuaValue {
     pub fn concat(self, other: Self) -> Result<Self, Box<(LuaError, LuaValue, LuaValue)>> {
         match (self, other) {
-            (LuaValue::String(mut a), LuaValue::String(b)) => {
+            (a, b) if a.is_string() && b.is_string() => {
+                let mut a = unsafe { a.into_string() };
+                let b = unsafe { b.as_string() };
                 a.extend(b);
-                Ok(LuaValue::String(a))
+                Ok(LuaValue::from_string(a))
             }
-            (LuaValue::String(mut a), LuaValue::Number(b)) => {
+            (a, b) if a.is_string() && b.is_number() => {
+                let mut a = unsafe { a.into_string() };
+                let b = unsafe { b.as_number() };
                 a.extend(b.to_string().as_bytes());
-                Ok(LuaValue::String(a))
+                Ok(LuaValue::from_string(a))
             }
-            (LuaValue::Number(a), LuaValue::String(b)) => Ok(LuaValue::String(
-                Vec::from_iter(a.to_string().into_bytes().into_iter().chain(b)).into(),
-            )),
-            (LuaValue::Number(a), LuaValue::Number(b)) => Ok(LuaValue::String(
+            (a, b) if a.is_number() && b.is_string() => Ok(LuaValue::from_string(
                 Vec::from_iter(
-                    a.to_string()
+                    unsafe { a.as_number() }
+                        .to_string()
                         .into_bytes()
                         .into_iter()
-                        .chain(b.to_string().into_bytes()),
+                        .chain(unsafe { b.as_string() }),
+                )
+                .into(),
+            )),
+            (a, b) if a.is_number() && b.is_number() => Ok(LuaValue::from_string(
+                Vec::from_iter(
+                    unsafe { a.as_number() }
+                        .to_string()
+                        .into_bytes()
+                        .into_iter()
+                        .chain(unsafe { b.as_number() }.to_string().into_bytes()),
                 )
                 .into(),
             )),
@@ -318,7 +336,9 @@ impl LuaValue {
 
     pub fn pow(self, other: Self) -> crate::Result<Self> {
         match (&self, &other) {
-            (LuaValue::Number(a), LuaValue::Number(b)) => Ok(LuaValue::Number(a.pow(b))),
+            (a, b) if a.is_number() && b.is_number() => Ok(LuaValue::from_number(
+                unsafe { a.as_number() }.pow(&unsafe { b.as_number() }),
+            )),
             _ => {
                 let left_type = self.type_name();
                 let right_type = other.type_name();
@@ -332,31 +352,36 @@ impl LuaValue {
         }
     }
 
-    pub fn as_boolean(&self) -> bool {
-        match self {
-            LuaValue::Nil => false,
-            LuaValue::Boolean(b) => *b,
-            _ => true,
+    pub fn cast_to_bool(&self) -> bool {
+        if self.is_nil() {
+            false
+        } else if self.is_bool() {
+            unsafe { self.as_bool() }
+        } else {
+            true
         }
     }
 
     pub fn len(&self) -> crate::Result<LuaValue> {
         match self {
-            LuaValue::String(s) => Ok(LuaValue::Number(LuaNumber::Integer(s.len() as i64))),
-            LuaValue::Object(o) => {
-                let len = o.read().unwrap().len()?;
-                Ok(LuaValue::Number(LuaNumber::Integer(len as i64)))
+            v if v.is_string() => Ok(LuaValue::from_integer(unsafe { v.as_string() }.len() as i64)),
+            v if v.is_object() => {
+                let len = unsafe { v.as_object() }.read().unwrap().len()?;
+                Ok(LuaValue::from_integer(len as i64))
             }
             _ => Err(lua_error!("attempt to get length of a non-string value")),
         }
     }
 
     pub fn bitwise_not(&self) -> crate::Result<Self> {
-        match self {
-            LuaValue::Number(n) => Ok(LuaValue::Number((!n)?)),
-            _ => Err(lua_error!(
+        if self.is_number() {
+            let n = unsafe { self.as_number() };
+            let r = !n;
+            Ok(LuaValue::from_number(r?))
+        } else {
+            Err(lua_error!(
                 "attempt to perform bitwise not on a non-number value"
-            )),
+            ))
         }
     }
 }

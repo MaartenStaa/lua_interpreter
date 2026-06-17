@@ -51,6 +51,10 @@ impl LuaObject {
             LuaObject::Thread => "thread",
         }
     }
+
+    pub(crate) fn is_table(&self) -> bool {
+        matches!(self, LuaObject::Table(_))
+    }
 }
 
 impl Display for LuaObject {

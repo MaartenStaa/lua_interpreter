@@ -147,9 +147,11 @@ impl<'source> VM<'source> {
     #[inline]
     fn get(&self, register: impl Into<usize>) -> LuaValue {
         let frame_pointer = self.call_stack[self.call_stack_index - 1].frame_pointer;
-        match &self.stack[frame_pointer + register.into()] {
-            LuaValue::UpValue(upvalue) => upvalue.read().unwrap().0.clone(),
-            value => value.clone(),
+        let value = &self.stack[frame_pointer + register.into()];
+        if value.is_upvalue() {
+            unsafe { value.as_upvalue() }.read().unwrap().0.clone()
+        } else {
+            value.clone()
         }
     }
 
@@ -167,9 +169,11 @@ impl<'source> VM<'source> {
     #[inline]
     fn get_ref(&self, register: impl Into<usize>) -> Cow<'_, LuaValue> {
         let frame_pointer = self.call_stack[self.call_stack_index - 1].frame_pointer;
-        match &self.stack[frame_pointer + register.into()] {
-            LuaValue::UpValue(upvalue) => Cow::Owned(upvalue.read().unwrap().0.clone()),
-            value => Cow::Borrowed(value),
+        let value = &self.stack[frame_pointer + register.into()];
+        if value.is_upvalue() {
+            Cow::Owned(unsafe { value.as_upvalue().read().unwrap().0.clone() })
+        } else {
+            Cow::Borrowed(value)
         }
     }
 
@@ -241,7 +245,7 @@ impl<'source> VM<'source> {
         let required_stack_size = frame_pointer + max_registers;
         if required_stack_size >= self.stack.len() {
             self.stack
-                .resize(frame_pointer + max_registers, LuaValue::Nil);
+                .resize(frame_pointer + max_registers, LuaValue::NIL);
         }
 
         // FIXME: If the stack is already big enough, we might need to
@@ -279,17 +283,18 @@ impl<'source> VM<'source> {
 
     fn capture_upvalue(&mut self, register: u8) -> Arc<RwLock<UpValue>> {
         let frame_pointer = self.call_stack[self.call_stack_index - 1].frame_pointer;
-        if let LuaValue::UpValue(upvalue) = &self.stack[frame_pointer + register as usize] {
-            return Arc::clone(upvalue);
+        let value = &self.stack[frame_pointer + register as usize];
+        if value.is_upvalue() {
+            return unsafe { value.into_upvalue() };
         }
 
-        let mut value = LuaValue::Nil;
+        let mut value = LuaValue::NIL;
         std::mem::swap(
             &mut value,
             &mut self.stack[frame_pointer + register as usize],
         );
         let upvalue = Arc::new(RwLock::new(UpValue(value)));
-        self.set(register, LuaValue::UpValue(Arc::clone(&upvalue)));
+        self.set(register, LuaValue::from_upvalue(Arc::clone(&upvalue)));
 
         upvalue
     }
@@ -447,13 +452,13 @@ impl<'source> VM<'source> {
 
     fn clear_registers_from(&mut self, from_register: impl Into<usize>) {
         let frame_pointer = self.call_stack[self.call_stack_index - 1].frame_pointer;
-        self.stack[frame_pointer + from_register.into()..].fill(LuaValue::Nil);
+        self.stack[frame_pointer + from_register.into()..].fill(LuaValue::NIL);
     }
 
     fn clear_registers_between(&mut self, from_register: u8, to_register: u8) {
         let frame_pointer = self.call_stack[self.call_stack_index - 1].frame_pointer;
         self.stack[frame_pointer + from_register as usize..=frame_pointer + to_register as usize]
-            .fill(LuaValue::Nil);
+            .fill(LuaValue::NIL);
     }
 
     fn run_native_function(
@@ -531,25 +536,26 @@ impl<'source> VM<'source> {
                     let rhs_r = register!(3);
                     let a = self.get_ref(lhs_r);
                     let b = self.get_ref(rhs_r);
-                    let result = match (&*a, &*b) {
-                        (LuaValue::Number(a), LuaValue::Number(b)) => {
-                            binary_op_num!(_internal a, b, $($param),*)
-                        }.into(),
-                        _ => {
-                            let a = a.into_owned();
-                            let b = b.into_owned();
-                            match metatables::handle(
-                                self,
-                                &metatables::$metamethod,
-                                vec![a, b],
-                            ) {
-                                Some(result) => binary_op_num!(_internal_metamethod_result result $($param),*),
-                                None => {
-                                    return Err(self.op_err($op_name, self.get_ref(lhs_r).as_ref(), Some(self.get_ref(rhs_r).as_ref())));
+                    let result = if a.is_number() && b.is_number() {
+                        // Safety: We've verified that both a and b are numbers.
+                        let a = unsafe { a.as_number() };
+                        let b = unsafe { b.as_number() };
 
-                                }
+                        binary_op_num!(_internal a, b, $($param),*).into()
+                    } else {
+                        let a = a.into_owned();
+                        let b = b.into_owned();
+                        match metatables::handle(
+                            self,
+                            &metatables::$metamethod,
+                            vec![a, b],
+                        ) {
+                            Some(result) => binary_op_num!(_internal_metamethod_result result $($param),*),
+                            None => {
+                                return Err(self.op_err($op_name, self.get_ref(lhs_r).as_ref(), Some(self.get_ref(rhs_r).as_ref())));
+
                             }
-                        },
+                        }
                     };
                     self.set(dest_r, result);
                     4
@@ -567,7 +573,7 @@ impl<'source> VM<'source> {
                     ($a $tt $b)?
                 }};
                 (_internal_metamethod_result $value:ident op_bool_result, $($_:tt),*) => {{
-                    $value?.as_boolean().into()
+                    $value?.cast_to_bool().into()
                 }};
                 (_internal_metamethod_result $value:ident $($_:tt),*) => {{
                     $value?
@@ -587,22 +593,21 @@ impl<'source> VM<'source> {
                     let dest_r = register!(1);
                     let value_r = register!(2);
                     let value = self.get_ref(value_r);
-                    let result = match &*value {
-                        LuaValue::Number(num) => {
-                            unary_op_num!(_internal num, $($param),*)
-                        }.into(),
-                        _ => {
-                            let value = value.into_owned();
-                            match metatables::handle(
-                                self,
-                                &metatables::$metamethod,
-                                vec![value],
-                            ) {
-                                Some(result) => result?,
-                                None => {
-                                    return Err(self.op_err($op_name, self.get_ref(value_r).as_ref(), None));
+                    let result = if value.is_number() {
+                        // Safety: We've verified that num is a number.
+                        let num = unsafe { value.as_number() };
+                        unary_op_num!(_internal num, $($param),*).into()
+                    } else {
+                        let value = value.into_owned();
+                        match metatables::handle(
+                            self,
+                            &metatables::$metamethod,
+                            vec![value],
+                        ) {
+                            Some(result) => result?,
+                            None => {
+                                return Err(self.op_err($op_name, self.get_ref(value_r).as_ref(), None));
 
-                                }
                             }
                         }
                     };
@@ -733,7 +738,7 @@ impl<'source> VM<'source> {
                             &metatables::EQ_KEY,
                             vec![a.into_owned(), b.into_owned()],
                         ) {
-                            result?.as_boolean()
+                            result?.cast_to_bool()
                         } else {
                             is_equal
                         }
@@ -759,7 +764,7 @@ impl<'source> VM<'source> {
                             &metatables::EQ_KEY,
                             vec![a.into_owned(), b.into_owned()],
                         ) {
-                            result?.as_boolean()
+                            result?.cast_to_bool()
                         } else {
                             is_equal
                         }
@@ -823,27 +828,24 @@ impl<'source> VM<'source> {
                     let val_r = register!(2);
                     let value = self.get_ref(val_r);
 
-                    let result: LuaValue = match &*value {
-                        LuaValue::String(s) => (s.len() as i64).into(),
-                        _ => {
-                            let value = value.into_owned();
-                            match metatables::handle(self, &metatables::LEN_KEY, vec![value]) {
-                                Some(result) => result?,
-                                None => {
-                                    // If the value is a table (but it didn't have a __len
-                                    // metamethod), return the length of the array part
-                                    let value = self.get_ref(val_r);
-                                    match &*value {
-                                        LuaValue::Object(obj) => match &*obj.read().unwrap() {
-                                            LuaObject::Table(table) => (table.len() as i64).into(),
-                                            _ => {
-                                                return Err(self.op_err("length", &value, None));
-                                            }
-                                        },
-                                        _ => {
-                                            return Err(self.op_err("length", &value, None));
-                                        }
-                                    }
+                    let result: LuaValue = if value.is_string() {
+                        (unsafe { value.as_string().len() } as i64).into()
+                    } else {
+                        let value = value.into_owned();
+                        match metatables::handle(self, &metatables::LEN_KEY, vec![value]) {
+                            Some(result) => result?,
+                            None => {
+                                // If the value is a table (but it didn't have a __len
+                                // metamethod), return the length of the array part
+                                let value = self.get_ref(val_r);
+                                if value.is_object()
+                                    && let obj = unsafe { value.as_object() }
+                                    && let obj = &*obj.read().unwrap()
+                                    && let LuaObject::Table(table) = obj
+                                {
+                                    (table.len() as i64).into()
+                                } else {
+                                    return Err(self.op_err("length", &value, None));
                                 }
                             }
                         }
@@ -862,8 +864,11 @@ impl<'source> VM<'source> {
 
                     let frame_pointer = self.call_stack[self.call_stack_index - 1].frame_pointer;
                     let value = self.get(src);
-                    if let LuaValue::UpValue(upval) = &self.stack[frame_pointer + dest as usize] {
-                        let mut upval = upval.write().unwrap();
+                    if self.stack[frame_pointer + dest as usize].is_upvalue() {
+                        let mut upval =
+                            (unsafe { self.stack[frame_pointer + dest as usize].as_upvalue() })
+                                .write()
+                                .unwrap();
                         *upval = value.into();
                     } else {
                         self.set(dest, value);
@@ -904,7 +909,7 @@ impl<'source> VM<'source> {
                             .varargs
                             .first()
                             .cloned()
-                            .unwrap_or(LuaValue::Nil);
+                            .unwrap_or(LuaValue::NIL);
                         self.set(register, value);
                     } else {
                         // Ensure we'll have enough space on the stack.
@@ -995,7 +1000,8 @@ impl<'source> VM<'source> {
                     let mut handled = false;
                     loop {
                         let mut is_table_with_missing_key = false;
-                        if let LuaValue::Object(o) = &target
+                        if target.is_object()
+                            && let o = unsafe { target.as_object() }
                             && let LuaObject::Table(t) = &mut *o.write().unwrap()
                         {
                             if t.contains_key(&key) {
@@ -1075,6 +1081,7 @@ impl<'source> VM<'source> {
                             let const_index = const_index!(3);
                             let table = self.get_upvalue(upval_index);
                             let key = self.consts[const_index as usize].clone().into();
+
                             (table, key, 3 + size_of::<ConstIndex>())
                         }
                         _ => unreachable!(),
@@ -1085,7 +1092,8 @@ impl<'source> VM<'source> {
 
                     let mut target = table.clone();
                     loop {
-                        if let LuaValue::Object(o) = &target
+                        if target.is_object()
+                            && let o = unsafe { target.as_object() }
                             && let LuaObject::Table(t) = &*o.read().unwrap()
                         {
                             valid_object = true;
@@ -1144,7 +1152,7 @@ impl<'source> VM<'source> {
                                         if let Some(return_value) = result.into_iter().next() {
                                             self.set(dest_r, return_value);
                                         } else {
-                                            self.set(dest_r, LuaValue::Nil);
+                                            self.set(dest_r, LuaValue::NIL);
                                         }
                                         self.pop_call_frame();
                                     }
@@ -1161,7 +1169,7 @@ impl<'source> VM<'source> {
 
                     if !handled {
                         if valid_object {
-                            self.set(dest_r, LuaValue::Nil);
+                            self.set(dest_r, LuaValue::NIL);
                         } else {
                             return Err(self.err("attempt to index a non-table"));
                         }
@@ -1178,22 +1186,18 @@ impl<'source> VM<'source> {
                     }
                     let table = self.get(table_r);
 
-                    match table {
-                        LuaValue::Object(o) => match &mut *o.write().unwrap() {
-                            LuaObject::Table(t) => {
-                                for i in 0..num_values {
-                                    let value = self.get(table_r as usize + 1 + i);
-                                    let index = (i + 1) as i64;
-                                    t.insert(index.into(), value);
-                                }
-                            }
-                            _ => {
-                                return Err(self.err("attempt to index a non-table"));
-                            }
-                        },
-                        _ => {
-                            return Err(self.err("attempt to index a non-table"));
+                    if table.is_object()
+                        && let o = unsafe { table.as_object() }
+                        && let o = &mut *o.write().unwrap()
+                        && let LuaObject::Table(t) = o
+                    {
+                        for i in 0..num_values {
+                            let value = self.get(table_r as usize + 1 + i);
+                            let index = (i + 1) as i64;
+                            t.insert(index.into(), value);
                         }
+                    } else {
+                        return Err(self.err("attempt to index a non-table"));
                     }
 
                     3
@@ -1266,7 +1270,7 @@ impl<'source> VM<'source> {
                             self.ensure_stack_space(func_r as usize + value_slots_needed);
 
                             if result.is_empty() && is_single_return {
-                                self.set(func_r, LuaValue::Nil);
+                                self.set(func_r, LuaValue::NIL);
                                 self.multres = 0;
                             } else {
                                 self.multres = result.len();
@@ -1340,7 +1344,7 @@ impl<'source> VM<'source> {
 
                     let frame = self.pop_call_frame();
                     if return_values.is_empty() && !frame.allow_multi_return_values {
-                        return_values.push(LuaValue::Nil);
+                        return_values.push(LuaValue::NIL);
                     }
 
                     self.multres = if frame.allow_multi_return_values {
@@ -1394,7 +1398,7 @@ impl<'source> VM<'source> {
                 Instruction::JmpTrue => {
                     let register = register!();
                     let value = self.get_ref(register);
-                    if value.as_boolean() {
+                    if value.cast_to_bool() {
                         let addr = jump_addr!(2);
                         self.call_stack[self.call_stack_index - 1].ip = addr as usize;
                         continue;
@@ -1404,7 +1408,7 @@ impl<'source> VM<'source> {
                 Instruction::JmpFalse => {
                     let register = register!();
                     let value = self.get_ref(register);
-                    if !value.as_boolean() {
+                    if !value.cast_to_bool() {
                         let addr = jump_addr!(2);
                         self.call_stack[self.call_stack_index - 1].ip = addr as usize;
                         continue;

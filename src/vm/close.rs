@@ -27,7 +27,7 @@ impl<'source> VM<'source> {
             }
 
             let value = self.get(register);
-            if let LuaValue::Nil | LuaValue::Boolean(false) = value {
+            if value.is_nil() || (value.is_bool() && !unsafe { value.as_bool() }) {
                 // nil and false are ignored as to-be-closed values
                 continue;
             }
@@ -39,7 +39,7 @@ impl<'source> VM<'source> {
 
                 let error = error
                     .map(|e| e.message.clone().into_bytes().into())
-                    .unwrap_or(LuaValue::Nil);
+                    .unwrap_or(LuaValue::NIL);
                 let args = if close.is_metamethod {
                     vec![__close, value, error]
                 } else {
