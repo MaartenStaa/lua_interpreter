@@ -34,7 +34,7 @@ pub struct Chunk<'source> {
     chunk_name: String,
     source: Cow<'source, [u8]>,
     instructions: Vec<u8>,
-    instruction_spans: HashMap<usize, Span>,
+    pub(crate) instruction_spans: HashMap<usize, Span>,
     ip: usize,
 }
 
@@ -76,13 +76,13 @@ pub struct VM<'source> {
     const_index: ConstIndex,
     stack: Vec<LuaValue>,
     stack_attrs: Vec<u8>,
-    call_stack: [CallFrame; MAX_STACK_SIZE],
-    call_stack_index: usize,
+    pub(crate) call_stack: [CallFrame; MAX_STACK_SIZE],
+    pub(crate) call_stack_index: usize,
 }
 
 #[derive(Debug)]
-struct CallFrame {
-    name: Option<Vec<u8>>,
+pub(crate) struct CallFrame {
+    pub(crate) name: Option<Vec<u8>>,
     chunk: usize,
     border_frame: bool,
     frame_pointer: usize,

@@ -62,6 +62,14 @@ impl LuaValue {
         }
     }
 
+    pub fn set_metatable(&mut self, metatable: Option<LuaValue>) -> miette::Result<()> {
+        match self {
+            LuaValue::Object(o) => o.write().unwrap().set_metatable(metatable),
+            LuaValue::UpValue(u) => u.write().unwrap().set_metatable(metatable),
+            _ => Err(miette!("cannot set metatable on a non-object")),
+        }
+    }
+
     pub fn get_metavalue(&self, key: &LuaValue) -> Option<LuaValue> {
         self.get_metatable()
             .and_then(|mt| assert_table!(mt, table, table.get(key).cloned()))
@@ -74,6 +82,20 @@ impl LuaObject {
             LuaObject::Table(t) => t.metatable().cloned(),
             LuaObject::UserData(UserData::Full { metatable, .. }) => metatable.clone(),
             _ => None,
+        }
+    }
+
+    pub fn set_metatable(&mut self, metatable: Option<LuaValue>) -> miette::Result<()> {
+        match self {
+            LuaObject::Table(t) => {
+                t.set_metatable(metatable);
+                Ok(())
+            }
+            LuaObject::UserData(UserData::Full { metatable: mt, .. }) => {
+                *mt = metatable;
+                Ok(())
+            }
+            _ => Err(miette!("cannot set metatable on a non-table")),
         }
     }
 
