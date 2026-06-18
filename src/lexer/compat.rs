@@ -1,4 +1,4 @@
-use miette::miette;
+use crate::error::lua_error;
 
 pub trait ByteCharExt {
     fn to_digit(self, radix: u32) -> Option<u8>;
@@ -29,16 +29,16 @@ pub trait ByteSliceExt
 where
     Self: Sized,
 {
-    fn from_bytes_radix(slice: &[u8], radix: u32) -> miette::Result<Self>;
+    fn from_bytes_radix(slice: &[u8], radix: u32) -> crate::Result<Self>;
 }
 
 impl ByteSliceExt for i64 {
-    fn from_bytes_radix(slice: &[u8], radix: u32) -> miette::Result<Self> {
+    fn from_bytes_radix(slice: &[u8], radix: u32) -> crate::Result<Self> {
         let mut result = 0i64;
         for &byte in slice {
             let digit = byte
                 .to_digit(radix)
-                .ok_or_else(|| miette!("invalid digit '{:0x}", byte))?;
+                .ok_or_else(|| lua_error!("invalid digit '{:0x}", byte))?;
             result = result * radix as i64 + digit as i64;
         }
 

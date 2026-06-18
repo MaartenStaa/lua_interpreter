@@ -1,7 +1,6 @@
-use miette::miette;
 use std::sync::LazyLock;
 
-use crate::{macros::assert_table, vm::VM};
+use crate::{error::lua_error, macros::assert_table, vm::VM};
 
 use super::{LuaObject, LuaTable, LuaValue, UserData};
 
@@ -64,11 +63,11 @@ impl LuaValue {
         }
     }
 
-    pub fn set_metatable(&mut self, metatable: Option<LuaValue>) -> miette::Result<()> {
+    pub fn set_metatable(&mut self, metatable: Option<LuaValue>) -> crate::Result<()> {
         match self {
             LuaValue::Object(o) => o.write().unwrap().set_metatable(metatable),
             LuaValue::UpValue(u) => u.write().unwrap().set_metatable(metatable),
-            _ => Err(miette!("cannot set metatable on a non-object")),
+            _ => Err(lua_error!("cannot set metatable on a non-object")),
         }
     }
 
@@ -87,7 +86,7 @@ impl LuaObject {
         }
     }
 
-    pub fn set_metatable(&mut self, metatable: Option<LuaValue>) -> miette::Result<()> {
+    pub fn set_metatable(&mut self, metatable: Option<LuaValue>) -> crate::Result<()> {
         match self {
             LuaObject::Table(t) => {
                 t.set_metatable(metatable);
@@ -97,7 +96,7 @@ impl LuaObject {
                 *mt = metatable;
                 Ok(())
             }
-            _ => Err(miette!("cannot set metatable on a non-table")),
+            _ => Err(lua_error!("cannot set metatable on a non-table")),
         }
     }
 
@@ -110,39 +109,39 @@ impl LuaObject {
 pub fn handle(
     vm: &mut VM,
     key: &LuaValue,
-    op_name: &'static str,
     input: Vec<LuaValue>,
-) -> miette::Result<LuaValue> {
+) -> Option<crate::Result<LuaValue>> {
     assert!(!input.is_empty());
 
     for value in input.iter() {
         if let Some(LuaValue::Object(o)) = value.get_metavalue(key) {
             match &*o.read().unwrap() {
                 LuaObject::Closure(c) => {
-                    let mut result = vm.run_closure(c.clone(), input)?;
-                    return Ok(if result.is_empty() {
+                    let mut result = match vm.run_closure(c.clone(), input) {
+                        Ok(value) => value,
+                        Err(e) => return Some(Err(e)),
+                    };
+                    return Some(Ok(if result.is_empty() {
                         LuaValue::Nil
                     } else {
                         result.swap_remove(0)
-                    });
+                    }));
                 }
                 LuaObject::NativeFunction(_, f) => {
-                    let mut result = f(vm, input)?;
-                    return Ok(if result.is_empty() {
+                    let mut result = match f(vm, input) {
+                        Ok(value) => value,
+                        Err(e) => return Some(Err(e)),
+                    };
+                    return Some(Ok(if result.is_empty() {
                         LuaValue::Nil
                     } else {
                         result.swap_remove(0)
-                    });
+                    }));
                 }
                 _ => {}
             }
         }
     }
 
-    let mut message = format!("cannot {} a '{}'", op_name, &input[0].type_name());
-    if let Some(b) = input.get(1) {
-        message.push_str(&format!(" and a '{}'", b.type_name()));
-    }
-
-    Err(miette!("{}", message))
+    None
 }

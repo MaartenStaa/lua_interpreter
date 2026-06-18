@@ -7,6 +7,7 @@ pub enum LuaVariableAttribute {
     ToBeClosed = 2,
 }
 
+#[allow(clippy::from_over_into)]
 impl Into<u8> for LuaVariableAttribute {
     fn into(self) -> u8 {
         self as u8

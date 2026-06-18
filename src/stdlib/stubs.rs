@@ -1,7 +1,7 @@
-use miette::miette;
 use std::sync::{LazyLock, Mutex};
 
 use crate::{
+    error::lua_error,
     macros::get_string,
     value::{LuaTable, LuaValue},
     vm::VM,
@@ -11,7 +11,7 @@ static GC_MODE: LazyLock<Mutex<LuaValue>> = LazyLock::new(|| Mutex::new(LuaValue
 static GC_RUNNING: LazyLock<Mutex<bool>> = LazyLock::new(|| Mutex::new(true));
 static GC_PARAMS: LazyLock<Mutex<LuaTable>> = LazyLock::new(|| Mutex::new(LuaTable::new()));
 
-pub(crate) fn collectgarbage(_: &mut VM, values: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+pub(crate) fn collectgarbage(_: &mut VM, values: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     let opt = get_string!(values, "collectgarbage", 0)
         .map(|s| s.as_slice())
         .unwrap_or(b"collect");
@@ -41,18 +41,18 @@ pub(crate) fn collectgarbage(_: &mut VM, values: Vec<LuaValue>) -> miette::Resul
         b"incremental" => {
             let mut mode = GC_MODE.lock().unwrap();
             let previous_mode = mode.clone();
-            *mode = LuaValue::String(opt.to_vec());
+            *mode = LuaValue::String(opt.to_vec().into());
             vec![previous_mode]
         }
         b"generational" => {
             let mut mode = GC_MODE.lock().unwrap();
             let previous_mode = mode.clone();
-            *mode = LuaValue::String(opt.to_vec());
+            *mode = LuaValue::String(opt.to_vec().into());
             vec![previous_mode]
         }
         b"param" => {
             let name = values.get(1).ok_or_else(|| {
-                miette!("bad argument #1 to 'collectgarbage' (param name expected, got nil)")
+                lua_error!("bad argument #1 to 'collectgarbage' (param name expected, got nil)")
             })?;
             let value = values.get(2);
             let mut params = GC_PARAMS.lock().unwrap();
@@ -67,15 +67,15 @@ pub(crate) fn collectgarbage(_: &mut VM, values: Vec<LuaValue>) -> miette::Resul
             }
         }
         _ => {
-            return Err(miette!(
+            return Err(lua_error!(
                 "bad argument #1 to 'collectgarbage' (invalid option '{opt}')",
                 opt = String::from_utf8_lossy(opt)
-            ))
+            ));
         }
     })
 }
 
-pub(crate) fn gcinfo(_: &mut VM, _: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+pub(crate) fn gcinfo(_: &mut VM, _: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     // Same as collectgarbage("count") ?
     Ok(vec![0.into()])
 }

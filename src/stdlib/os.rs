@@ -1,9 +1,9 @@
 use cpu_time::ProcessTime;
-use miette::miette;
-use rand::{distributions, Rng};
+use rand::{Rng, distr};
 use std::{ffi::OsString, sync::LazyLock};
 
 use crate::{
+    error::lua_error,
     macros::require_string,
     value::{LuaObject, LuaTable, LuaValue},
     vm::VM,
@@ -38,11 +38,11 @@ pub static OS: LazyLock<LuaValue> = LazyLock::new(|| {
 
 pub static CLOCK_START: LazyLock<ProcessTime> = LazyLock::new(ProcessTime::now);
 
-fn clock(_: &mut VM, _: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+fn clock(_: &mut VM, _: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     Ok(vec![CLOCK_START.elapsed().as_secs_f64().into()])
 }
 
-fn getenv(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+fn getenv(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     let name = require_string!(input, "os.getenv");
     let name_os_str = OsString::from(String::from_utf8_lossy(name.as_slice()).to_string());
 
@@ -52,13 +52,13 @@ fn getenv(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     }
 }
 
-fn setlocale(_: &mut VM, _: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+fn setlocale(_: &mut VM, _: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     Ok(vec![LuaValue::Nil])
 }
 
-fn time(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+fn time(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     if !input.is_empty() {
-        return Err(miette!(
+        return Err(lua_error!(
             "passing arguments to 'os.time' is not yet supported"
         ));
     }
@@ -69,10 +69,10 @@ fn time(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     Ok(vec![(now - epoch).num_seconds().into()])
 }
 
-fn tmpname(_: &mut VM, _: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
-    let mut rng = rand::thread_rng();
+fn tmpname(_: &mut VM, _: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
+    let rng = rand::rng();
     let random_string: String = rng
-        .sample_iter(distributions::Alphanumeric)
+        .sample_iter(distr::Alphanumeric)
         .map(char::from)
         .take(8)
         .collect();

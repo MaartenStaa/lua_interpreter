@@ -5,9 +5,9 @@ macro_rules! assert_closure(
                 LuaObject::Closure($closure) => {
                     $tt
                 },
-                _ => unreachable!("assert_object!() called on non-function object"),
+                _ => unreachable!("assert_closure!() called on non-function object"),
             },
-            _ => unreachable!("assert_object!() called on non-function value"),
+            _ => unreachable!("assert_closure!() called on non-function value"),
         }
     };
     (write, $value:expr, $closure:ident, $tt:stmt) => {
@@ -16,22 +16,13 @@ macro_rules! assert_closure(
                 LuaObject::Closure($closure) => {
                     $tt
                 },
-                _ => unreachable!("assert_object!() called on non-function object"),
+                _ => unreachable!("assert_closure!() called on non-function object"),
             },
-            _ => unreachable!("assert_object!() called on non-function value"),
+            _ => unreachable!("assert_closure!() called on non-function value"),
         }
     };
     ($value:expr, $closure:ident, $tt:stmt) => {
         assert_closure!(read, $value, $closure,  $tt)
-    }
-);
-
-macro_rules! assert_function_const(
-    ($constant:expr) => {
-        match $constant {
-            LuaConst::Function(f) => f,
-            _ => unreachable!("assert_function_const!() called on non-function constant"),
-        }
     }
 );
 
@@ -90,7 +81,7 @@ macro_rules! require_closure {
             Some(LuaValue::Object(o)) => match &*o.read().unwrap() {
                 LuaObject::Closure($closure) => $tt,
                 _ => {
-                    return Err(::miette::miette!(
+                    return Err($crate::error::lua_error!(
                         "bad argument #{} to '{}', expected function, got {}",
                         $index + 1,
                         $name,
@@ -99,7 +90,7 @@ macro_rules! require_closure {
                 }
             },
             Some(v) => {
-                return Err(::miette::miette!(
+                return Err($crate::error::lua_error!(
                     "bad argument #{} to '{}', expected function, got {}",
                     $index + 1,
                     $name,
@@ -107,7 +98,7 @@ macro_rules! require_closure {
                 ))
             }
             _ => {
-                return Err(::miette::miette!(
+                return Err($crate::error::lua_error!(
                     "bad argument #{} to '{}', expected function, got no value",
                     $index + 1,
                     $name
@@ -126,7 +117,7 @@ macro_rules! get_number {
             Some(LuaValue::Number(n)) => Some(n),
             Some(LuaValue::Nil) | None => None,
             Some(v) => {
-                return Err(::miette::miette!(
+                return Err($crate::error::lua_error!(
                     "bad argument #{} to '{}', expected number, got {}",
                     $index + 1,
                     $name,
@@ -145,7 +136,7 @@ macro_rules! require_number {
         match $values.get($index) {
             Some(LuaValue::Number(n)) => n,
             Some(v) => {
-                return Err(::miette::miette!(
+                return Err($crate::error::lua_error!(
                     "bad argument #{} to '{}', expected number, got {}",
                     $index + 1,
                     $name,
@@ -153,7 +144,7 @@ macro_rules! require_number {
                 ))
             }
             _ => {
-                return Err(::miette::miette!(
+                return Err($crate::error::lua_error!(
                     "bad argument #{} to '{}', expected number, got no value",
                     $index + 1,
                     $name
@@ -171,7 +162,7 @@ macro_rules! get_string {
         match $values.get($index) {
             Some(LuaValue::String(s)) => Some(s),
             Some(v) => {
-                return Err(::miette::miette!(
+                return Err($crate::error::lua_error!(
                     "bad argument #{} to '{}', expected string, got {}",
                     $index + 1,
                     $name,
@@ -191,7 +182,7 @@ macro_rules! require_string {
         match $input.get($i) {
             Some(LuaValue::String(s)) => s,
             Some(v) => {
-                return Err(::miette::miette!(
+                return Err($crate::error::lua_error!(
                     "bad argument #{n} to '{name}' (string expected, got {type_name})",
                     n = $i + 1,
                     name = $name,
@@ -199,7 +190,7 @@ macro_rules! require_string {
                 ));
             }
             None => {
-                return Err(::miette::miette!(
+                return Err($crate::error::lua_error!(
                     "bad argument #{n} to '{name}' (value expected)",
                     n = $i + 1,
                     name = $name
@@ -218,7 +209,7 @@ macro_rules! require_table {
             Some(LuaValue::Object(o)) => match &*o.read().unwrap() {
                 LuaObject::Table($table) => $tt,
                 _ => {
-                    return Err(::miette::miette!(
+                    return Err($crate::error::lua_error!(
                         "bad argument #{n} to '{name}' (table expected, got {actual_type})",
                         n = $index + 1,
                         name = $name,
@@ -227,7 +218,7 @@ macro_rules! require_table {
                 }
             },
             Some(v) => {
-                return Err(::miette::miette!(
+                return Err($crate::error::lua_error!(
                     "bad argument #{n} to '{name}' (table expected, got {actual_type})",
                     n = $index + 1,
                     name = $name,
@@ -235,7 +226,7 @@ macro_rules! require_table {
                 ));
             }
             None => {
-                return Err(::miette::miette!(
+                return Err($crate::error::lua_error!(
                     "bad argument #{n} to '{name}' (table expected, got no value)",
                     n = $index + 1,
                     name = $name,
@@ -248,7 +239,7 @@ macro_rules! require_table {
             Some(LuaValue::Object(o)) => match &mut *o.write().unwrap() {
                 LuaObject::Table($table) => $tt,
                 _ => {
-                    return Err(::miette::miette!(
+                    return Err($crate::error::lua_error!(
                         "bad argument #{n} to '{name}' (table expected, got {actual_type})",
                         n = $index + 1,
                         name = $name,
@@ -257,7 +248,7 @@ macro_rules! require_table {
                 }
             },
             Some(v) => {
-                return Err(::miette::miette!(
+                return Err($crate::error::lua_error!(
                     "bad argument #{n} to '{name}' (table expected, got {actual_type})",
                     n = $index + 1,
                     name = $name,
@@ -265,7 +256,7 @@ macro_rules! require_table {
                 ));
             }
             None => {
-                return Err(::miette::miette!(
+                return Err($crate::error::lua_error!(
                     "bad argument #{n} to '{name}' (table expected, got no value)",
                     n = $index + 1,
                     name = $name,
@@ -278,15 +269,18 @@ macro_rules! require_table {
     };
 }
 
+// Disable formatting here, rustfmt insists on removing the braces around `$tt`
+// which is invalid.
+#[rustfmt::skip]
 macro_rules! require_userdata {
     (read, $values:expr, $name:expr, $index:expr, $userdata:ident, $tt:stmt) => {
         match $values.get($index) {
             Some(LuaValue::Object(o)) => match &*o.read().unwrap() {
                 LuaObject::UserData($userdata) => {
-                   $tt
-                },
+                    $tt
+                }
                 _ => {
-                    return Err(::miette::miette!(
+                    return Err($crate::error::lua_error!(
                         "bad argument #{n} to '{name}' ({type_name} expected, got {actual_type})",
                         n = $index + 1,
                         name = $name,
@@ -296,7 +290,7 @@ macro_rules! require_userdata {
                 }
             },
             Some(v) => {
-                return Err(::miette::miette!(
+                return Err($crate::error::lua_error!(
                     "bad argument #{n} to '{name}' ({type_name} expected, got {actual_type})",
                     n = $index + 1,
                     name = $name,
@@ -305,7 +299,7 @@ macro_rules! require_userdata {
                 ));
             }
             None => {
-                return Err(::miette::miette!(
+                return Err($crate::error::lua_error!(
                     "bad argument #{n} to '{name}' ({type_name} expected, got no value)",
                     n = $index + 1,
                     name = $name,
@@ -318,10 +312,10 @@ macro_rules! require_userdata {
         match $values.get($index) {
             Some(LuaValue::Object(o)) => match &mut *o.write().unwrap() {
                 LuaObject::UserData($userdata) => {
-                   $tt
+                    $tt
                 },
                 _ => {
-                    return Err(::miette::miette!(
+                    return Err($crate::error::lua_error!(
                         "bad argument #{n} to '{name}' ({type_name} expected, got {actual_type})",
                         n = $index + 1,
                         name = $name,
@@ -331,7 +325,7 @@ macro_rules! require_userdata {
                 }
             },
             Some(v) => {
-                return Err(::miette::miette!(
+                return Err($crate::error::lua_error!(
                     "bad argument #{n} to '{name}' ({type_name} expected, got {actual_type})",
                     n = $index + 1,
                     name = $name,
@@ -340,7 +334,7 @@ macro_rules! require_userdata {
                 ));
             }
             None => {
-                return Err(::miette::miette!(
+                return Err($crate::error::lua_error!(
                     "bad argument #{n} to '{name}' ({type_name} expected, got no value)",
                     n = $index + 1,
                     name = $name,
@@ -365,7 +359,7 @@ macro_rules! require_userdata_type {
                 if let Some($value) = $value.read().unwrap().downcast_ref::<$type>() {
                     $tt
                 } else {
-                    return Err(::miette::miette!(
+                    return Err($crate::error::lua_error!(
                         "bad argument #{n} to '{name}' ({type_name} expected, got {actual_type})",
                         n = $index + 1,
                         name = $name,
@@ -375,7 +369,7 @@ macro_rules! require_userdata_type {
                 }
             }
             $crate::value::UserData::Light { .. } => {
-                return Err(::miette::miette!(
+                return Err($crate::error::lua_error!(
                     "bad argument #{n} to '{name}' ({type_name} expected, got light userdata)",
                     n = $index + 1,
                     name = $name,
@@ -394,7 +388,7 @@ macro_rules! require_userdata_type {
                 if let Some($value) = $value.write().unwrap().downcast_mut::<$type>() {
                     $tt
                 } else {
-                    return Err(::miette::miette!(
+                    return Err($crate::error::lua_error!(
                         "bad argument #{n} to '{name}' ({type_name} expected, got {actual_type})",
                         n = $index + 1,
                         name = $name,
@@ -404,7 +398,7 @@ macro_rules! require_userdata_type {
                 }
             }
             $crate::value::UserData::Light { .. } => {
-                return Err(::miette::miette!(
+                return Err($crate::error::lua_error!(
                     "bad argument #{n} to '{name}' ({type_name} expected, got light userdata)",
                     n = $index + 1,
                     name = $name,
@@ -414,12 +408,14 @@ macro_rules! require_userdata_type {
         }
     };
     ($userdata:ident, $name:expr, $index:expr, $type:ty, $value:ident, $metatable:ident, $tt:stmt) => {
-        require_userdata_type!(read, $userdata, $name, $index, $type, $value, $metatable, $tt)
+        require_userdata_type!(
+            read, $userdata, $name, $index, $type, $value, $metatable, $tt
+        )
     };
 }
 
 pub(crate) use {
-    assert_closure, assert_function_const, assert_string, assert_table, assert_table_object,
-    get_number, get_string, require_closure, require_number, require_string, require_table,
-    require_userdata, require_userdata_type,
+    assert_closure, assert_string, assert_table, assert_table_object, get_number, get_string,
+    require_closure, require_number, require_string, require_table, require_userdata,
+    require_userdata_type,
 };

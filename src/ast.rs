@@ -1,11 +1,22 @@
 // Reference: https://www.lua.org/manual/5.4/manual.html#9
 
-use crate::token::Span;
+use std::fmt::Debug;
 
-#[derive(Debug, PartialEq, Clone)]
+use crate::{token::Span, value::LuaString};
+
+#[derive(PartialEq, Clone)]
 pub struct TokenTree<T> {
     pub node: T,
     pub span: Span,
+}
+
+impl<T> Debug for TokenTree<T>
+where
+    T: Debug,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?} - {:?}", self.span, self.node)
+    }
 }
 
 impl<T> TokenTree<T> {
@@ -54,7 +65,7 @@ pub enum Statement {
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub struct Name(pub Vec<u8>);
+pub struct Name(pub LuaString);
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct AttributedName {
@@ -83,16 +94,19 @@ pub struct ElseIf {
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum ForCondition {
-    NumericFor {
-        name: TokenTree<Name>,
-        initial: TokenTree<Expression>,
-        limit: TokenTree<Expression>,
-        step: Option<TokenTree<Expression>>,
-    },
+    NumericFor(Box<NumericFor>),
     GenericFor {
         names: Vec<TokenTree<Name>>,
         expressions: Vec<TokenTree<Expression>>,
     },
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub struct NumericFor {
+    pub name: TokenTree<Name>,
+    pub initial: TokenTree<Expression>,
+    pub limit: TokenTree<Expression>,
+    pub step: Option<TokenTree<Expression>>,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -132,7 +146,7 @@ pub enum Literal {
     Nil,
     Boolean(bool),
     Number(Number),
-    String(Vec<u8>),
+    String(LuaString),
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -211,9 +225,9 @@ pub enum Field {
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct FunctionDef {
-    pub name: Option<Vec<u8>>,
-    pub method_name: Option<Vec<u8>>,
+    pub name: Option<LuaString>,
+    pub method_name: Option<LuaString>,
     pub parameters: Vec<TokenTree<Name>>,
-    pub has_varargs: bool,
+    pub varargs: Option<Span>,
     pub block: TokenTree<Block>,
 }

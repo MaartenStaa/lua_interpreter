@@ -1,5 +1,6 @@
-use miette::miette;
 use std::{fmt::Display, hash::Hash};
+
+use crate::error::lua_error;
 
 #[derive(Debug, Clone)]
 pub enum LuaNumber {
@@ -23,24 +24,42 @@ impl Hash for LuaNumber {
 }
 
 impl LuaNumber {
-    pub fn integer_repr(&self) -> miette::Result<i64> {
+    pub fn integer_repr(&self) -> crate::Result<i64> {
         match self {
             LuaNumber::Integer(i) => Ok(*i),
             LuaNumber::Float(f) => {
                 if f.is_nan() {
-                    return Err(miette!("NaN has no integer representation",));
+                    return Err(lua_error!("NaN has no integer representation",));
                 }
 
                 if f.is_infinite() {
-                    return Err(miette!("infinity has no integer representation",));
+                    return Err(lua_error!("infinity has no integer representation",));
                 }
 
                 if f.fract() != 0.0 {
-                    return Err(miette!("float has no integer representation",));
+                    return Err(lua_error!("float has no integer representation",));
                 }
 
                 Ok(*f as i64)
             }
+        }
+    }
+}
+
+impl From<LuaNumber> for f32 {
+    fn from(value: LuaNumber) -> Self {
+        match value {
+            LuaNumber::Integer(i) => i as f32,
+            LuaNumber::Float(f) => f as f32,
+        }
+    }
+}
+
+impl From<LuaNumber> for f64 {
+    fn from(value: LuaNumber) -> Self {
+        match value {
+            LuaNumber::Integer(i) => i as f64,
+            LuaNumber::Float(f) => f,
         }
     }
 }

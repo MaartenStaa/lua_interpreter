@@ -1,15 +1,10 @@
 #[derive(Debug)]
 #[repr(u8)]
 pub enum Instruction {
-    // Stack operations
+    // Loading values
     LoadConst,
     LoadClosure,
-    Pop,
-    Discard,
-    Swap,
-    Align,
-    AlignVararg,
-    DupFromMarker,
+    LoadNil,
 
     // Binary operations
     // Arithmetic
@@ -26,17 +21,11 @@ pub enum Instruction {
     Shl,
     Shr,
 
-    // Logical
-    And,
-    Or,
-
     // Comparison
     Eq,
     Ne,
     Lt,
     Le,
-    Gt,
-    Ge,
 
     // Concatenation
     Concat,
@@ -48,29 +37,41 @@ pub enum Instruction {
     BNot,
 
     // Variables
-    SetGlobal,
-    GetGlobal,
-    SetLocal,
-    GetLocal,
-    SetLocalAttr,
+    Mov,
     SetUpval,
     GetUpval,
     LoadVararg,
+    ToClose,
+    Close,
 
     // Table
     NewTable,
     SetTable,
+    SetTableConstKey,
+    SetTableUpval,
+    SetTableUpvalConstKey,
     GetTable,
+    GetTableConstKey,
+    GetTableUpval,
+    GetTableUpvalConstKey,
     AppendToTable,
+    AppendToTableM,
 
     // Function
     Call,
+    CallM,
+    CallT,
+    CallTM,
     Return,
+    Return0,
+    Return1,
+    ReturnM,
 
     // Control
     Jmp,
     JmpTrue,
     JmpFalse,
+    JmpClose,
 
     // Other
     Error,

@@ -1,9 +1,19 @@
+use std::fmt::Debug;
+
 use miette::{LabeledSpan, SourceSpan};
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+use crate::value::LuaString;
+
+#[derive(Copy, Clone, PartialEq, Eq)]
 pub struct Span {
     pub start: usize,
     pub end: usize,
+}
+
+impl Debug for Span {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}-{}", self.start, self.end)
+    }
 }
 
 impl Span {
@@ -13,6 +23,18 @@ impl Span {
 
     pub fn labeled(&self, label: impl Into<String>) -> LabeledSpan {
         LabeledSpan::at(SourceSpan::from(*self), label)
+    }
+}
+
+impl From<Span> for LabeledSpan {
+    fn from(span: Span) -> LabeledSpan {
+        LabeledSpan::new_with_span(None, span)
+    }
+}
+
+impl From<Span> for Vec<LabeledSpan> {
+    fn from(span: Span) -> Vec<LabeledSpan> {
+        vec![span.into()]
     }
 }
 
@@ -95,5 +117,5 @@ pub enum TokenKind<'source> {
     Nil,
     Integer(i64),
     Float(f64),
-    String(Vec<u8>), // TODO: Extract to dedicated type.
+    String(LuaString),
 }

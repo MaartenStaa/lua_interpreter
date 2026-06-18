@@ -1,15 +1,22 @@
+use std::sync::{Arc, RwLock};
+
 use crate::{
+    macros::assert_table,
     stdlib,
-    value::{LuaObject, LuaTable},
+    value::{LuaObject, LuaTable, LuaValue},
 };
 
-pub fn create_global_env() -> LuaTable {
+pub fn create_global_env() -> LuaValue {
     let mut env = LuaTable::new();
 
     // Global functions
     env.insert(
         "assert".into(),
         LuaObject::NativeFunction("assert", stdlib::globals::assert).into(),
+    );
+    env.insert(
+        "collectgarbage".into(),
+        LuaObject::NativeFunction("collectgarbage", stdlib::globals::collectgarbage).into(),
     );
     env.insert(
         "error".into(),
@@ -44,8 +51,16 @@ pub fn create_global_env() -> LuaTable {
         LuaObject::NativeFunction("print", stdlib::globals::print).into(),
     );
     env.insert(
+        "rawequal".into(),
+        LuaObject::NativeFunction("rawequal", stdlib::globals::rawequal).into(),
+    );
+    env.insert(
         "rawget".into(),
         LuaObject::NativeFunction("rawget", stdlib::globals::rawget).into(),
+    );
+    env.insert(
+        "rawlen".into(),
+        LuaObject::NativeFunction("rawlen", stdlib::globals::rawlen).into(),
     );
     env.insert(
         "rawset".into(),
@@ -103,5 +118,17 @@ pub fn create_global_env() -> LuaTable {
         LuaObject::NativeFunction("collectgarbage", stdlib::stubs::collectgarbage).into(),
     );
 
-    env
+    let mut metatable = LuaTable::new();
+    metatable.insert("__debug_repr".into(), "<global object _G>".into());
+    env.set_metatable(Some(LuaValue::Object(Arc::new(RwLock::new(
+        LuaObject::Table(metatable),
+    )))));
+
+    let object = LuaValue::Object(Arc::new(RwLock::new(LuaObject::Table(env))));
+    let g = object.clone();
+    assert_table!(write, &object, t, {
+        t.insert("_G".into(), g);
+    });
+
+    object
 }

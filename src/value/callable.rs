@@ -1,6 +1,6 @@
 use crate::vm::VM;
 
-use super::{metatables, LuaClosure, LuaObject, LuaValue};
+use super::{LuaClosure, LuaObject, LuaValue, metatables};
 
 #[derive(Debug)]
 pub(crate) struct Callable {
@@ -12,8 +12,8 @@ pub(crate) struct Callable {
 pub(crate) enum Method {
     Closure(LuaClosure),
     NativeFunction(
-        String,
-        fn(&mut VM, Vec<LuaValue>) -> miette::Result<Vec<LuaValue>>,
+        #[allow(unused)] String,
+        fn(&mut VM, Vec<LuaValue>) -> crate::Result<Vec<LuaValue>>,
     ),
 }
 
@@ -31,18 +31,19 @@ impl TryFrom<&LuaValue> for Callable {
     fn try_from(value: &LuaValue) -> Result<Self, Self::Error> {
         let result = match value {
             LuaValue::Object(o) => (&*o.read().unwrap()).try_into(),
+            LuaValue::UpValue(u) => (&u.read().unwrap().0).try_into(),
             _ => Err("expected closure or native function"),
         };
 
-        if result.is_err() {
-            if let Some(__call) = value.get_metavalue(&metatables::CALL_KEY) {
-                let __call: Result<Callable, _> = __call.try_into();
-                if let Ok(callable) = __call {
-                    return Ok(Callable {
-                        method: callable.method,
-                        is_metamethod: true,
-                    });
-                }
+        if result.is_err()
+            && let Some(__call) = value.get_metavalue(&metatables::CALL_KEY)
+        {
+            let __call: Result<Callable, _> = __call.try_into();
+            if let Ok(callable) = __call {
+                return Ok(Callable {
+                    method: callable.method,
+                    is_metamethod: true,
+                });
             }
         }
 
