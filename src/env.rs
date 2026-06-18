@@ -103,6 +103,7 @@ pub fn create_global_env() -> Arc<RwLock<UpValue>> {
     env.insert("_VERSION".into(), stdlib::globals::_VERSION.into());
 
     // Namespaced modules
+    env.insert("coroutine".into(), stdlib::coroutine::COROUTINE.clone());
     env.insert("debug".into(), stdlib::debug::DEBUG.clone());
     env.insert("io".into(), stdlib::io::IO.clone());
     env.insert("math".into(), stdlib::math::MATH.clone());

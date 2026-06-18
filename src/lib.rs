@@ -19,4 +19,4 @@ pub mod value;
 pub mod vm;
 
 pub use error::Result;
-pub use state::{GlobalState, LuaState, ThreadStatus};
+pub use state::{ExecutionResult, GlobalState, LuaState, ThreadStatus};

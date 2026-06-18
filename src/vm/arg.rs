@@ -1,9 +1,12 @@
-use std::borrow::Cow;
+use std::{
+    borrow::Cow,
+    sync::{Arc, RwLock},
+};
 
 use crate::{
     LuaState,
     error::lua_error,
-    value::{LuaNumber, LuaString, LuaValue},
+    value::{LuaNumber, LuaObject, LuaString, LuaValue, callable::Callable},
     vm::CallFrameKind,
 };
 
@@ -121,11 +124,46 @@ impl LuaState {
         }
     }
 
+    pub fn arg_as_callable(&self, index: usize) -> crate::Result<Callable> {
+        match self.try_arg(0) {
+            Some(LuaValue::Object(o)) => {
+                let o = &*o.read().unwrap();
+                let r: Result<Callable, _> = o.try_into();
+                Ok(r.map_err(|_| {
+                    self.arg_err::<()>(index, format!("function expected, got {}", o.type_name()))
+                        .unwrap_err()
+                })?)
+            }
+            Some(value) => self.arg_err(
+                index,
+                format!("function expected, got {}", value.type_name()),
+            ),
+            None => self.arg_err(index, "function expected, got no value"),
+        }
+    }
+
+    pub fn arg_as_thread(&self, index: usize) -> crate::Result<Arc<RwLock<LuaState>>> {
+        match self.try_arg(0) {
+            Some(LuaValue::Object(o)) => {
+                let o = &*o.write().unwrap();
+                let LuaObject::Thread(thread) = o else {
+                    return self.arg_err(index, format!("thread expected, got {}", o.type_name()));
+                };
+
+                Ok(Arc::clone(thread))
+            }
+            Some(value) => self.arg_err(
+                index,
+                format!("function expected, got {}", value.type_name()),
+            ),
+            None => self.arg_err(index, "function expected, got no value"),
+        }
+    }
     pub(crate) fn arg_err<T>(&self, index: usize, message: impl AsRef<str>) -> crate::Result<T> {
         let frame = &self.call_stack[self.call_stack_index - 1];
         let name: Cow<'_, str> = match frame.kind {
             CallFrameKind::Lua { chunk, .. } => {
-                Cow::Owned(self.get_chunk(chunk).unwrap().name.to_string())
+                Cow::Owned(self.with_chunk(chunk, |c| c.name.to_string()).unwrap())
             }
             CallFrameKind::Native { name } => Cow::Borrowed(name),
         };

@@ -3,7 +3,7 @@ use crate::value::NativeLuaFunction;
 use super::{LuaClosure, LuaObject, LuaValue, metatables};
 
 #[derive(Debug)]
-pub(crate) struct Callable {
+pub struct Callable {
     pub(crate) method: Method,
     pub(crate) is_metamethod: bool,
 }

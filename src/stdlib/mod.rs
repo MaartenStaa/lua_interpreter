@@ -1,5 +1,6 @@
 use crate::value::LuaValue;
 
+pub(crate) mod coroutine;
 pub(crate) mod debug;
 pub(crate) mod globals;
 pub(crate) mod io;

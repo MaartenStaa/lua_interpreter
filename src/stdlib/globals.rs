@@ -8,7 +8,7 @@ use std::{
 };
 
 use crate::{
-    LuaState,
+    ExecutionResult, LuaState,
     compiler::Compiler,
     error::lua_error,
     macros::{assert_string, assert_table, require_table},
@@ -232,10 +232,12 @@ pub(crate) fn load(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
                 let mut piece_result = match &callable.method {
                     Method::Closure(closure) => {
                         load_from_closure = true;
-                        state.run_closure(closure.clone(), vec![])
+                        state
+                            .run_closure(closure.clone(), vec![])?
+                            .unwrap_completed()
                     }
-                    Method::NativeFunction(name, f) => state.run_native_function(name, *f, 0, 0),
-                }?;
+                    Method::NativeFunction(name, f) => state.run_native_function(name, *f, 0, 0)?,
+                };
 
                 if piece_result.is_empty() {
                     break;
@@ -356,7 +358,7 @@ pub(crate) fn pairs(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
         let mut result = match method {
             Method::Closure(closure) => {
                 let args = vec![t.clone()];
-                state.run_closure(closure, args)?
+                state.run_closure(closure, args)?.unwrap_completed()
             }
             Method::NativeFunction(name, f) => state.run_native_function(name, f, 0, 1)?,
         };
@@ -392,7 +394,9 @@ pub(crate) fn pcall(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
             }..state.num_args())
                 .map(|i| state.arg(i))
                 .collect();
-            state.run_closure(closure.clone(), args)
+            state
+                .run_closure(closure.clone(), args)
+                .map(ExecutionResult::unwrap_completed)
         }
         Method::NativeFunction(name, f) => {
             let (args_r, num_args) = if callable_function.is_metamethod {
@@ -534,10 +538,14 @@ pub(crate) fn require(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
 
     // Loop through each package path option
     let package_config = &package::CONFIG;
-    let called_from = state
-        .get_current_chunk()
-        .expect("don't call require from native function")
-        .get_filename();
+    let called_from = match state.call_stack[state.call_stack_index - 1].kind {
+        crate::vm::CallFrameKind::Lua { chunk, .. } => state
+            .with_chunk(chunk, |c| c.get_filename().map(|p| p.to_path_buf()))
+            .expect("valid chunk"),
+        crate::vm::CallFrameKind::Native { .. } => {
+            panic!("don't call require from native function")
+        }
+    };
     for mut option in package_path
         .split(|c| *c == package_config.template_separator)
         .map(|s| s.to_vec())
@@ -559,7 +567,7 @@ pub(crate) fn require(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
         let mut path = Path::new(path_str.as_ref()).to_owned();
         if path.is_relative() {
             // Resolve to the current file's directory
-            if let Some(filename) = called_from {
+            if let Some(ref filename) = called_from {
                 path = filename
                     .parent()
                     .map(|parent| parent.join(&path).canonicalize())
@@ -821,7 +829,9 @@ pub(crate) fn xpcall(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
         Method::Closure(closure) => {
             let mut args = vec![function];
             args.extend((2..state.num_args()).map(|i| state.arg(i)));
-            state.run_closure(closure.clone(), args)
+            state
+                .run_closure(closure.clone(), args)
+                .map(ExecutionResult::unwrap_completed)
         }
         Method::NativeFunction(name, f) => {
             let (args_r, num_args) = if function_callable.is_metamethod {
@@ -844,10 +854,12 @@ pub(crate) fn xpcall(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
             Ok(_) => break,
             Err(e) => {
                 result = match &msgh.method {
-                    Method::Closure(closure) => state.run_closure(
-                        closure.clone(),
-                        vec![LuaValue::String(e.to_string().into_bytes().into())],
-                    ),
+                    Method::Closure(closure) => state
+                        .run_closure(
+                            closure.clone(),
+                            vec![LuaValue::String(e.to_string().into_bytes().into())],
+                        )
+                        .map(ExecutionResult::unwrap_completed),
                     Method::NativeFunction(name, f) => {
                         let args_r = state
                             .extend_stack([LuaValue::String(e.to_string().into_bytes().into())]);

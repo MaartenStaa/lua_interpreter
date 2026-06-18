@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    fmt::Debug,
     mem::size_of,
     path::{Path, PathBuf},
     sync::Arc,
@@ -22,7 +23,7 @@ pub(crate) struct ChunkUpValue {
     pub(crate) name: Option<LuaString>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Chunk {
     pub(crate) name: LuaString,
     // TODO: Maybe this can be a Cow<'source, Path>?
@@ -179,5 +180,20 @@ impl Chunk {
     pub fn named_source(&self) -> NamedSource<Vec<u8>> {
         NamedSource::new(String::from_utf8_lossy(&self.name), self.source.to_vec())
             .with_language("lua")
+    }
+}
+
+impl Debug for Chunk {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Chunk")
+            .field("name", &self.name)
+            .field("filename", &self.filename)
+            .field("source_length", &self.source.len())
+            .field("instructions_length", &self.instructions.len())
+            .field("max_registers", &self.max_registers)
+            .field("num_params", &self.num_params)
+            .field("has_varargs", &self.has_varargs)
+            .field("upvalues", &self.upvalues)
+            .finish()
     }
 }

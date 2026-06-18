@@ -6,11 +6,12 @@ use std::{
 };
 
 use crate::{
+    ExecutionResult, ThreadStatus,
     chunk::Chunk,
     error::{IntoLuaError, RuntimeError, lua_error},
     instruction::Instruction,
     macros::{assert_closure, assert_table},
-    state::{GlobalState, LuaState},
+    state::LuaState,
     value::{
         LuaClosure, LuaConst, LuaObject, LuaValue, NativeLuaFunction, UpValue,
         callable::{Callable, Method},
@@ -37,24 +38,30 @@ impl LuaState {
         self.global.read().unwrap().get_global_env()
     }
 
-    pub(crate) fn get_chunk(&self, index: ConstIndex) -> Option<&Chunk> {
-        // SAFETY: The returned value has its lifetime tied to `&self`, and chunks
-        // are never written to after they are added. So there is no risk of a
-        // future write lock writing into the data we're returning here.
-        unsafe {
-            let global_ptr = self.global.as_ref() as *const RwLock<GlobalState>;
-            let global_ref = &*global_ptr;
-            let guard = global_ref.read().unwrap();
-            let chunk_ref = guard.chunks.get(index as usize)?;
-
-            #[allow(clippy::missing_transmute_annotations)]
-            Some(std::mem::transmute(chunk_ref))
-        }
+    // Helper to read instruction bytes at an offset while holding the lock
+    fn read_instr_byte(&self, chunk_index: ConstIndex, offset: usize) -> u8 {
+        let global = self.global.read().unwrap();
+        global.chunks[chunk_index as usize].instructions[offset]
     }
 
-    pub fn get_current_chunk(&self) -> Option<&Chunk> {
+    // Helper to read a slice of instruction bytes
+    fn read_instr_bytes(&self, chunk_index: ConstIndex, start: usize, len: usize) -> Vec<u8> {
+        let global = self.global.read().unwrap();
+        global.chunks[chunk_index as usize].instructions[start..start + len].to_vec()
+    }
+
+    // Safe way to access chunk data - takes a callback that processes the chunk while lock is held
+    pub(crate) fn with_chunk<F, R>(&self, index: ConstIndex, f: F) -> Option<R>
+    where
+        F: FnOnce(&Chunk) -> R,
+    {
+        let global = self.global.read().unwrap();
+        global.chunks.get(index as usize).map(f)
+    }
+
+    pub fn get_current_chunk_name(&self) -> Option<String> {
         match self.call_stack[self.call_stack_index - 1].kind {
-            CallFrameKind::Lua { chunk, .. } => self.get_chunk(chunk),
+            CallFrameKind::Lua { chunk, .. } => self.with_chunk(chunk, |c| c.name.to_string()),
             CallFrameKind::Native { .. } => None,
         }
     }
@@ -217,9 +224,76 @@ impl LuaState {
         );
 
         match self.run_inner() {
-            Ok(v) => Ok(v),
+            Ok(ExecutionResult::Completed(values)) => Ok(values),
+            Ok(ExecutionResult::Yielded(_)) => {
+                unreachable!("unexpected yield from main thread")
+            }
             Err(mut err) => {
                 self.print_backtrace(&mut err);
+                Err(err)
+            }
+        }
+    }
+
+    pub(crate) fn resume(&mut self, args: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
+        match self.status {
+            ThreadStatus::Created => {
+                // Put the passed args on the stack and load varargs
+                let num_args = args.len();
+                self.stack
+                    .reserve(num_args.saturating_sub(self.stack.len()));
+                self.stack.splice(..num_args, args);
+
+                // Note: Native functions are not supported as coroutines - coroutine.create() rejects them
+                // If this is ever extended to support native functions, we would need to store the function
+                // pointer in the call frame and handle it specially here
+                let (chunk_num_args, has_varargs) =
+                    match self.call_stack[self.call_stack_index - 1].kind {
+                        CallFrameKind::Lua { chunk, .. } => self
+                            .with_chunk(chunk, |c| (c.num_params, c.has_varargs))
+                            .unwrap(),
+                        CallFrameKind::Native { .. } => {
+                            unreachable!("native functions cannot be used as coroutines")
+                        }
+                    };
+                self.align_closure_args(chunk_num_args, num_args, has_varargs);
+            }
+            ThreadStatus::Suspended {
+                resume_args_register,
+            } => {
+                if let Some(resume_args_register) = resume_args_register {
+                    let num_args = args.len();
+                    self.stack
+                        .reserve(num_args.saturating_sub(self.stack.len()));
+
+                    for (i, arg) in args.into_iter().enumerate() {
+                        self.set(resume_args_register as usize + i, arg);
+                    }
+                }
+            }
+            ThreadStatus::Running => {
+                return Err(lua_error!("cannot resume a running coroutine"));
+            }
+            ThreadStatus::Dead => {
+                return Err(lua_error!("cannot resume a dead coroutine"));
+            }
+        }
+
+        assert!(self.call_stack_index > 0, "no call frame to resume");
+
+        self.status = ThreadStatus::Running;
+        match self.run_inner() {
+            Ok(ExecutionResult::Completed(values)) => {
+                self.status = ThreadStatus::Dead;
+                Ok(values)
+            }
+            Ok(ExecutionResult::Yielded(values)) => {
+                // Status will be set to Suspended with resume args register
+                // This is handled when we actually yield
+                Ok(values)
+            }
+            Err(err) => {
+                self.status = ThreadStatus::Dead;
                 Err(err)
             }
         }
@@ -229,14 +303,19 @@ impl LuaState {
         &mut self,
         value: LuaClosure,
         args: Vec<LuaValue>,
-    ) -> crate::Result<Vec<LuaValue>> {
+    ) -> crate::Result<ExecutionResult> {
         let original_call_stack_index = self.call_stack_index;
         let frame_pointer = self.stack.len();
 
-        let chunk = self.get_chunk(value.chunk).unwrap();
-        let max_registers = chunk.max_registers;
-        let num_params = chunk.num_params as u16;
-        let has_varargs = chunk.has_varargs;
+        let (max_registers, num_params, has_varargs) = self
+            .with_chunk(value.chunk, |chunk| {
+                (
+                    chunk.max_registers,
+                    chunk.num_params as u16,
+                    chunk.has_varargs,
+                )
+            })
+            .unwrap();
 
         self.push_call_frame(
             CallFrameKind::for_chunk(value.chunk),
@@ -261,25 +340,65 @@ impl LuaState {
         self.align_closure_args(num_params, num_args, has_varargs);
 
         let result = match self.run_inner() {
-            Ok(r) => {
+            Ok(ExecutionResult::Completed(values)) => {
                 // NOTE: in this case we don't need to pop the call frame, as it was
                 // already popped by the `return` instruction (which is always present).
-                Ok(r)
+                Ok(ExecutionResult::Completed(values))
             }
+            Ok(ExecutionResult::Yielded(values)) => Ok(ExecutionResult::Yielded(values)),
             Err(err) => {
                 println!("err {err}");
                 Err(self.pop_call_frames_into_error(original_call_stack_index, *err))
             }
         };
 
+        let chunk_name = self
+            .with_chunk(value.chunk, |c| c.name.to_string())
+            .unwrap();
         assert_eq!(
             original_call_stack_index,
             self.call_stack_index,
             "unbalanced call stack after closure call '{name}'",
-            name = self.get_chunk(value.chunk).unwrap().name
+            name = chunk_name
         );
 
         result
+    }
+
+    pub(crate) fn set_up_closure_call_frame(
+        &mut self,
+        frame_pointer: usize,
+        return_addr: usize,
+        return_value_register: u8,
+        closure: LuaClosure,
+        num_passed_params: impl Into<usize>,
+    ) -> crate::Result {
+        let (max_registers, num_params, has_varargs) = self
+            .with_chunk(closure.chunk, |chunk| {
+                (
+                    chunk.max_registers,
+                    chunk.num_params as u16,
+                    chunk.has_varargs,
+                )
+            })
+            .unwrap();
+
+        self.push_call_frame(
+            CallFrameKind::for_chunk(closure.chunk),
+            true,
+            frame_pointer,
+            max_registers,
+            return_addr,
+            return_value_register,
+            Some(closure.upvalues.clone()),
+            num_params,
+            has_varargs,
+            false,
+        )?;
+
+        self.align_closure_args(num_params, num_passed_params, has_varargs);
+
+        Ok(())
     }
 
     /// Handle arguments when entering a closure, i.e. pad extra `nil` values if
@@ -362,7 +481,7 @@ impl LuaState {
         result
     }
 
-    fn run_inner(&mut self) -> crate::Result<Vec<LuaValue>> {
+    fn run_inner(&mut self) -> crate::Result<ExecutionResult> {
         'main: loop {
             let CallFrameKind::Lua {
                 chunk: chunk_index,
@@ -393,11 +512,10 @@ impl LuaState {
                 instr
             };
 
-            let chunk = self.get_chunk(chunk_index).unwrap();
-
+            // Macros to safely read instruction parameters while holding the lock
             macro_rules! instr_param {
                 ($offset:expr) => {
-                    chunk.instructions[ip + $offset]
+                    self.read_instr_byte(chunk_index, ip + $offset)
                 };
                 () => {
                     instr_param!(1)
@@ -405,7 +523,7 @@ impl LuaState {
             }
             macro_rules! register {
                 ($offset:expr) => {
-                    chunk.instructions[ip + $offset]
+                    self.read_instr_byte(chunk_index, ip + $offset)
                 };
                 () => {
                     register!(1)
@@ -414,7 +532,7 @@ impl LuaState {
             macro_rules! const_index {
                 ($offset:expr) => {{
                     let bytes =
-                        &chunk.instructions[ip + $offset..ip + $offset + size_of::<ConstIndex>()];
+                        self.read_instr_bytes(chunk_index, ip + $offset, size_of::<ConstIndex>());
                     ConstIndex::from_be_bytes(bytes.try_into().unwrap())
                 }};
                 () => {
@@ -424,7 +542,7 @@ impl LuaState {
             macro_rules! jump_addr {
                 ($offset:expr) => {{
                     let bytes =
-                        &chunk.instructions[ip + $offset..ip + $offset + size_of::<JumpAddr>()];
+                        self.read_instr_bytes(chunk_index, ip + $offset, size_of::<JumpAddr>());
                     JumpAddr::from_be_bytes(bytes.try_into().unwrap())
                 }};
             }
@@ -483,11 +601,33 @@ impl LuaState {
                     ($a $tt $b)?
                 }};
                 (_internal_metamethod_result $value:ident op_bool_result, $($_:tt),*) => {{
-                    $value?.as_boolean().into()
+                    match $value? {
+                        ExecutionResult::Completed(mut values) => {
+                            if values.is_empty() {
+                                LuaValue::Nil
+                            } else {
+                                values.swap_remove(0)
+                            }
+                        },
+                        result @ ExecutionResult::Yielded(_) => {
+                            return Ok(result);
+                        }
+                    }.as_boolean().into()
                 }};
-                (_internal_metamethod_result $value:ident $($_:tt),*) => {{
-                    $value?
-                }};
+                (_internal_metamethod_result $value:ident $($_:tt),*) => {
+                    match $value? {
+                        ExecutionResult::Completed(mut values) => {
+                            if values.is_empty() {
+                                LuaValue::Nil
+                            } else {
+                                values.swap_remove(0)
+                            }
+                        },
+                        result @ ExecutionResult::Yielded(_) => {
+                            return Ok(result);
+                        }
+                    }
+                };
             }
             macro_rules! unary_op_num {
                 (method = $name:ident, $metamethod:ident, $op_name:expr) => {
@@ -503,9 +643,9 @@ impl LuaState {
                     let dest_r = register!(1);
                     let value_r = register!(2);
                     let value = self.get_ref(value_r);
-                    let result = match &*value {
+                    let result: LuaValue = match &*value {
                         LuaValue::Number(num) => {
-                            unary_op_num!(_internal num, $($param),*)
+                            unary_op_num!(_internal dest_r num, $($param),*)
                         }.into(),
                         _ => {
                             let value = value.into_owned();
@@ -514,7 +654,10 @@ impl LuaState {
                                 &metatables::$metamethod,
                                 vec![value],
                             ) {
-                                Some(result) => result?,
+                                Some(result) => {
+                                    handle_execution_result!({ result? }, dest_r, 3)
+                                    // unary_op_num!(_internal handle_result dest_r { result? })
+                                },
                                 None => {
                                     return Err(self.op_err($op_name, self.get_ref(value_r).as_ref(), None));
 
@@ -525,15 +668,53 @@ impl LuaState {
                     self.set(dest_r, result);
                     3
                 }};
-                (_internal $value:ident, method, $name:ident) => {{
+                (_internal $dest_r:ident $value:ident, method, $name:ident) => {{
                     $value.$name()
                 }};
-                (_internal $value:ident, op, $tt:tt) => {{
-                    ($tt $value)
+                (_internal $dest_r:ident $value:ident, op, $tt:tt) => {{
+                    $tt $value
                 }};
-                (_internal $value:ident, fallible_op, $tt:tt) => {{
+                (_internal $dest_r:ident $value:ident, fallible_op, $tt:tt) => {{
                     ($tt $value)?
                 }};
+                (_internal handle_result $dest_r:ident $value:tt) => {
+                    match $value {
+                        ExecutionResult::Completed(mut values) => {
+                            if values.is_empty() {
+                                LuaValue::Nil
+                            } else {
+                                values.swap_remove(0)
+                            }
+                        },
+                        result @ ExecutionResult::Yielded(_) => {
+                            self.status = ThreadStatus::Suspended {
+                                resume_args_register: Some($dest_r),
+                            };
+                            self.call_stack[self.call_stack_index - 1].inc_ip(3);
+                            return Ok(result);
+                        }
+                    }
+                };
+            }
+            macro_rules! handle_execution_result {
+                ($result:expr, $dest_r:expr, $ip_inc:expr) => {
+                    match $result {
+                        ExecutionResult::Completed(mut values) => {
+                            if values.is_empty() {
+                                LuaValue::Nil
+                            } else {
+                                values.swap_remove(0)
+                            }
+                        }
+                        result @ ExecutionResult::Yielded(_) => {
+                            self.status = ThreadStatus::Suspended {
+                                resume_args_register: Some($dest_r),
+                            };
+                            self.call_stack[self.call_stack_index - 1].inc_ip($ip_inc);
+                            return Ok(result);
+                        }
+                    }
+                };
             }
 
             let instruction_increment = match Instruction::from(instruction) {
@@ -556,15 +737,10 @@ impl LuaState {
                     self.set(register, closure.into());
 
                     assert_closure!(write, self.get(register), closure, {
-                        let chunk_for_upvalues = self.get_chunk(chunk_index).unwrap();
-                        for (i, upvalue) in chunk_for_upvalues
-                            .upvalues
-                            // NOTE: Need to clone here since we're borrowing `&mut self` below for
-                            // `capture_upvalue`.
-                            .clone()
-                            .iter()
-                            .enumerate()
-                        {
+                        let upvalues_to_capture = self
+                            .with_chunk(chunk_index, |c| c.upvalues.clone())
+                            .unwrap();
+                        for (i, upvalue) in upvalues_to_capture.iter().enumerate() {
                             let index = upvalue.index;
                             if upvalue.is_local {
                                 closure.upvalues.insert(i, self.capture_upvalue(index));
@@ -650,7 +826,8 @@ impl LuaState {
                             &metatables::EQ_KEY,
                             vec![a.into_owned(), b.into_owned()],
                         ) {
-                            result?.as_boolean()
+                            handle_execution_result!(result?, dest_r, 4).as_boolean()
+                            // result?.as_boolean()
                         } else {
                             is_equal
                         }
@@ -676,7 +853,8 @@ impl LuaState {
                             &metatables::EQ_KEY,
                             vec![a.into_owned(), b.into_owned()],
                         ) {
-                            result?.as_boolean()
+                            handle_execution_result!(result?, dest_r, 4).as_boolean()
+                            // result?.as_boolean()
                         } else {
                             is_equal
                         }
@@ -711,7 +889,8 @@ impl LuaState {
                                 vec![a.clone(), b.clone()],
                             ) {
                                 Some(value) => {
-                                    self.set(dest_r, value?);
+                                    let value = handle_execution_result!(value?, dest_r, 4);
+                                    self.set(dest_r, value);
                                 }
                                 None => {
                                     return Err(Box::new(e));
@@ -745,7 +924,7 @@ impl LuaState {
                         _ => {
                             let value = value.into_owned();
                             match metatables::handle(self, &metatables::LEN_KEY, vec![value]) {
-                                Some(result) => result?,
+                                Some(result) => handle_execution_result!(result?, dest_r, 3),
                                 None => {
                                     // If the value is a table (but it didn't have a __len
                                     // metamethod), return the length of the array part
@@ -929,15 +1108,55 @@ impl LuaState {
                             if let Ok(__newindex) = __newindex_callable {
                                 match __newindex.method {
                                     Method::Closure(closure) => {
-                                        // Run through `run_closure` rather than jumping to it
-                                        // directly, so return values are cleaned up properly
-                                        self.run_closure(closure, vec![table, key, value])?;
-                                        handled = true;
-                                        break;
+                                        let frame_pointer = match instr {
+                                            Instruction::SetTable => {
+                                                // Arguments are already correctly placed
+                                                register!(1)
+                                            }
+                                            Instruction::SetTableConstKey => {
+                                                let table_r = register!(1);
+                                                self.set(table_r + 2, value);
+                                                table_r
+                                            }
+                                            Instruction::SetTableUpval => {
+                                                let frame_pointer = register!(1);
+                                                self.set(frame_pointer, target);
+                                                self.set(frame_pointer + 1, key);
+                                                self.set(frame_pointer + 2, value);
+                                                frame_pointer
+                                            }
+                                            Instruction::SetTableUpvalConstKey => {
+                                                let frame_pointer = register!(1);
+                                                self.set(frame_pointer, target);
+                                                self.set(frame_pointer + 1, key);
+                                                self.set(frame_pointer + 2, value);
+                                                frame_pointer
+                                            }
+                                            _ => unreachable!(),
+                                        };
+                                        self.set_up_closure_call_frame(
+                                            frame_pointer as usize,
+                                            ip + increment,
+                                            frame_pointer,
+                                            closure,
+                                            3usize,
+                                        )?;
+                                        continue 'main;
                                     }
                                     Method::NativeFunction(name, f) => {
                                         let args_r = self.extend_stack([table, key, value]);
                                         self.run_native_function(name, f, args_r, 3)?;
+
+                                        // Check if the native function yielded
+                                        if let Some(yield_values) = self.pending_yield.take() {
+                                            // In this case, we don't care about the return values,
+                                            // so set status to suspended with an empty
+                                            // `resume_args_register`.
+                                            self.status = ThreadStatus::Suspended {
+                                                resume_args_register: None,
+                                            };
+                                            return Ok(ExecutionResult::Yielded(yield_values));
+                                        }
                                     }
                                 }
                                 handled = true;
@@ -1034,31 +1253,29 @@ impl LuaState {
                                         let parent_frame_pointer = self.call_stack
                                             [self.call_stack_index - 1]
                                             .frame_pointer;
-                                        let chunk = self.get_chunk(closure.chunk).unwrap();
-                                        self.push_call_frame(
-                                            CallFrameKind::for_chunk(closure.chunk),
-                                            false,
+                                        self.set_up_closure_call_frame(
                                             parent_frame_pointer + table_r as usize,
-                                            chunk.max_registers,
                                             ip + increment,
                                             dest_r,
-                                            Some(closure.upvalues.clone()),
-                                            chunk.num_params as u16,
-                                            chunk.has_varargs,
-                                            false,
-                                        )?;
-                                        let chunk = self.get_chunk(closure.chunk).unwrap();
-                                        self.align_closure_args(
-                                            chunk.num_params,
+                                            closure,
                                             1usize,
-                                            chunk.has_varargs,
-                                        );
+                                        )?;
                                         continue 'main;
                                     }
                                     Method::NativeFunction(name, f) => {
                                         let args_r = self.extend_stack([table, key]);
                                         let result =
                                             self.run_native_function(name, f, args_r, 2)?;
+
+                                        // Check if the native function yielded
+                                        if let Some(yield_values) = self.pending_yield.take() {
+                                            // Set status to Suspended, storing where to put resume args
+                                            self.status = ThreadStatus::Suspended {
+                                                resume_args_register: Some(dest_r),
+                                            };
+                                            return Ok(ExecutionResult::Yielded(yield_values));
+                                        }
+
                                         if let Some(return_value) = result.into_iter().next() {
                                             self.set(dest_r, return_value);
                                         } else {
@@ -1151,27 +1368,42 @@ impl LuaState {
                         Some(Method::Closure(closure)) => {
                             let parent_frame_pointer =
                                 self.call_stack[self.call_stack_index - 1].frame_pointer;
-                            let chunk = self.get_chunk(closure.chunk).unwrap();
+                            let (max_regs, num_params, has_varargs) = self
+                                .with_chunk(closure.chunk, |c| {
+                                    (c.max_registers, c.num_params, c.has_varargs)
+                                })
+                                .unwrap();
                             self.push_call_frame(
                                 CallFrameKind::for_chunk(closure.chunk),
                                 false,
                                 parent_frame_pointer + params_r as usize,
-                                chunk.max_registers,
+                                max_regs,
                                 ip + 4,
                                 func_r,
                                 Some(closure.upvalues.clone()),
-                                chunk.num_params as u16,
-                                chunk.has_varargs,
+                                num_params as u16,
+                                has_varargs,
                                 !is_single_return,
                             )?;
-                            let chunk = self.get_chunk(closure.chunk).unwrap();
-                            self.align_closure_args(chunk.num_params, num_args, chunk.has_varargs);
+                            self.align_closure_args(num_params, num_args, has_varargs);
 
                             continue;
                         }
                         Some(Method::NativeFunction(name, f)) => {
                             let result =
                                 self.run_native_function(name, f, params_r, num_args as u16)?;
+
+                            // Check if the native function yielded
+                            if let Some(yield_values) = self.pending_yield.take() {
+                                // Set status to Suspended, storing where to put resume args
+                                self.status = ThreadStatus::Suspended {
+                                    resume_args_register: Some(func_r),
+                                };
+                                // Increment IP past the Call instruction so we don't re-execute it on resume
+                                self.call_stack[self.call_stack_index - 1].inc_ip(4);
+                                return Ok(ExecutionResult::Yielded(yield_values));
+                            }
+
                             let value_slots_needed = match (is_single_return, result.len()) {
                                 (true, 0) => 1,
                                 (true, n) => n.min(1),
@@ -1269,7 +1501,7 @@ impl LuaState {
 
                     // Check if this is the root frame, or if we're leaving this chunk
                     if frame.border_frame {
-                        return Ok(return_values);
+                        return Ok(ExecutionResult::Completed(return_values));
                     }
 
                     self.call_stack[self.call_stack_index - 1].set_ip(frame.return_addr);

@@ -47,10 +47,9 @@ fn getupvalue(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
 
     if let Some(upvalue) = &closure.upvalues.get(&(n as usize)) {
         let chunk = closure.chunk;
-        let name = state.get_chunk(chunk).expect("invalid chunk").upvalues[n as usize]
-            .name
-            .clone()
-            .unwrap_or_else(|| b"?".into());
+        let name = state.with_chunk(chunk, |c| {
+            c.upvalues[n as usize].name.clone()
+        }).expect("invalid chunk").unwrap_or_else(|| b"?".into());
 
         Ok(vec![name.into(), upvalue.read().unwrap().clone()])
     } else {

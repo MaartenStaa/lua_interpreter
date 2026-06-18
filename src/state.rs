@@ -1,11 +1,15 @@
 use crate::{
     chunk::Chunk,
     env,
-    value::{LuaConst, LuaValue, UpValue},
+    value::{
+        LuaConst, LuaValue, UpValue,
+        callable::{Callable, Method},
+    },
     vm::{CallFrameKind, ConstIndex, MAX_STACK_SIZE, call_frame::CallFrame, trace::VMTracer},
 };
 use std::{
     collections::HashMap,
+    fmt::Debug,
     sync::{Arc, LazyLock, RwLock},
 };
 
@@ -71,8 +75,40 @@ impl GlobalState {
     }
 }
 
-/// Execution context for a thread/coroutine (mirrors C's lua_State)
+/// Thread status (coroutine state)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThreadStatus {
+    /// Newly created, hasn't run yet
+    Created,
+    /// Created or yielded, waiting for resume
+    Suspended { resume_args_register: Option<u8> },
+    /// Currently executing
+    Running,
+    /// Finished or error
+    Dead,
+}
+
+/// Result of executing Lua code - either completes or yields
 #[derive(Debug)]
+pub enum ExecutionResult {
+    /// Execution completed normally with return values
+    Completed(Vec<LuaValue>),
+    /// Execution yielded with values (coroutine suspended)
+    Yielded(Vec<LuaValue>),
+}
+
+impl ExecutionResult {
+    pub(crate) fn unwrap_completed(self) -> Vec<LuaValue> {
+        match self {
+            ExecutionResult::Completed(v) => v,
+            ExecutionResult::Yielded(_) => {
+                panic!("expected Completed execution result, got Yielded")
+            }
+        }
+    }
+}
+
+/// Execution context for a thread/coroutine (mirrors C's lua_State)
 pub struct LuaState {
     // Reference to shared global state
     pub(crate) global: Arc<RwLock<GlobalState>>,
@@ -82,6 +118,13 @@ pub struct LuaState {
     pub(crate) multres: usize,
     pub(crate) call_stack: [CallFrame; MAX_STACK_SIZE],
     pub(crate) call_stack_index: usize,
+
+    // Status tracking
+    pub(crate) status: ThreadStatus,
+    pub(crate) is_main_thread: bool,
+
+    // Yield handling - set by coroutine.yield to signal a pending yield
+    pub(crate) pending_yield: Option<Vec<LuaValue>>,
 
     // Debug/trace support
     pub(crate) tracer: Option<VMTracer>,
@@ -102,14 +145,7 @@ impl LuaState {
             chunk.max_registers
         };
 
-        let mut result = Self {
-            global,
-            stack: Vec::new(),
-            multres: 0,
-            call_stack: [const { CallFrame::default() }; MAX_STACK_SIZE],
-            call_stack_index: 0,
-            tracer: None,
-        };
+        let mut result = Self::new_uninit(global, true);
 
         // Initialize with one call frame to start execution
         result
@@ -134,8 +170,106 @@ impl LuaState {
         result
     }
 
+    pub(crate) fn for_callable(global: Arc<RwLock<GlobalState>>, callable: Callable) -> Self {
+        let mut result = Self::new_uninit(global, false);
+        match callable.method {
+            Method::Closure(closure) => {
+                let (max_registers, num_params, has_varargs) = {
+                    let global_state = result.global.read().unwrap();
+                    let chunk = &global_state.chunks[closure.chunk as usize];
+                    (chunk.max_registers, chunk.num_params, chunk.has_varargs)
+                };
+
+                // TODO: Do we need to do something with `closure.is_metamethod` here?
+                result
+                    .push_call_frame(
+                        CallFrameKind::for_chunk(closure.chunk),
+                        true,
+                        0,
+                        max_registers,
+                        0,
+                        0,
+                        Some(closure.upvalues),
+                        num_params.into(),
+                        has_varargs,
+                        true,
+                    )
+                    .expect("cannot stack overflow");
+            }
+            // Note: This case should never be reached - coroutine.create() rejects native functions
+            // If native function support is added in the future, we would need to store `f` in the call frame
+            Method::NativeFunction(name, _f) => {
+                result
+                    .push_call_frame(
+                        CallFrameKind::Native { name },
+                        true,
+                        0,
+                        0,
+                        0,
+                        0,
+                        None,
+                        0,
+                        false,
+                        true,
+                    )
+                    .expect("cannot stack overflow");
+            }
+        }
+
+        result
+    }
+
+    fn new_uninit(global: Arc<RwLock<GlobalState>>, is_main_thread: bool) -> Self {
+        Self {
+            global,
+            stack: Vec::new(),
+            multres: 0,
+            call_stack: [const { CallFrame::default() }; MAX_STACK_SIZE],
+            call_stack_index: 0,
+            status: ThreadStatus::Created,
+            is_main_thread,
+            pending_yield: None,
+            tracer: None,
+        }
+    }
+
     pub fn with_tracer(mut self, trace_vm: bool) -> Self {
         self.tracer = trace_vm.then(VMTracer::new);
         self
+    }
+
+    pub fn status(&self) -> ThreadStatus {
+        self.status
+    }
+
+    /// Trigger a yield with the given values. This sets pending_yield which will
+    /// be checked after the current native function returns.
+    pub fn yield_values(&mut self, values: Vec<LuaValue>) {
+        self.pending_yield = Some(values);
+    }
+
+    /// Check if execution can yield (not across C-call boundary)
+    /// A yield is not allowed if there's a C function (native function) in the call stack,
+    /// except for the immediate caller (which would be coroutine.yield itself)
+    pub fn is_yieldable(&self) -> bool {
+        // Check all frames except the top one (which is coroutine.yield)
+        // If any is a native function, we cannot yield
+        !(0..self.call_stack_index.saturating_sub(1)).any(|i| {
+            matches!(
+                self.call_stack[i].kind,
+                crate::vm::CallFrameKind::Native { .. }
+            )
+        })
+    }
+}
+
+impl Debug for LuaState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LuaState")
+            .field("stack", &self.stack)
+            .field("call_stack", &&self.call_stack[..self.call_stack_index])
+            .field("call_stack_index", &self.call_stack_index)
+            .field("status", &self.status)
+            .finish()
     }
 }

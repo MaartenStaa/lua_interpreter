@@ -39,12 +39,13 @@ impl LuaState {
             self.call_stack[self.call_stack_index - 1].kind
         };
 
-        if let CallFrameKind::Lua { chunk, ip } = origin_kind {
-            let chunk = self.get_chunk(chunk).unwrap();
-            if let Some(span) = chunk.instruction_spans.get(&ip) {
-                let source = chunk.named_source();
-                err.set_source_code(source).set_labels(*span);
-            }
+        if let CallFrameKind::Lua { chunk: chunk_idx, ip } = origin_kind {
+            self.with_chunk(chunk_idx, |chunk| {
+                if let Some(span) = chunk.instruction_spans.get(&ip) {
+                    let source = chunk.named_source();
+                    err.set_source_code(source).set_labels(*span);
+                }
+            });
         }
 
         eprintln!("{err:?}");
@@ -101,10 +102,12 @@ impl LuaState {
 
     fn error_for_frame(&self, kind: CallFrameKind, index: usize) -> LuaError {
         match kind {
-            CallFrameKind::Lua { chunk, ip } => {
-                let chunk = self.get_chunk(chunk).unwrap();
+            CallFrameKind::Lua { chunk: chunk_idx, ip } => {
+                let (chunk_name, span, source) = self.with_chunk(chunk_idx, |chunk| {
+                    (chunk.name.clone(), chunk.instruction_spans.get(&ip).copied(), chunk.named_source())
+                }).unwrap();
                 let mut err =
-                    LuaError::new(format!("#{index} {}", String::from_utf8_lossy(&chunk.name)));
+                    LuaError::new(format!("#{index} {}", String::from_utf8_lossy(&chunk_name)));
 
                 // The initial error should already have a span attached, beyond
                 // that we want to ensure that we attach labels for every frame
@@ -116,9 +119,8 @@ impl LuaState {
                 //   location.
                 // - We skip the top item in the call stack (see above), as there's no source for
                 //   that "call".
-                if let Some(span) = chunk.instruction_spans.get(&ip) {
-                    let source = chunk.named_source();
-                    err = err.with_source_code(source).with_labels(*span);
+                if let Some(span) = span {
+                    err = err.with_source_code(source).with_labels(span);
                 }
 
                 err

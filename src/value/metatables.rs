@@ -1,6 +1,6 @@
 use std::sync::LazyLock;
 
-use crate::{LuaState, macros::assert_table};
+use crate::{ExecutionResult, LuaState, macros::assert_table};
 
 use super::{LuaObject, LuaTable, LuaValue, UserData};
 
@@ -82,36 +82,42 @@ pub fn handle(
     state: &mut LuaState,
     key: &LuaValue,
     input: Vec<LuaValue>,
-) -> Option<crate::Result<LuaValue>> {
+) -> Option<crate::Result<ExecutionResult>> {
     assert!(!input.is_empty());
 
     for value in input.iter() {
         if let Some(LuaValue::Object(o)) = value.get_metavalue(key) {
             match &*o.read().unwrap() {
                 LuaObject::Closure(c) => {
-                    let mut result = match state.run_closure(c.clone(), input) {
-                        Ok(value) => value,
+                    let result = match state.run_closure(c.clone(), input) {
+                        Ok(result) => result,
+                        // Ok(ExecutionResult::Completed(mut value)) => {
+                        //     if value.is_empty() {
+                        //         LuaValue::Nil
+                        //     } else {
+                        //         value.swap_remove(0)
+                        //     }
+                        // }
+                        // Ok(ExecutionResult::Yielded(_)) => unreachable,
                         Err(e) => return Some(Err(e)),
                     };
-                    return Some(Ok(if result.is_empty() {
-                        LuaValue::Nil
-                    } else {
-                        result.swap_remove(0)
-                    }));
+
+                    return Some(Ok(result));
                 }
                 LuaObject::NativeFunction(name, f) => {
                     let num_args = input.len();
                     let args_r = state.extend_stack(input);
-                    let mut result =
-                        match state.run_native_function(name, *f, args_r, num_args as u16) {
-                            Ok(value) => value,
-                            Err(e) => return Some(Err(e)),
-                        };
-                    return Some(Ok(if result.is_empty() {
-                        LuaValue::Nil
-                    } else {
-                        result.swap_remove(0)
-                    }));
+                    let result = match state.run_native_function(name, *f, args_r, num_args as u16)
+                    {
+                        Ok(value) => value,
+                        Err(e) => return Some(Err(e)),
+                    };
+                    return Some(Ok(ExecutionResult::Completed(result)));
+                    // return Some(Ok(if result.is_empty() {
+                    //     LuaValue::Nil
+                    // } else {
+                    //     result.swap_remove(0)
+                    // }));
                 }
                 _ => {}
             }
