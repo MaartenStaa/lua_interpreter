@@ -351,6 +351,7 @@ fn format(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
                     ));
                 }
             },
+            'p' => format!("{:x}", &v as *const _ as usize),
             other => return Err(lua_error!("unsupported format specifier: {:?}", other)),
         };
 

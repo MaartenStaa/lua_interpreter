@@ -20,7 +20,7 @@ macro_rules! instr {
     };
 }
 
-pub fn print_instructions(state: &LuaState, index: usize, chunk: &Chunk) {
+pub fn print_instructions(state: &LuaState, chunk: &Chunk) {
     let instructions = chunk.get_instructions();
     let global_state = state.global.read().unwrap();
     let consts = global_state.get_consts();
@@ -65,11 +65,10 @@ pub fn print_instructions(state: &LuaState, index: usize, chunk: &Chunk) {
                 let chunk_index = ConstIndex::from_be_bytes(const_index_bytes.try_into().unwrap());
                 instr!("LOAD_CLOSURE");
                 reg!();
-                let chunk_name = state.with_chunk(chunk_index, |c| c.name.to_string()).expect("valid chunk index");
-                println!(
-                    "FUNCTION<{name}:{chunk_index:04}>",
-                    name = chunk_name
-                );
+                let chunk_name = state
+                    .with_chunk(chunk_index, |c| c.name.to_string())
+                    .expect("valid chunk index");
+                println!("FUNCTION<{name}:{chunk_index:04}>", name = chunk_name);
 
                 2 + size_of::<ConstIndex>()
             }

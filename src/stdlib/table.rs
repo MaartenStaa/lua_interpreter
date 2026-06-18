@@ -41,7 +41,7 @@ fn concat(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
             temp = Some(n.to_string());
             temp.as_ref().map(|s| s.as_bytes())
         }
-        Some(LuaValue::Nil) | None => None,
+        None | Some(LuaValue::Nil) => None,
         Some(v) => {
             return Err(lua_error!(
                 "bad argument #1 to 'table.concat' (string expected, got {type_name})",

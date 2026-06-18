@@ -696,11 +696,404 @@ And the stack would look like this at each step:
 08: [] // Printed the result, which consumed the value
 ```
 
-### Error handling
+### Variables
+
+The next step is to add support for variables. In Lua, variables can be local or
+global, and can be assigned to, read from, and passed to functions. The VM needs
+to keep track of these variables, and their values, in order to execute the
+program correctly.
+
+In the VM, local variables are stored on the stack, with an offset from the
+frame pointer, a concept we will dive into later when we implement function
+calls. For now, we can just assume that the index of a local variable
+corresponds to its position on the stack.
+
+Global variables, on the other hand, are stored in a table in the VM, which maps
+variable names to values. This table is shared between all functions, and is
+used to store and reference global variables.
+
+Let's look at another example, this time using both local and global variables:
+
+```lua
+local x = 3 * 4
+y = 5 + x
+x = x + 1
+local z = x + y
+print(z)
+```
+
+Here, we're declaring a local variable `x`, assigning it the value `3 * 4`, then
+assigning the value `5 + x` to the global variable `y`, then assigning the value
+`x + y` to the local variable `z`, and finally printing the value of `z`.
+
+The bytecode for this program would look something like this:
+
+```
+00: LOAD_CONST 0 // Load the constant 3
+02: LOAD_CONST 1 // Load the constant 4
+04: MUL          // Multiply 3 and 4
+05: LOAD_CONST 2 // Load the constant 5
+07: GET_LOCAL 0  // Get the value of x
+09: ADD          // Add 5 and x
+10: SET_GLOBAL 3 // Set the value of y
+12: GET_LOCAL 0  // Get the value of x
+14: LOAD_CONST 4 // Load the constant 1
+16: ADD          // Add x and 1
+17: SET_LOCAL 0  // Set the value of x
+19: GET_LOCAL 0  // Get the value of x
+21: GET_GLOBAL 3 // Get the value of y
+23: ADD          // Add x and y
+24: GET_LOCAL 2  // Get the value of z
+26: PRINT        // Print the value of z
+27: HALT         // Stop execution
+```
+
+Perhaps the most surprising part here, is that there are no `SET_LOCAL`
+instructions corresponding to the initial assignments of `x` and `z`. These are
+not needed, as both the "temporary" we work with, and the local variables
+themselves, are kept on the stack. Imagine we had the Lua code `local x = 3`,
+we could implement that as follows:
+
+```
+00: LOAD_CONST 0 // Load the constant 3
+02: SET_LOCAL 0  // Set the value of x
+```
+
+This would push the constant `3` onto the stack, and then pop it off again and
+store it back on the stack at index 0. But `3` was _already_ on the stack at
+index 0, so the `SET_LOCAL` instruction is effectively a no-op. Therefore, we
+only use `SET_LOCAL` when _updating_ a pre-existing local variable.
+
+Another thing to note is that the `GET_GLOBAL` and `SET_GLOBAL` instructions
+take an index into the constant table, rather than the name of the variable
+itself. At compile time, the name of the variable is registered as a constant,
+so the bytecode can stay small, without any variable-length instructions (for
+now...).
+
+Just for completeness sake, this is what the constant table would look like for
+the program above, and what the stack and globals table would look like after
+each instruction.
+
+Globals:
+
+| index | value       |
+| ----- | ----------- |
+| 0     | int(3)      |
+| 1     | int(4)      |
+| 2     | int(5)      |
+| 3     | string("y") |
+| 4     | int(1)      |
+
+Stack and globals after each instruction:
+
+| instruction pointer | stack        | globals     |
+| ------------------- | ------------ | ----------- |
+| 00:                 | [3]          | {}          |
+| 02:                 | [3, 4]       | {}          |
+| 04:                 | [12]         | {}          |
+| 05:                 | [12, 5]      | {}          |
+| 07:                 | [12, 5, 12]  | {}          |
+| 09:                 | [12, 17]     | {}          |
+| 10:                 | [12]         | { "y": 17 } |
+| 12:                 | [12, 12]     | { "y": 17 } |
+| 14:                 | [12, 12, 1]  | { "y": 17 } |
+| 16:                 | [12, 13]     | { "y": 17 } |
+| 17:                 | [13]         | { "y": 17 } |
+| 19:                 | [13, 13]     | { "y": 17 } |
+| 21:                 | [13, 13, 17] | { "y": 17 } |
+| 23:                 | [13, 30]     | { "y": 17 } |
+| 24:                 | [13, 30, 30] | { "y": 17 } |
+| 26:                 | [13, 30]     | { "y": 17 } |
 
 ### Function calls
 
+Lua programs aren't that much fun if you can't call functions, so the next step
+is to add support for those. After all, you can't spell function without `fun`.
+
+In Lua, functions are first-class values, which means that they can be assigned
+to variables, passed as arguments to other functions, and returned from
+functions. Functions can be defined using the `function` keyword, and can take
+zero or more arguments. Functions can also return zero or more values. Finally,
+functions can have a special type of argument called a "vararg" argument, which
+is used to collect any extra arguments that are passed to the function.
+
+For example, consider the following Lua program:
+
+```lua
+local function add(a, b)
+    return a + b, true
+end
+
+local function var(a, ...)
+    local allextra = {...}
+    return a, a + #allextra
+end
+
+print(var(add(3, 4), 5, 6, 7))
+```
+
+This program defines two functions, `add` and `var`, and then calls `var` with
+the result of calling `add` with the arguments `3` and `4`, and the arguments
+`5`, `6`, and `7`. `var` then returns both `a`, and the sum of `a` and the
+number of extra arguments that were passed to it. The expected output of this
+program is `7 10`. Note that the second return value of `add` is ignored. Lua
+calls this a multires expression, and the Lua manual says:
+
+> When a multires expression is used as the last element of a list of
+> expressions, all results from the expression are added to the list of values
+> produced by the list of expressions. Note that a single expression in a place
+> that expects a list of expressions is the last expression in that (singleton)
+> list.
+
+Here, the result of `add` is a multires expression, but it's not the last
+element in a list of expressions (it's followed by the constant expressions `5`,
+`6`, and `7`), so any values beyond its first one are ignored. All of this means
+a bunch of extra bookkeeping in the VM. Since both the number of arguments and
+number of return values can vary, we need to keep track of these at runtime,
+rather than e.g. encoding this in the bytecode. For this reason, I came up with
+a special "marker" value, which can be stored on the stack. User code cannot
+create or consume a marker value, but the VM uses it behind the scenes to keep
+track of where the lists of arguments and return values start.
+
+Bringing these concepts into practice, the bytecode for the program above would
+look like this:
+
+```
+0000: LOAD_CONST      NIL      // Declare the function add
+0005: JMP             0026     // Jump over the function body
+0008: ALIGN           2        // Start of the function, make sure we have space for 2 locals
+0010: LOAD_CONST      MARKER   // Load the marker value
+0015: GET_LOCAL       0        // Load the first argument
+0017: GET_LOCAL       1        // Load the second argument
+0019: ADD                      // Add the two arguments
+0020: LOAD_CONST      true     // Load the constant true
+0025: RETURN                   // Return the sum and true
+0026: LOAD_CLOSURE    FUNCTION<add:0008> // Load the function add
+0031: SET_LOCAL       0        // Save it in the local variable add
+0033: LOAD_CONST      NIL      // Declare the function var
+0038: JMP             0067     // Jump over the function body
+0041: ALIGN_VARARG    1        // Start of the function, make sure we have space for 1 local and 1 vararg
+0043: NEW_TABLE                // Create a new table for the vararg
+0044: LOAD_CONST      MARKER   // Load the marker value
+0049: LOAD_VARARG     1 multi  // Load the vararg as a multires expression
+0052: APPEND_TO_TABLE          // Append all varargs to the table
+0053: LOAD_CONST      MARKER   // Load the marker value
+0058: GET_LOCAL       0        // Load the first argument
+0060: GET_LOCAL       0        // Load the first argument again
+0062: GET_LOCAL       2        // Load the table of varargs
+0064: LEN                      // Get the length of the table
+0065: ADD                      // Add the first argument and the length of the table
+0066: RETURN                   // Return the first argument and the sum
+0067: LOAD_CLOSURE    FUNCTION<var:0041> // Load the function var
+0072: SET_LOCAL       1        // Save it in the local variable var
+0074: LOAD_CONST      MARKER   // Load the marker value for the "print" return values
+0079: LOAD_CONST      MARKER   // Load the marker value for the "var" return values
+0084: LOAD_CONST      MARKER   // Load the marker value for the "add" return values
+0089: LOAD_CONST      MARKER   // Load the marker for the "add" arguments
+0094: LOAD_CONST      INT 3    // Load the constant 3
+0099: LOAD_CONST      INT 4    // Load the constant 4
+0104: GET_LOCAL       0        // Load the function add
+0106: CALL            single   // Call the function add with 3 and 4, expect a single return value
+0108: LOAD_CONST      INT 5    // Load the constant 5
+0113: LOAD_CONST      INT 6    // Load the constant 6
+0118: LOAD_CONST      INT 7    // Load the constant 7
+0123: GET_LOCAL       1        // Load the function var
+0125: CALL            multi    // Call the function var with the result of add, 5, 6, and 7, allow multiple return values
+0127: PRINT                    // Print the return values of var
+0128: DISCARD                  // Discard the return values of print
+```
+
+Phew, that was a lot! You can see all of these markers make quite a mess of our
+bytecode, and of the stack at runtime too. Unfortunately, you need to handle
+this bookkeeping. This could be done in a separate data structure as well, for
+example by keeping track of indices in the stack where the arguments and return
+values start, but this was easier to implement and reason about. I may
+restructure this in the future, but for now, it works.
+
+Some other things to note:
+
+- The bytecode of the functions is inline with the rest of the program. A
+  different approach would be to keep the bytecode of the functions separate,
+  and swap them out when calling the function. This would make the bytecode more
+  compact, but would require more bookkeeping in the VM.
+- The `ALIGN` and `ALIGN_VARARG` instructions are used to make sure that the
+  stack is aligned correctly at the start of a function. In other words, it
+  makes sure that the number of arguments passed to the function matches what
+  the function expects, either discarding any extra arguments, or filling in
+  missing arguments with `nil`. `ALIGN_VARARG` collects the extra arguments into
+  a special local variable called `...` as a sequence table (like an array).
+- The `NEW_TABLE`, `APPEND_TO_TABLE`, and `LEN` instructions are used to, in
+  order, create a new table, append all values on the stack after the latest
+  marker to the table, and then get the length of the table (or whichever value
+  is at the top of the stack). `LEN` could, for example, also be used with
+  string values.
+- When defining functions, they are loaded from the constant table. All the
+  function object in the constant table knows is the name of the function, and
+  the instruction pointer where the function starts.
+
+We use the `CALL` instruction to call a function that is at the top of the
+stack. This instruction pushes a new frame onto the call stack, which is a
+bookkeeping structure so that we can return to the correct instruction after the
+function call. It also tracks whether the caller is okay to accept multiple
+return values, or only a single one. Finally, it keeps a value called the "frame
+pointer", which is an index into the stack where the arguments of the function
+start. This means that from now on, all `GET_LOCAL` and `SET_LOCAL` instructions
+will be relative to the frame pointer, rather than (by chance) matching their
+absolute index[^5].
+
+Finally, the `RETURN` instruction is used to return from a function. It pops the
+top of the call stack, and updates the instruction pointer to the correct value
+to return to the caller. It also pops the return values from the stack (using
+the marker to find where they start), discards all values on the stack from the
+start of the frame pointer, and then pushes back either only the first return
+value, or all of them, depending on what the caller expects.
+
+Let's take a look at the changes to our VM compared to the last snapshot:
+
+```rust
+struct VM {
+    instructions: Vec<Instruction>,
+    constants: Vec<ConstValue>,
+    stack: Vec<Value>,
+    globals: HashMap<String, Value>,
+    call_stack: Vec<CallFrame>,
+}
+
+impl VM {
+    fn run(&mut self) {
+        let mut ip = 0;
+        loop {
+            let instruction = self.instructions[ip];
+            match instruction {
+                // ... previous instructions
+
+                // Variable handling
+                Instruction::SetGlobal => {
+                    let index = self.read_u8(ip + 1);
+                    let name = self.constants[index as usize].as_string().unwrap();
+                    let value = self.stack.pop().unwrap();
+                    self.globals.insert(name, value);
+                    ip += 2;
+                },
+                Instruction::GetGlobal => {
+                    let index = self.read_u8(ip + 1);
+                    let name = self.constants[index as usize].as_string().unwrap();
+                    let value = self.globals.get(name).cloned().unwrap_or(Value::Nil);
+                    self.stack.push(value);
+                    ip += 2;
+                },
+                Instruction::SetLocal => {
+                    let index = self.read_u8(ip + 1);
+                    let value = self.stack.pop().unwrap();
+                    let frame = self.call_stack.last().unwrap();
+                    self.stack[frame.frame_pointer + index as usize] = value;
+                    ip += 2;
+                },
+                Instruction::GetLocal => {
+                    let index = self.read_u8(ip + 1);
+                    let frame = self.call_stack.last().unwrap();
+                    let value = self.stack[frame.frame_pointer + index as usize].clone();
+                    self.stack.push(value);
+                    ip += 2;
+                },
+
+                // Tables
+                Instruction::NewTable => {
+                    self.stack.push(Value::Table(HashMap::new()));
+                    ip += 1;
+                },
+                Instruction::AppendToTable => {
+                    let marker_index = self
+                        .stack
+                        .iter()
+                        .rposition(|v| v == &Value::Marker)
+                        .expect("no marker found");
+                    let table = self.stack[marker_index - 1].clone();
+                    let num_values = self.stack.len() - marker_index - 1;
+
+                    for i in 0..num_values {
+                        let value = self.pop().unwrap();
+                        let index = (num_values - i) as i64;
+                        table.insert(index.into(), value);
+                    }
+
+                    // Pop the marker
+                    self.stack.pop();
+
+                    ip += 1;
+                },
+
+                // Function handling
+                instr @ Instruction::Align | instr @ Instruction::AlignVararg => {
+                    let collect_varargs = matches!(instr, Instruction::AlignVararg);
+                    let align_amount = instr_param!();
+
+                    // ...
+                }
+                Instruction::Call => {
+                    let function = self.stack.pop().unwrap();
+                    let marker_index = self
+                        .stack
+                        .iter()
+                        .rposition(|v| v == &Value::Marker)
+                        .expect("no marker found");
+                    let num_args = self.stack.len() - marker_index - 1;
+
+                    let is_single_return = self.read_u8(ip + 1) == 1;
+                    self.push_call_frame(
+                        function.name,
+                        self.stack.len() - num_args, // frame pointer
+                        ip + 2, // return address
+                        is_single_return,
+                    );
+
+                    ip = function.ip;
+                }
+                Instruction::Return => {
+                    let frame = self.pop_call_frame();
+                    let marker_index = self
+                        .stack
+                        .iter()
+                        .rposition(|v| v == &Value::Marker)
+                        .expect("no marker found");
+
+                    // Collect the return values
+                    let mut return_values: Vec<_> = (marker_index + 1..self.stack.len())
+                        .map(|i| self.stack.pop().unwrap())
+                        .collect();
+                    return_values.reverse();
+
+                    // Pop the marker
+                    self.stack.pop();
+
+                    ip = frame.return_address;
+
+                    // Discard all values from the frame
+                    for _ in 0..(self.stack.len() - frame.frame_pointer) {
+                        self.stack.pop();
+                    }
+
+                    // Push the return values back onto the stack
+                    if return_values.is_empty() && frame.is_single_return {
+                        self.stack.push(Value::Nil);
+                    } else {
+                        for value in return_values {
+                            self.stack.push(value);
+                            if frame.is_single_return {
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+```
+
 ### Closures and upvalues
+
+### Error handling
 
 ### Native functions
 
@@ -726,6 +1119,10 @@ And the stack would look like this at each step:
     And you would be totally right that that is something that bit me later on.
     If you're an even bigger expert and think "what about upvalues?", well, hats
     off to you, and we'll get to that later.
+
+[^5]:
+    If this makes you wonder how to access variables from outer scopes, you're
+    on the right track; we'll handle this in the next section.
 
 [yt-video]: https://www.youtube.com/watch?v=mNOLaw-_Buc
 [crafting-interpreters]: https://craftinginterpreters.com/

@@ -53,7 +53,7 @@ macro_rules! assert_table_object(
         }
     };
     ($value:expr, $table:ident, $tt:stmt) => {
-        assert_table!(read, $value, $table, $tt)
+        assert_table_object!(read, $value, $table, $tt)
     }
 );
 
@@ -108,26 +108,6 @@ macro_rules! require_closure {
     };
     ($value:expr, $name:expr, $closure:ident, $tt:tt) => {
         require_closure!($value, $name, 0, $closure, $tt)
-    };
-}
-
-macro_rules! get_number {
-    ($value:expr, $name:expr, $index:expr) => {
-        match $value {
-            Some(LuaValue::Number(n)) => Some(n),
-            Some(LuaValue::Nil) | None => None,
-            Some(v) => {
-                return Err($crate::error::lua_error!(
-                    "bad argument #{} to '{}', expected number, got {}",
-                    $index + 1,
-                    $name,
-                    v.type_name()
-                ))
-            }
-        }
-    };
-    ($value:expr, $name:expr) => {
-        get_number!($value, $name, 0)
     };
 }
 
@@ -343,6 +323,6 @@ macro_rules! require_userdata_type {
 }
 
 pub(crate) use {
-    assert_closure, assert_string, assert_table, assert_table_object, get_number, require_closure,
+    assert_closure, assert_string, assert_table, assert_table_object, require_closure,
     require_table, require_userdata, require_userdata_type,
 };

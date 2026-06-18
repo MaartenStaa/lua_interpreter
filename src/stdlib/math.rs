@@ -3,7 +3,6 @@ use std::sync::{LazyLock, RwLock};
 
 use crate::{
     error::lua_error,
-    macros::get_number,
     state::LuaState,
     value::{LuaNumber, LuaObject, LuaTable, LuaValue},
 };
@@ -210,8 +209,9 @@ fn fmod(_: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
 
 fn log(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
     let x = state.arg_as_number(0)?;
-    let base =
-        get_number!(state.try_arg(1), "math.log", 1).unwrap_or(LuaNumber::Float(f64::consts::E));
+    let base = state
+        .try_arg_as_number(1)?
+        .unwrap_or(LuaNumber::Float(f64::consts::E));
 
     Ok(vec![match (x, base) {
         (LuaNumber::Integer(x), LuaNumber::Integer(base)) => {
@@ -380,12 +380,12 @@ fn random(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
 }
 
 fn randomseed(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
-    let x = get_number!(state.try_arg(0), "math.randomseed").unwrap_or_else(|| {
+    let x = state.try_arg_as_number(0)?.unwrap_or_else(|| {
         LuaNumber::Integer(i64::from_le_bytes(
             RANDOM.write().unwrap().next_u64().to_le_bytes(),
         ))
     });
-    let y = get_number!(state.try_arg(1), "math.randomseed", 1).unwrap_or(LuaNumber::Integer(0));
+    let y = state.try_arg_as_number(1)?.unwrap_or(LuaNumber::Integer(0));
 
     macro_rules! bytes {
         ($x:expr) => {

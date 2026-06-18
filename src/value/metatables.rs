@@ -1,6 +1,6 @@
 use std::sync::LazyLock;
 
-use crate::{ExecutionResult, LuaState, macros::assert_table};
+use crate::{ExecutionResult, LuaState, error::lua_error, macros::assert_table};
 
 use super::{LuaObject, LuaTable, LuaValue, UserData};
 
@@ -11,6 +11,8 @@ pub(crate) static GLOBAL_NUMBER_METATABLE: LazyLock<LuaValue> =
 pub(crate) static GLOBAL_STRING_METATABLE: LazyLock<LuaValue> =
     LazyLock::new(|| super::string::get_string_metatable().into());
 
+pub(crate) static METATABLE_KEY: LazyLock<LuaValue> =
+    LazyLock::new(|| LuaValue::String(b"__metatable".into()));
 pub(crate) static ADD_KEY: LazyLock<LuaValue> = LazyLock::new(|| LuaValue::String(b"__add".into()));
 pub(crate) static SUB_KEY: LazyLock<LuaValue> = LazyLock::new(|| LuaValue::String(b"__sub".into()));
 pub(crate) static MUL_KEY: LazyLock<LuaValue> = LazyLock::new(|| LuaValue::String(b"__mul".into()));
@@ -45,6 +47,10 @@ pub(crate) static CLOSE_KEY: LazyLock<LuaValue> =
     LazyLock::new(|| LuaValue::String(b"__close".into()));
 pub(crate) static PAIRS_KEY: LazyLock<LuaValue> =
     LazyLock::new(|| LuaValue::String(b"__pairs".into()));
+pub(crate) static NAME_KEY: LazyLock<LuaValue> =
+    LazyLock::new(|| LuaValue::String(b"__name".into()));
+pub(crate) static TOSTRING_KEY: LazyLock<LuaValue> =
+    LazyLock::new(|| LuaValue::String(b"__tostring".into()));
 
 impl LuaValue {
     pub fn get_metatable(&self) -> Option<LuaValue> {
@@ -54,6 +60,14 @@ impl LuaValue {
             LuaValue::String(_) => Some(GLOBAL_STRING_METATABLE.clone()),
             LuaValue::Object(o) => o.read().unwrap().get_metatable(),
             _ => None,
+        }
+    }
+
+    pub fn set_metatable(&mut self, metatable: Option<LuaValue>) -> crate::Result<()> {
+        match self {
+            LuaValue::Object(o) => o.write().unwrap().set_metatable(metatable),
+            LuaValue::UpValue(u) => u.write().unwrap().set_metatable(metatable),
+            _ => Err(lua_error!("cannot set metatable on a non-object")),
         }
     }
 
@@ -69,6 +83,20 @@ impl LuaObject {
             LuaObject::Table(t) => t.metatable().cloned(),
             LuaObject::UserData(UserData::Full { metatable, .. }) => metatable.clone(),
             _ => None,
+        }
+    }
+
+    pub fn set_metatable(&mut self, metatable: Option<LuaValue>) -> crate::Result<()> {
+        match self {
+            LuaObject::Table(t) => {
+                t.set_metatable(metatable);
+                Ok(())
+            }
+            LuaObject::UserData(UserData::Full { metatable: mt, .. }) => {
+                *mt = metatable;
+                Ok(())
+            }
+            _ => Err(lua_error!("cannot set metatable on a non-table")),
         }
     }
 

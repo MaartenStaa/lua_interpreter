@@ -1,4 +1,5 @@
 use cpu_time::ProcessTime;
+use rand::{Rng, distr};
 use std::{ffi::OsString, sync::LazyLock};
 
 use crate::{
@@ -19,8 +20,16 @@ pub static OS: LazyLock<LuaValue> = LazyLock::new(|| {
         LuaObject::NativeFunction("os.getenv", getenv).into(),
     );
     os.insert(
+        "setlocale".into(),
+        LuaObject::NativeFunction("setlocale", setlocale).into(),
+    );
+    os.insert(
         "time".into(),
         LuaObject::NativeFunction("os.time", time).into(),
+    );
+    os.insert(
+        "tmpname".into(),
+        LuaObject::NativeFunction("tmpname", tmpname).into(),
     );
 
     os.into()
@@ -42,6 +51,10 @@ fn getenv(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
     }
 }
 
+fn setlocale(_: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+    Ok(vec![LuaValue::Nil])
+}
+
 fn time(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
     if state.num_args() > 0 {
         return Err(lua_error!(
@@ -53,4 +66,18 @@ fn time(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
     let now = chrono::Utc::now();
 
     Ok(vec![(now - epoch).num_seconds().into()])
+}
+
+fn tmpname(_: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+    let rng = rand::rng();
+    let random_string: String = rng
+        .sample_iter(distr::Alphanumeric)
+        .map(char::from)
+        .take(8)
+        .collect();
+
+    let tmpdir = std::env::temp_dir();
+    let tmpname = tmpdir.join(format!("lua-{}", random_string));
+
+    Ok(vec![tmpname.to_string_lossy().to_string().into()])
 }

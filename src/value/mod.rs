@@ -13,6 +13,7 @@ mod upvalue;
 mod userdata;
 
 pub use attribute::LuaVariableAttribute;
+use callable::{Callable, Method};
 pub use closure::LuaClosure;
 pub use constant::LuaConst;
 pub use function::NativeLuaFunction;
@@ -29,6 +30,8 @@ use std::{
     sync::{Arc, RwLock},
 };
 
+use crate::{LuaState, error::lua_error};
+
 #[derive(Clone)]
 pub enum LuaValue {
     Nil,
@@ -37,6 +40,44 @@ pub enum LuaValue {
     String(LuaString),
     Object(Arc<RwLock<LuaObject>>),
     UpValue(Arc<RwLock<UpValue>>),
+}
+
+impl LuaValue {
+    /// Turn the value into a string, using the `__tostring` metamethod if it exists.
+    /// Falls back on this type's `Display` implementation if the metamethod does not exist.
+    pub fn as_string(&self, state: &mut LuaState) -> crate::Result<LuaString> {
+        let __tostring = self.get_metavalue(&metatables::TOSTRING_KEY);
+        if let Some(__tostring) = __tostring {
+            let __tostring: Callable = (&__tostring).try_into().map_err(|_| {
+                lua_error!(
+                    "invalid value for __tostring metamethod in {}, expected function, got {}",
+                    self.type_name(),
+                    __tostring.type_name()
+                )
+            })?;
+
+            let mut result = match __tostring.method {
+                Method::Closure(closure) => state
+                    .run_closure(closure, vec![self.clone()])?
+                    .unwrap_completed(),
+                Method::NativeFunction(name, f) => {
+                    let args_r = state.extend_stack(vec![self.clone()]);
+                    state.run_native_function(name, f, args_r, 1)?
+                }
+            };
+            result.resize(1, LuaValue::Nil);
+
+            return match result.swap_remove(0) {
+                LuaValue::String(s) => Ok(s),
+                v => Err(lua_error!(
+                    "__tostring metamethod must return a string, got {}",
+                    v.type_name()
+                )),
+            };
+        }
+
+        Ok(format!("{}", self).into_bytes().into())
+    }
 }
 
 impl Debug for LuaValue {

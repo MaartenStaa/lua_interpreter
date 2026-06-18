@@ -1,5 +1,6 @@
 use std::{
     fs,
+    io::Write,
     path::{Path, PathBuf},
     sync::{
         Arc, LazyLock, RwLock,
@@ -10,7 +11,7 @@ use std::{
 use crate::{
     ExecutionResult, LuaState,
     compiler::Compiler,
-    error::lua_error,
+    error::{IntoLuaError, lua_error},
     macros::{assert_string, assert_table, require_table},
     stdlib::package,
     value::{
@@ -175,7 +176,19 @@ pub(crate) fn getmetatable(state: &mut LuaState) -> crate::Result<Vec<LuaValue>>
         }
     };
 
-    let metatable = value.get_metatable();
+    // NOTE: Only tables and full user data objects have metatables. Under the hood there are
+    // metatables for other values as well, but these are only accessible in native code, or via
+    // `debug.getmetatable`.
+    let metatable = match value {
+        LuaValue::Object(o) => {
+            let o = o.read().unwrap();
+
+            // "if the object's metatable has a __metatable field, returns the associated value"
+            o.get_metavalue(&metatables::METATABLE_KEY)
+                .or_else(|| o.get_metatable())
+        }
+        _ => None,
+    };
 
     Ok(vec![metatable.unwrap_or(LuaValue::Nil)])
 }
@@ -421,13 +434,19 @@ pub(crate) fn pcall(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
 }
 
 pub(crate) fn print(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
-    for (i, value) in state.args_ref().into_iter().enumerate() {
+    let mut output = std::io::stdout();
+
+    for (i, value) in state.args().into_iter().enumerate() {
         if i != 0 {
-            print!("\t");
+            output.write_all(b"\t").into_lua_error()?;
         }
-        print!("{}", value);
+        output
+            .write_all(&value.as_string(state)?)
+            .into_lua_error()?;
     }
-    println!();
+
+    output.write_all(b"\n").into_lua_error()?;
+    output.flush().into_lua_error()?;
 
     Ok(vec![LuaValue::Nil])
 }
@@ -749,11 +768,9 @@ pub(crate) fn tonumber(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
 }
 
 pub(crate) fn tostring(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
-    let value = state.ensure_arg(0)?;
+    let value = state.arg(0);
 
-    Ok(vec![LuaValue::String(
-        value.to_string().into_bytes().into(),
-    )])
+    Ok(vec![LuaValue::String(value.as_string(state)?)])
 }
 
 pub(crate) fn r#type(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
