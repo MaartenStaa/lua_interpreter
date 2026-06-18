@@ -595,13 +595,15 @@ impl<'path, 'source> Lexer<'path, 'source> {
                         continue;
                     }
                     _ if c.is_ascii_digit() => {
-                        let mut digits = [c; 3];
+                        let mut i: u32 = c.to_digit(10).unwrap() as u32;
                         let mut n = 1;
-                        for digit in digits.iter_mut().skip(1) {
+                        for _ in 0..2 {
                             match chars.peek() {
                                 Some(c) if c.is_ascii_digit() => {
-                                    *digit = chars.next().unwrap();
+                                    // digits[i as usize] = *c;
+                                    i = i * 10 + c.to_digit(10).unwrap() as u32;
                                     n += 1;
+                                    chars.next();
                                 }
                                 _ => break,
                             }
@@ -610,19 +612,17 @@ impl<'path, 'source> Lexer<'path, 'source> {
                         // We'll advance for `c` below, so subtract 1 here
                         self.position += n - 1;
 
-                        digits[..n].iter().try_fold(0u8, |acc, c| {
-                            c.to_digit(10)
-                                .ok_or_else(|| {
-                                    self.with_source_code(miette!(
-                                        labels = vec![LabeledSpan::at(
-                                            self.position - n..self.position + 1,
-                                            "invalid decimal escape"
-                                        )],
-                                        "invalid decimal escape"
-                                    ))
-                                })
-                                .map(|d| acc * 10u8 + d)
-                        })?
+                        if i > u8::MAX as u32 {
+                            return Err(self.with_source_code(miette!(
+                                labels = vec![LabeledSpan::at(
+                                    self.position - n..self.position + 1,
+                                    "decimal escape too large"
+                                )],
+                                "decimal escape too large"
+                            )));
+                        }
+
+                        i as u8
                     }
                     _ => {
                         return Err(self.with_source_code(miette!(
