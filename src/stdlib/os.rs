@@ -1,5 +1,6 @@
 use cpu_time::ProcessTime;
 use miette::miette;
+use rand::{distributions, Rng};
 use std::{ffi::OsString, sync::LazyLock};
 
 use crate::{
@@ -20,8 +21,16 @@ pub static OS: LazyLock<LuaValue> = LazyLock::new(|| {
         LuaObject::NativeFunction("getenv", getenv).into(),
     );
     os.insert(
+        "setlocale".into(),
+        LuaObject::NativeFunction("setlocale", setlocale).into(),
+    );
+    os.insert(
         "time".into(),
         LuaObject::NativeFunction("time", time).into(),
+    );
+    os.insert(
+        "tmpname".into(),
+        LuaObject::NativeFunction("tmpname", tmpname).into(),
     );
 
     os.into()
@@ -43,6 +52,10 @@ fn getenv(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     }
 }
 
+fn setlocale(_: &mut VM, _: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+    Ok(vec![LuaValue::Nil])
+}
+
 fn time(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     if !input.is_empty() {
         return Err(miette!(
@@ -54,4 +67,18 @@ fn time(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
     let now = chrono::Utc::now();
 
     Ok(vec![(now - epoch).num_seconds().into()])
+}
+
+fn tmpname(_: &mut VM, _: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
+    let mut rng = rand::thread_rng();
+    let random_string: String = rng
+        .sample_iter(distributions::Alphanumeric)
+        .map(char::from)
+        .take(8)
+        .collect();
+
+    let tmpdir = std::env::temp_dir();
+    let tmpname = tmpdir.join(format!("lua-{}", random_string));
+
+    Ok(vec![tmpname.to_string_lossy().to_string().into()])
 }
