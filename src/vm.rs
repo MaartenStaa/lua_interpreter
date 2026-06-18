@@ -80,7 +80,6 @@ pub struct VM<'source> {
     pub(crate) call_stack_index: usize,
 }
 
-#[derive(Debug)]
 pub(crate) struct CallFrame {
     pub(crate) name: Option<Vec<u8>>,
     chunk: usize,
@@ -89,6 +88,30 @@ pub(crate) struct CallFrame {
     return_addr: usize,
     upvalues: [Option<Arc<RwLock<UpValue>>>; u8::MAX as usize],
     allow_multi_return_values: bool,
+}
+
+impl std::fmt::Debug for CallFrame {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let upvalues: HashMap<_, _> = self
+            .upvalues
+            .iter()
+            .enumerate()
+            .filter(|(_, u)| u.is_some())
+            .collect();
+
+        f.debug_struct("CallFrame")
+            .field(
+                "name",
+                &self.name.as_ref().map(|n| String::from_utf8_lossy(n)),
+            )
+            .field("chunk", &self.chunk)
+            .field("border_frame", &self.border_frame)
+            .field("frame_pointer", &self.frame_pointer)
+            .field("return_addr", &self.return_addr)
+            .field("upvalues", &upvalues)
+            .field("allow_multi_return_values", &self.allow_multi_return_values)
+            .finish()
+    }
 }
 
 impl CallFrame {
