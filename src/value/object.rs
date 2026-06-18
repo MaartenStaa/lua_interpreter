@@ -1,20 +1,19 @@
-use crate::vm::VM;
-use std::{fmt::Display, hash::Hash};
+use crate::{LuaState, value::NativeLuaFunction};
+use std::{
+    fmt::Display,
+    hash::Hash,
+    sync::{Arc, RwLock},
+};
 
-use super::{LuaValue, UserData, closure::LuaClosure, table::LuaTable};
+use super::{UserData, closure::LuaClosure, table::LuaTable};
 
 #[derive(Debug)]
 pub enum LuaObject {
     Table(LuaTable),
     Closure(LuaClosure),
-    NativeFunction(
-        &'static str,
-        fn(&mut VM, Vec<LuaValue>) -> crate::Result<Vec<LuaValue>>,
-    ),
+    NativeFunction(&'static str, NativeLuaFunction),
     UserData(UserData),
-
-    // TODO: Implement this
-    Thread,
+    Thread(Arc<RwLock<LuaState>>),
 }
 
 impl PartialEq for LuaObject {
@@ -25,9 +24,9 @@ impl PartialEq for LuaObject {
             (LuaObject::NativeFunction(_, a), LuaObject::NativeFunction(_, b)) => {
                 std::ptr::fn_addr_eq(*a, *b)
             }
+            (LuaObject::Thread(a), LuaObject::Thread(b)) => std::ptr::eq(a, b),
 
             // TODO: Implement these
-            (LuaObject::Thread, LuaObject::Thread) => true,
             (LuaObject::UserData(a), LuaObject::UserData(b)) => a == b,
 
             _ => false,
@@ -48,7 +47,7 @@ impl LuaObject {
             LuaObject::Closure(LuaClosure { .. }) => "function",
             LuaObject::NativeFunction(_, _) => "function",
             LuaObject::UserData(_) => "userdata",
-            LuaObject::Thread => "thread",
+            LuaObject::Thread(_) => "thread",
         }
     }
 }

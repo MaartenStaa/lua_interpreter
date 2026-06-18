@@ -6,141 +6,71 @@ use std::{
 };
 
 use crate::{
+    ExecutionResult, ThreadStatus,
     chunk::Chunk,
-    compiler::CompiledChunk,
-    debug,
-    error::{IntoLuaError, LuaError, RuntimeError},
+    error::{IntoLuaError, RuntimeError, lua_error},
     instruction::Instruction,
     macros::{assert_closure, assert_table},
+    state::LuaState,
     value::{
-        LuaClosure, LuaConst, LuaObject, LuaValue, UpValue,
+        LuaClosure, LuaConst, LuaObject, LuaString, LuaValue, NativeLuaFunction, UpValue,
         callable::{Callable, Method},
         metatables::{self, INDEX_KEY, NEWINDEX_KEY},
     },
+    vm::call_frame::{CallFrame, PoppedCallFrame},
 };
 
-mod close;
+pub(crate) use call_frame::CallFrameKind;
 
-const MAX_STACK_SIZE: usize = 256;
+mod arg;
+pub(crate) mod call_frame;
+mod close;
+mod error;
+pub(crate) mod trace;
+
+pub(crate) const MAX_STACK_SIZE: usize = 256;
 
 pub type JumpAddr = u16;
 pub type ConstIndex = u16;
 
-#[derive(Debug)]
-pub struct VM<'source> {
-    global_env: LuaValue,
-    chunks: Vec<Chunk<'source>>,
-    consts: Vec<LuaConst>,
-    const_index: ConstIndex,
-    stack: Vec<LuaValue>,
-    // Ephemeral result count for multi-return value calls
-    multres: usize,
-    call_stack: [CallFrame; MAX_STACK_SIZE],
-    call_stack_index: usize,
-    print_bytecode: bool,
-}
-
-#[derive(Debug)]
-struct CallFrame {
-    chunk: ConstIndex,
-    ip: usize,
-    border_frame: bool,
-    frame_pointer: usize,
-    return_addr: usize,
-    return_value_register: u8,
-    upvalues: Option<HashMap<usize, Arc<RwLock<UpValue>>>>,
-    num_args: u8,
-    varargs: Vec<LuaValue>,
-    takes_varargs: bool,
-    allow_multi_return_values: bool,
-    to_close: Vec<u8>,
-}
-
-impl CallFrame {
-    const fn default() -> Self {
-        Self {
-            chunk: 0,
-            ip: 0,
-            border_frame: false,
-            frame_pointer: 0,
-            return_addr: 0,
-            return_value_register: 0,
-            upvalues: None,
-            num_args: 0,
-            varargs: vec![],
-            takes_varargs: false,
-            allow_multi_return_values: true,
-            to_close: vec![],
-        }
+impl LuaState {
+    pub fn get_global_env(&self) -> Arc<RwLock<UpValue>> {
+        self.global.read().unwrap().get_global_env()
     }
-}
 
-#[derive(Debug, Copy, Clone)]
-struct PoppedCallFrame {
-    border_frame: bool,
-    return_addr: usize,
-    return_value_register: u8,
-    allow_multi_return_values: bool,
-}
+    // Helper to read instruction bytes at an offset while holding the lock
+    fn read_instr_byte(&self, chunk_index: ConstIndex, offset: usize) -> u8 {
+        let global = self.global.read().unwrap();
+        global.chunks[chunk_index as usize].instructions[offset]
+    }
 
-impl<'source> VM<'source> {
-    pub fn new(global_env: LuaValue, print_bytecode: bool) -> Self {
-        Self {
-            global_env,
-            chunks: vec![],
-            consts: vec![],
-            const_index: 0,
-            stack: vec![],
-            multres: 0,
-            call_stack: [const { CallFrame::default() }; MAX_STACK_SIZE],
-            call_stack_index: 0,
-            print_bytecode,
+    // Helper to read a slice of instruction bytes
+    fn read_instr_bytes(&self, chunk_index: ConstIndex, start: usize, len: usize) -> Vec<u8> {
+        let global = self.global.read().unwrap();
+        global.chunks[chunk_index as usize].instructions[start..start + len].to_vec()
+    }
+
+    // Safe way to access chunk data - takes a callback that processes the chunk while lock is held
+    pub(crate) fn with_chunk<F, R>(&self, index: ConstIndex, f: F) -> Option<R>
+    where
+        F: FnOnce(&Chunk) -> R,
+    {
+        let global = self.global.read().unwrap();
+        global.chunks.get(index as usize).map(f)
+    }
+
+    pub fn get_current_chunk_name(&self) -> Option<LuaString> {
+        match self.call_stack[self.call_stack_index - 1].kind {
+            CallFrameKind::Lua { chunk, .. } => self.with_chunk(chunk, |c| c.name.clone()),
+            CallFrameKind::Native { .. } => None,
         }
     }
 
-    pub fn get_global_env(&self) -> LuaValue {
-        self.global_env.clone()
+    pub fn get_chunk_name(&self, chunk: ConstIndex) -> Option<LuaString> {
+        self.with_chunk(chunk, |c| c.name.clone())
     }
 
-    pub fn get_next_chunk_index(&self) -> usize {
-        self.chunks.len()
-    }
-
-    pub fn add_chunk(&mut self, chunk: Chunk<'source>) -> crate::Result<ConstIndex> {
-        let index = self.chunks.len();
-        if index >= ConstIndex::MAX as usize {
-            return Err(self.err("too many chunks"));
-        }
-
-        self.chunks.push(chunk);
-
-        Ok(index as ConstIndex)
-    }
-
-    pub fn get_chunk(&self, index: ConstIndex) -> Option<&Chunk<'source>> {
-        self.chunks.get(index as usize)
-    }
-
-    pub fn get_current_chunk(&self) -> &Chunk<'source> {
-        &self.chunks[self.call_stack[self.call_stack_index - 1].chunk as usize]
-    }
-
-    pub fn register_const(&mut self, constant: LuaConst) -> ConstIndex {
-        let index = self.const_index;
-        self.consts.push(constant);
-        self.const_index += 1;
-        index
-    }
-
-    pub fn lookup_const(&self, constant: &LuaConst) -> Option<ConstIndex> {
-        // TODO: Maybe a hashmap would be better
-        self.consts[..self.const_index as usize]
-            .iter()
-            .position(|c| c == constant)
-            .map(|i| i as ConstIndex)
-    }
-
-    pub fn get_stack(&self) -> &[LuaValue] {
+    pub(crate) fn get_stack(&self) -> &[LuaValue] {
         &self.stack
     }
 
@@ -179,31 +109,26 @@ impl<'source> VM<'source> {
         self.stack[frame_pointer + register.into()] = value;
     }
 
-    pub fn get_consts(&self) -> &[LuaConst] {
-        &self.consts
-    }
-
     #[allow(clippy::too_many_arguments)]
-    fn push_call_frame(
+    pub(crate) fn push_call_frame(
         &mut self,
-        chunk: ConstIndex,
+        kind: CallFrameKind,
         border_frame: bool,
         frame_pointer: usize,
         max_registers: u8,
         return_addr: usize,
         return_value_register: u8,
         upvalues: Option<HashMap<usize, Arc<RwLock<UpValue>>>>,
-        num_args: u8,
+        num_args: u16,
         takes_varargs: bool,
         allow_multi_return_values: bool,
     ) -> crate::Result {
         if self.call_stack_index >= MAX_STACK_SIZE {
-            return Err(self.err("stack overflow"));
+            return Err(lua_error!("stack overflow"));
         }
 
         // Reuse the existing object to keep the `upvalues` vec
-        self.call_stack[self.call_stack_index].chunk = chunk;
-        self.call_stack[self.call_stack_index].ip = 0;
+        self.call_stack[self.call_stack_index].kind = kind;
         self.call_stack[self.call_stack_index].border_frame = border_frame;
         self.call_stack[self.call_stack_index].frame_pointer = frame_pointer;
         self.call_stack[self.call_stack_index].return_addr = return_addr;
@@ -243,17 +168,11 @@ impl<'source> VM<'source> {
             self.stack
                 .resize(frame_pointer + max_registers, LuaValue::Nil);
         }
-
-        // FIXME: If the stack is already big enough, we might need to
-        // clear out old values. For example, if we have a function that
-        // takes 1 argument, but there are 5 values on the stack from
-        // the parent call frame, we need to fill anything beyond the
-        // first register with `Nil`.
     }
 
     /// Create extra space on the stack for the given values, returning the register where the
     /// first value is located.
-    fn extend_stack(&mut self, values: impl IntoIterator<Item = LuaValue>) -> u8 {
+    pub(crate) fn extend_stack(&mut self, values: impl IntoIterator<Item = LuaValue>) -> u8 {
         let register = self.stack.len() as u8;
         self.stack.extend(values);
         register
@@ -264,6 +183,7 @@ impl<'source> VM<'source> {
 
         let frame = &mut self.call_stack[self.call_stack_index];
         let popped_frame = PoppedCallFrame {
+            kind: frame.kind,
             border_frame: frame.border_frame,
             return_addr: frame.return_addr,
             return_value_register: frame.return_value_register,
@@ -277,7 +197,7 @@ impl<'source> VM<'source> {
         popped_frame
     }
 
-    fn capture_upvalue(&mut self, register: u8) -> Arc<RwLock<UpValue>> {
+    pub(crate) fn capture_upvalue(&mut self, register: u8) -> Arc<RwLock<UpValue>> {
         let frame_pointer = self.call_stack[self.call_stack_index - 1].frame_pointer;
         if let LuaValue::UpValue(upvalue) = &self.stack[frame_pointer + register as usize] {
             return Arc::clone(upvalue);
@@ -294,128 +214,195 @@ impl<'source> VM<'source> {
         upvalue
     }
 
-    pub fn run(&mut self, chunk: CompiledChunk) {
-        assert!(!self.chunks.is_empty(), "no chunks to run");
+    // Helper method to get const values
+    #[inline]
+    fn get_const(&self, index: ConstIndex) -> LuaConst {
+        let global = self.global.read().unwrap();
+        global.consts[index as usize].clone()
+    }
 
-        if let Err(mut err) = self.run_chunk(chunk.chunk_index) {
-            // Attach stack trace
-            for (i, frame) in self.call_stack[0..self.call_stack_index - 1]
-                .iter()
-                .enumerate()
-            {
-                let chunk = &self.chunks[frame.chunk as usize];
-                let mut frame_err =
-                    LuaError::new(format!("#{i} {}", String::from_utf8_lossy(&chunk.name)));
+    pub fn run(&mut self) -> crate::Result<Vec<LuaValue>> {
+        assert!(
+            self.call_stack_index > 0,
+            "no call frame to run the chunk in"
+        );
 
-                // The initial error should already have a span attached, beyond
-                // that we want to ensure that we attach labels for every frame
-                // of the call stack.
-                // Note that on the frames:
-                // - We have the name, as used above.
-                // - We have the `caller_addr`, which refers to from where that frame was invoked.
-                //   Combine that with the `chunk` on the parent frame, to find the actual
-                //   location.
-                // - We skip the top item in the call stack (see above), as there's no source for
-                //   that "call".
-                if i < self.call_stack_index - 1
-                    && let Some(span) = chunk.instruction_spans.get(&frame.ip)
-                {
-                    let source = chunk.named_source();
-                    frame_err = frame_err.with_source_code(source).with_labels(*span);
-                }
-
-                eprintln!("{frame_err:?}");
+        match self.run_inner() {
+            Ok(ExecutionResult::Completed(values)) => Ok(values),
+            Ok(ExecutionResult::Yielded(_)) => {
+                unreachable!("unexpected yield from main thread")
             }
-
-            // Attach source code to the original error if possible
-            if err.source_code.is_none()
-                && err.labels.as_ref().is_some_and(|v| !v.is_empty())
-                && let Some(chunk) = err.chunk
-            {
-                err = err.with_source_code(self.chunks[chunk as usize].named_source());
+            Err(mut err) => {
+                self.print_backtrace(&mut err);
+                Err(err)
             }
-
-            eprintln!("{err:?}");
-            std::process::exit(1);
         }
     }
 
-    pub fn run_chunk(&mut self, chunk_index: ConstIndex) -> crate::Result<Vec<LuaValue>> {
-        self.push_call_frame(
-            chunk_index,
-            true,
-            self.stack.len(),
-            self.chunks[chunk_index as usize].max_registers,
-            0,
-            0,
-            None,
-            0,
-            false,
-            false,
-        )?;
+    pub(crate) fn resume(&mut self, args: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
+        match self.status {
+            ThreadStatus::Created => {
+                // Put the passed args on the stack and load varargs
+                let num_args = args.len();
+                self.stack
+                    .reserve(num_args.saturating_sub(self.stack.len()));
+                self.stack.splice(..num_args, args);
 
-        if self.call_stack[self.call_stack_index - 1]
-            .upvalues
-            .is_none()
-        {
-            self.call_stack[self.call_stack_index - 1].upvalues = Some(HashMap::new());
+                // Note: Native functions are not supported as coroutines - coroutine.create() rejects them
+                // If this is ever extended to support native functions, we would need to store the function
+                // pointer in the call frame and handle it specially here
+                let (chunk_num_args, has_varargs) =
+                    match self.call_stack[self.call_stack_index - 1].kind {
+                        CallFrameKind::Lua { chunk, .. } => self
+                            .with_chunk(chunk, |c| (c.num_params, c.has_varargs))
+                            .unwrap(),
+                        CallFrameKind::Native { .. } => {
+                            unreachable!("native functions cannot be used as coroutines")
+                        }
+                    };
+                self.align_closure_args(chunk_num_args, num_args, has_varargs);
+            }
+            ThreadStatus::Suspended {
+                resume_args_register,
+            } => {
+                if let Some(resume_args_register) = resume_args_register {
+                    let num_args = args.len();
+                    self.stack
+                        .reserve(num_args.saturating_sub(self.stack.len()));
+
+                    for (i, arg) in args.into_iter().enumerate() {
+                        self.set(resume_args_register as usize + i, arg);
+                    }
+                }
+            }
+            ThreadStatus::Running => {
+                return Err(lua_error!("cannot resume a running coroutine"));
+            }
+            ThreadStatus::Dead => {
+                return Err(lua_error!("cannot resume a dead coroutine"));
+            }
         }
 
-        // FIXME: this needs to be handled elsewhere
-        let env = Arc::new(RwLock::new(UpValue(self.get_global_env())));
-        self.call_stack[self.call_stack_index - 1]
-            .upvalues
-            .as_mut()
-            .and_then(|u| u.insert(0, env));
+        assert!(self.call_stack_index > 0, "no call frame to resume");
 
-        // NOTE: Don't pop the call frame here. Chunks always end in a `return`
-        // statement (implicit or explicit), which will pop the call frame.
-        self.run_inner()
+        self.status = ThreadStatus::Running;
+        match self.run_inner() {
+            Ok(ExecutionResult::Completed(values)) => {
+                self.status = ThreadStatus::Dead;
+                Ok(values)
+            }
+            Ok(ExecutionResult::Yielded(values)) => {
+                // Status will be set to Suspended with resume args register
+                // This is handled when we actually yield
+                Ok(values)
+            }
+            Err(err) => {
+                self.status = ThreadStatus::Dead;
+                Err(err)
+            }
+        }
     }
 
     pub(crate) fn run_closure(
         &mut self,
         value: LuaClosure,
         args: Vec<LuaValue>,
-    ) -> crate::Result<Vec<LuaValue>> {
-        let call_frame_offset = self.call_stack_index;
+    ) -> crate::Result<ExecutionResult> {
+        let original_call_stack_index = self.call_stack_index;
         let frame_pointer = self.stack.len();
 
-        let chunk = &self.chunks[value.chunk as usize];
+        let (max_registers, num_params, has_varargs) = self
+            .with_chunk(value.chunk, |chunk| {
+                (
+                    chunk.max_registers,
+                    chunk.num_params as u16,
+                    chunk.has_varargs,
+                )
+            })
+            .unwrap();
+
         self.push_call_frame(
-            value.chunk,
+            CallFrameKind::for_chunk(value.chunk),
             true,
             frame_pointer,
-            chunk.max_registers,
-            // NOTE: `return_addr` and `return_value_register` doesn't matter for a border frame
+            max_registers,
+            // NOTE: `return_addr` and `return_value_register` don't matter for a border frame
             0,
             0,
             Some(value.upvalues.clone()),
-            chunk.num_params,
-            chunk.has_varargs,
+            num_params,
+            has_varargs,
             false,
         )?;
 
-        let chunk = &self.chunks[value.chunk as usize];
         let num_args = args.len();
-        self.ensure_stack_space(chunk.max_registers.max(num_args as u8));
+        self.ensure_stack_space(max_registers.max(num_args as u8));
         for (index, arg) in args.into_iter().enumerate() {
             self.set(index, arg);
         }
 
-        let chunk = &self.chunks[value.chunk as usize];
-        self.align_closure_args(chunk.num_params, num_args, chunk.has_varargs);
+        self.align_closure_args(num_params, num_args, has_varargs);
 
-        let result = self.run_inner();
-        if result.is_err() {
-            // In this case we wouldn't hit a `return` instruction, so we need to clean up the
-            // call stack manually
-            for _ in 0..self.call_stack_index - call_frame_offset {
-                self.pop_call_frame();
+        let result = match self.run_inner() {
+            Ok(ExecutionResult::Completed(values)) => {
+                // NOTE: in this case we don't need to pop the call frame, as it was
+                // already popped by the `return` instruction (which is always present).
+                Ok(ExecutionResult::Completed(values))
             }
-        }
+            Ok(ExecutionResult::Yielded(values)) => Ok(ExecutionResult::Yielded(values)),
+            Err(err) => {
+                println!("err {err}");
+                Err(self.pop_call_frames_into_error(original_call_stack_index, *err))
+            }
+        };
+
+        let chunk_name = self
+            .with_chunk(value.chunk, |c| c.name.to_string())
+            .unwrap();
+        assert_eq!(
+            original_call_stack_index,
+            self.call_stack_index,
+            "unbalanced call stack after closure call '{name}'",
+            name = chunk_name
+        );
 
         result
+    }
+
+    pub(crate) fn set_up_closure_call_frame(
+        &mut self,
+        frame_pointer: usize,
+        return_addr: usize,
+        return_value_register: u8,
+        closure: LuaClosure,
+        num_passed_params: impl Into<usize>,
+    ) -> crate::Result {
+        let (max_registers, num_params, has_varargs) = self
+            .with_chunk(closure.chunk, |chunk| {
+                (
+                    chunk.max_registers,
+                    chunk.num_params as u16,
+                    chunk.has_varargs,
+                )
+            })
+            .unwrap();
+
+        self.push_call_frame(
+            CallFrameKind::for_chunk(closure.chunk),
+            true,
+            frame_pointer,
+            max_registers,
+            return_addr,
+            return_value_register,
+            Some(closure.upvalues.clone()),
+            num_params,
+            has_varargs,
+            false,
+        )?;
+
+        self.align_closure_args(num_params, num_passed_params, has_varargs);
+
+        Ok(())
     }
 
     /// Handle arguments when entering a closure, i.e. pad extra `nil` values if
@@ -456,32 +443,83 @@ impl<'source> VM<'source> {
             .fill(LuaValue::Nil);
     }
 
-    fn run_native_function(
+    pub(crate) fn run_native_function(
         &mut self,
-        function: fn(&mut VM, Vec<LuaValue>) -> crate::Result<Vec<LuaValue>>,
-        args: Vec<LuaValue>,
+        name: &'static str,
+        function: NativeLuaFunction,
+        args_r: u8,
+        num_args: u16,
     ) -> crate::Result<Vec<LuaValue>> {
-        function(self, args).map_err(|mut err| {
-            let current_chunk = self.get_current_chunk();
-            if let Some(span) = current_chunk
-                .instruction_spans
-                .get(&self.call_stack[self.call_stack_index - 1].ip)
-            {
-                err = err.with_labels(*span);
-            }
-            err.with_source_code(current_chunk.named_source())
-        })
+        let original_call_stack_index = self.call_stack_index;
+        let parent_frame_pointer = if self.call_stack_index > 0 {
+            self.call_stack[self.call_stack_index - 1].frame_pointer
+        } else {
+            0
+        };
+
+        // NOTE: Some call frame values are irrelevant for native functions.
+        self.push_call_frame(
+            CallFrameKind::Native { name },
+            true, // Not applicable
+            parent_frame_pointer + args_r as usize,
+            0, // Not applicable
+            0, // Not applicable
+            0, // Not applicable
+            None,
+            num_args,
+            false, // Not applicable
+            false, // Not applicable
+        )?;
+
+        let result = function(self)
+            .inspect(|_| {
+                self.pop_call_frame();
+            })
+            .map_err(|err| self.pop_call_frames_into_error(original_call_stack_index, *err));
+
+        assert_eq!(
+            original_call_stack_index, self.call_stack_index,
+            "unbalanced call stack after native function call"
+        );
+
+        result
     }
 
-    fn run_inner(&mut self) -> crate::Result<Vec<LuaValue>> {
+    fn run_inner(&mut self) -> crate::Result<ExecutionResult> {
         'main: loop {
-            let chunk_index = self.call_stack[self.call_stack_index - 1].chunk;
-            let ip = self.call_stack[self.call_stack_index - 1].ip;
-            let instruction = self.chunks[chunk_index as usize].instructions[ip];
+            let CallFrameKind::Lua {
+                chunk: chunk_index,
+                ip,
+            } = self.call_stack[self.call_stack_index - 1].kind
+            else {
+                unreachable!("native function call frame in run_inner");
+            };
 
+            // Get instruction and handle tracing
+            let instruction = {
+                let global = self.global.read().unwrap();
+                let chunk_ref = &global.chunks[chunk_index as usize];
+                let instr = chunk_ref.instructions[ip];
+
+                if let Some(tracer) = &mut self.tracer {
+                    tracer.trace_instruction(
+                        &self.stack[self.call_stack[self.call_stack_index - 1].frame_pointer..],
+                        &self.call_stack[self.call_stack_index - 1].varargs,
+                        self.call_stack[self.call_stack_index - 1].upvalues.as_ref(),
+                        chunk_ref,
+                        chunk_index,
+                        ip,
+                        self.multres,
+                    );
+                }
+
+                instr
+            };
+
+            // Macros to safely read instruction parameters while holding the lock
             macro_rules! instr_param {
                 ($offset:expr) => {
-                    self.chunks[chunk_index as usize].instructions[ip + $offset]
+                    self.read_instr_byte(chunk_index, ip + $offset)
                 };
                 () => {
                     instr_param!(1)
@@ -489,7 +527,7 @@ impl<'source> VM<'source> {
             }
             macro_rules! register {
                 ($offset:expr) => {
-                    self.chunks[chunk_index as usize].instructions[ip + $offset]
+                    self.read_instr_byte(chunk_index, ip + $offset)
                 };
                 () => {
                     register!(1)
@@ -497,8 +535,8 @@ impl<'source> VM<'source> {
             }
             macro_rules! const_index {
                 ($offset:expr) => {{
-                    let bytes = &self.chunks[chunk_index as usize].instructions
-                        [ip + $offset..ip + $offset + size_of::<ConstIndex>()];
+                    let bytes =
+                        self.read_instr_bytes(chunk_index, ip + $offset, size_of::<ConstIndex>());
                     ConstIndex::from_be_bytes(bytes.try_into().unwrap())
                 }};
                 () => {
@@ -507,8 +545,8 @@ impl<'source> VM<'source> {
             }
             macro_rules! jump_addr {
                 ($offset:expr) => {{
-                    let bytes = &self.chunks[chunk_index as usize].instructions
-                        [ip + $offset..ip + $offset + size_of::<JumpAddr>()];
+                    let bytes =
+                        self.read_instr_bytes(chunk_index, ip + $offset, size_of::<JumpAddr>());
                     JumpAddr::from_be_bytes(bytes.try_into().unwrap())
                 }};
             }
@@ -567,11 +605,33 @@ impl<'source> VM<'source> {
                     ($a $tt $b)?
                 }};
                 (_internal_metamethod_result $value:ident op_bool_result, $($_:tt),*) => {{
-                    $value?.as_boolean().into()
+                    match $value? {
+                        ExecutionResult::Completed(mut values) => {
+                            if values.is_empty() {
+                                LuaValue::Nil
+                            } else {
+                                values.swap_remove(0)
+                            }
+                        },
+                        result @ ExecutionResult::Yielded(_) => {
+                            return Ok(result);
+                        }
+                    }.as_boolean().into()
                 }};
-                (_internal_metamethod_result $value:ident $($_:tt),*) => {{
-                    $value?
-                }};
+                (_internal_metamethod_result $value:ident $($_:tt),*) => {
+                    match $value? {
+                        ExecutionResult::Completed(mut values) => {
+                            if values.is_empty() {
+                                LuaValue::Nil
+                            } else {
+                                values.swap_remove(0)
+                            }
+                        },
+                        result @ ExecutionResult::Yielded(_) => {
+                            return Ok(result);
+                        }
+                    }
+                };
             }
             macro_rules! unary_op_num {
                 (method = $name:ident, $metamethod:ident, $op_name:expr) => {
@@ -587,9 +647,9 @@ impl<'source> VM<'source> {
                     let dest_r = register!(1);
                     let value_r = register!(2);
                     let value = self.get_ref(value_r);
-                    let result = match &*value {
+                    let result: LuaValue = match &*value {
                         LuaValue::Number(num) => {
-                            unary_op_num!(_internal num, $($param),*)
+                            unary_op_num!(_internal dest_r num, $($param),*)
                         }.into(),
                         _ => {
                             let value = value.into_owned();
@@ -598,7 +658,10 @@ impl<'source> VM<'source> {
                                 &metatables::$metamethod,
                                 vec![value],
                             ) {
-                                Some(result) => result?,
+                                Some(result) => {
+                                    handle_execution_result!({ result? }, dest_r, 3)
+                                    // unary_op_num!(_internal handle_result dest_r { result? })
+                                },
                                 None => {
                                     return Err(self.op_err($op_name, self.get_ref(value_r).as_ref(), None));
 
@@ -609,15 +672,53 @@ impl<'source> VM<'source> {
                     self.set(dest_r, result);
                     3
                 }};
-                (_internal $value:ident, method, $name:ident) => {{
+                (_internal $dest_r:ident $value:ident, method, $name:ident) => {{
                     $value.$name()
                 }};
-                (_internal $value:ident, op, $tt:tt) => {{
-                    ($tt $value)
+                (_internal $dest_r:ident $value:ident, op, $tt:tt) => {{
+                    $tt $value
                 }};
-                (_internal $value:ident, fallible_op, $tt:tt) => {{
+                (_internal $dest_r:ident $value:ident, fallible_op, $tt:tt) => {{
                     ($tt $value)?
                 }};
+                (_internal handle_result $dest_r:ident $value:tt) => {
+                    match $value {
+                        ExecutionResult::Completed(mut values) => {
+                            if values.is_empty() {
+                                LuaValue::Nil
+                            } else {
+                                values.swap_remove(0)
+                            }
+                        },
+                        result @ ExecutionResult::Yielded(_) => {
+                            self.status = ThreadStatus::Suspended {
+                                resume_args_register: Some($dest_r),
+                            };
+                            self.call_stack[self.call_stack_index - 1].inc_ip(3);
+                            return Ok(result);
+                        }
+                    }
+                };
+            }
+            macro_rules! handle_execution_result {
+                ($result:expr, $dest_r:expr, $ip_inc:expr) => {
+                    match $result {
+                        ExecutionResult::Completed(mut values) => {
+                            if values.is_empty() {
+                                LuaValue::Nil
+                            } else {
+                                values.swap_remove(0)
+                            }
+                        }
+                        result @ ExecutionResult::Yielded(_) => {
+                            self.status = ThreadStatus::Suspended {
+                                resume_args_register: Some($dest_r),
+                            };
+                            self.call_stack[self.call_stack_index - 1].inc_ip($ip_inc);
+                            return Ok(result);
+                        }
+                    }
+                };
             }
 
             let instruction_increment = match Instruction::from(instruction) {
@@ -625,7 +726,7 @@ impl<'source> VM<'source> {
                 Instruction::LoadConst => {
                     let register = register!();
                     let const_index = const_index!();
-                    let constant = self.consts[const_index as usize].clone();
+                    let constant = self.get_const(const_index);
                     self.set(register, constant.into());
                     2 + size_of::<ConstIndex>()
                 }
@@ -640,14 +741,10 @@ impl<'source> VM<'source> {
                     self.set(register, closure.into());
 
                     assert_closure!(write, self.get(register), closure, {
-                        for (i, upvalue) in self.chunks[chunk_index as usize]
-                            .upvalues
-                            // NOTE: Need to clone here since we're borrowing `&mut self` below for
-                            // `capture_upvalue`.
-                            .clone()
-                            .iter()
-                            .enumerate()
-                        {
+                        let upvalues_to_capture = self
+                            .with_chunk(chunk_index, |c| c.upvalues.clone())
+                            .unwrap();
+                        for (i, upvalue) in upvalues_to_capture.iter().enumerate() {
                             let index = upvalue.index;
                             if upvalue.is_local {
                                 closure.upvalues.insert(i, self.capture_upvalue(index));
@@ -733,7 +830,8 @@ impl<'source> VM<'source> {
                             &metatables::EQ_KEY,
                             vec![a.into_owned(), b.into_owned()],
                         ) {
-                            result?.as_boolean()
+                            handle_execution_result!(result?, dest_r, 4).as_boolean()
+                            // result?.as_boolean()
                         } else {
                             is_equal
                         }
@@ -759,7 +857,8 @@ impl<'source> VM<'source> {
                             &metatables::EQ_KEY,
                             vec![a.into_owned(), b.into_owned()],
                         ) {
-                            result?.as_boolean()
+                            handle_execution_result!(result?, dest_r, 4).as_boolean()
+                            // result?.as_boolean()
                         } else {
                             is_equal
                         }
@@ -794,10 +893,11 @@ impl<'source> VM<'source> {
                                 vec![a.clone(), b.clone()],
                             ) {
                                 Some(value) => {
-                                    self.set(dest_r, value?);
+                                    let value = handle_execution_result!(value?, dest_r, 4);
+                                    self.set(dest_r, value);
                                 }
                                 None => {
-                                    return Err(e);
+                                    return Err(Box::new(e));
                                 }
                             }
                         }
@@ -828,7 +928,7 @@ impl<'source> VM<'source> {
                         _ => {
                             let value = value.into_owned();
                             match metatables::handle(self, &metatables::LEN_KEY, vec![value]) {
-                                Some(result) => result?,
+                                Some(result) => handle_execution_result!(result?, dest_r, 3),
                                 None => {
                                     // If the value is a table (but it didn't have a __len
                                     // metamethod), return the length of the array part
@@ -959,7 +1059,7 @@ impl<'source> VM<'source> {
                         Instruction::SetTableConstKey => {
                             let table_r = register!(1);
                             let const_index = const_index!(2);
-                            let key = self.consts[const_index as usize].clone().into();
+                            let key = self.get_const(const_index).into();
                             let value_r = register!(2 + size_of::<ConstIndex>());
 
                             let table = self.get(table_r);
@@ -979,7 +1079,7 @@ impl<'source> VM<'source> {
                         Instruction::SetTableUpvalConstKey => {
                             let upval_index = instr_param!(1);
                             let const_index = const_index!(2);
-                            let key = self.consts[const_index as usize].clone().into();
+                            let key = self.get_const(const_index).into();
                             let value_r = register!(2 + size_of::<ConstIndex>());
 
                             let table = self.get_upvalue(upval_index);
@@ -1012,15 +1112,55 @@ impl<'source> VM<'source> {
                             if let Ok(__newindex) = __newindex_callable {
                                 match __newindex.method {
                                     Method::Closure(closure) => {
-                                        // Run through `run_closure` rather than jumping to it
-                                        // directly, so return values are cleaned up properly
-                                        self.run_closure(closure, vec![table, key, value])?;
-                                        handled = true;
-                                        break;
+                                        let frame_pointer = match instr {
+                                            Instruction::SetTable => {
+                                                // Arguments are already correctly placed
+                                                register!(1)
+                                            }
+                                            Instruction::SetTableConstKey => {
+                                                let table_r = register!(1);
+                                                self.set(table_r + 2, value);
+                                                table_r
+                                            }
+                                            Instruction::SetTableUpval => {
+                                                let frame_pointer = register!(1);
+                                                self.set(frame_pointer, target);
+                                                self.set(frame_pointer + 1, key);
+                                                self.set(frame_pointer + 2, value);
+                                                frame_pointer
+                                            }
+                                            Instruction::SetTableUpvalConstKey => {
+                                                let frame_pointer = register!(1);
+                                                self.set(frame_pointer, target);
+                                                self.set(frame_pointer + 1, key);
+                                                self.set(frame_pointer + 2, value);
+                                                frame_pointer
+                                            }
+                                            _ => unreachable!(),
+                                        };
+                                        self.set_up_closure_call_frame(
+                                            frame_pointer as usize,
+                                            ip + increment,
+                                            frame_pointer,
+                                            closure,
+                                            3usize,
+                                        )?;
+                                        continue 'main;
                                     }
-                                    Method::NativeFunction(_, f) => {
-                                        let args = vec![table, key, value];
-                                        self.run_native_function(f, args)?;
+                                    Method::NativeFunction(name, f) => {
+                                        let args_r = self.extend_stack([table, key, value]);
+                                        self.run_native_function(name, f, args_r, 3)?;
+
+                                        // Check if the native function yielded
+                                        if let Some(yield_values) = self.pending_yield.take() {
+                                            // In this case, we don't care about the return values,
+                                            // so set status to suspended with an empty
+                                            // `resume_args_register`.
+                                            self.status = ThreadStatus::Suspended {
+                                                resume_args_register: None,
+                                            };
+                                            return Ok(ExecutionResult::Yielded(yield_values));
+                                        }
                                     }
                                 }
                                 handled = true;
@@ -1040,7 +1180,7 @@ impl<'source> VM<'source> {
                     }
 
                     if !handled {
-                        return Err(self.err("attempt to index a non-table"));
+                        return Err(lua_error!("attempt to index a non-table"));
                     }
 
                     increment
@@ -1060,7 +1200,7 @@ impl<'source> VM<'source> {
                         Instruction::GetTableConstKey => {
                             let table_r = register!(2);
                             let const_index = const_index!(3);
-                            let key = self.consts[const_index as usize].clone().into();
+                            let key = self.get_const(const_index).into();
                             (self.get(table_r), key, 3 + size_of::<ConstIndex>())
                         }
                         Instruction::GetTableUpval => {
@@ -1074,7 +1214,7 @@ impl<'source> VM<'source> {
                             let upval_index = instr_param!(2);
                             let const_index = const_index!(3);
                             let table = self.get_upvalue(upval_index);
-                            let key = self.consts[const_index as usize].clone().into();
+                            let key = self.get_const(const_index).into();
                             (table, key, 3 + size_of::<ConstIndex>())
                         }
                         _ => unreachable!(),
@@ -1117,30 +1257,29 @@ impl<'source> VM<'source> {
                                         let parent_frame_pointer = self.call_stack
                                             [self.call_stack_index - 1]
                                             .frame_pointer;
-                                        let chunk = &self.chunks[closure.chunk as usize];
-                                        self.push_call_frame(
-                                            closure.chunk,
-                                            false,
+                                        self.set_up_closure_call_frame(
                                             parent_frame_pointer + table_r as usize,
-                                            chunk.max_registers,
                                             ip + increment,
                                             dest_r,
-                                            Some(closure.upvalues.clone()),
-                                            chunk.num_params,
-                                            chunk.has_varargs,
-                                            false,
-                                        )?;
-                                        let chunk = &self.chunks[closure.chunk as usize];
-                                        self.align_closure_args(
-                                            chunk.num_params,
+                                            closure,
                                             1usize,
-                                            chunk.has_varargs,
-                                        );
+                                        )?;
                                         continue 'main;
                                     }
-                                    Method::NativeFunction(_, f) => {
-                                        let args = vec![table, key];
-                                        let result = self.run_native_function(f, args)?;
+                                    Method::NativeFunction(name, f) => {
+                                        let args_r = self.extend_stack([table, key]);
+                                        let result =
+                                            self.run_native_function(name, f, args_r, 2)?;
+
+                                        // Check if the native function yielded
+                                        if let Some(yield_values) = self.pending_yield.take() {
+                                            // Set status to Suspended, storing where to put resume args
+                                            self.status = ThreadStatus::Suspended {
+                                                resume_args_register: Some(dest_r),
+                                            };
+                                            return Ok(ExecutionResult::Yielded(yield_values));
+                                        }
+
                                         if let Some(return_value) = result.into_iter().next() {
                                             self.set(dest_r, return_value);
                                         } else {
@@ -1163,7 +1302,7 @@ impl<'source> VM<'source> {
                         if valid_object {
                             self.set(dest_r, LuaValue::Nil);
                         } else {
-                            return Err(self.err("attempt to index a non-table"));
+                            return Err(lua_error!("attempt to index a non-table"));
                         }
                     }
 
@@ -1188,11 +1327,11 @@ impl<'source> VM<'source> {
                                 }
                             }
                             _ => {
-                                return Err(self.err("attempt to index a non-table"));
+                                return Err(lua_error!("attempt to index a non-table"));
                             }
                         },
                         _ => {
-                            return Err(self.err("attempt to index a non-table"));
+                            return Err(lua_error!("attempt to index a non-table"));
                         }
                     }
 
@@ -1233,31 +1372,42 @@ impl<'source> VM<'source> {
                         Some(Method::Closure(closure)) => {
                             let parent_frame_pointer =
                                 self.call_stack[self.call_stack_index - 1].frame_pointer;
-                            let chunk = &self.chunks[closure.chunk as usize];
+                            let (max_regs, num_params, has_varargs) = self
+                                .with_chunk(closure.chunk, |c| {
+                                    (c.max_registers, c.num_params, c.has_varargs)
+                                })
+                                .unwrap();
                             self.push_call_frame(
-                                closure.chunk,
+                                CallFrameKind::for_chunk(closure.chunk),
                                 false,
                                 parent_frame_pointer + params_r as usize,
-                                chunk.max_registers,
+                                max_regs,
                                 ip + 4,
                                 func_r,
                                 Some(closure.upvalues.clone()),
-                                chunk.num_params,
-                                chunk.has_varargs,
+                                num_params as u16,
+                                has_varargs,
                                 !is_single_return,
                             )?;
-                            let chunk = &self.chunks[closure.chunk as usize];
-                            self.align_closure_args(chunk.num_params, num_args, chunk.has_varargs);
+                            self.align_closure_args(num_params, num_args, has_varargs);
 
                             continue;
                         }
-                        Some(Method::NativeFunction(_, f)) => {
-                            let mut args = Vec::with_capacity(num_args);
-                            for i in 0..num_args {
-                                args.push(self.get(params_r as usize + i));
+                        Some(Method::NativeFunction(name, f)) => {
+                            let result =
+                                self.run_native_function(name, f, params_r, num_args as u16)?;
+
+                            // Check if the native function yielded
+                            if let Some(yield_values) = self.pending_yield.take() {
+                                // Set status to Suspended, storing where to put resume args
+                                self.status = ThreadStatus::Suspended {
+                                    resume_args_register: Some(func_r),
+                                };
+                                // Increment IP past the Call instruction so we don't re-execute it on resume
+                                self.call_stack[self.call_stack_index - 1].inc_ip(4);
+                                return Ok(ExecutionResult::Yielded(yield_values));
                             }
 
-                            let result = self.run_native_function(f, args)?;
                             let value_slots_needed = match (is_single_return, result.len()) {
                                 (true, 0) => 1,
                                 (true, n) => n.min(1),
@@ -1284,7 +1434,11 @@ impl<'source> VM<'source> {
                             4
                         }
                         _ => {
-                            return Err(self.err("attempt to call a non-function"));
+                            // TODO: Might be nice here to print the name of the variable.
+                            return Err(lua_error!(
+                                "attempt to call a {} value",
+                                function.type_name()
+                            ));
                         }
                     }
                 }
@@ -1313,7 +1467,7 @@ impl<'source> VM<'source> {
                     self.align_closure_args(num_args, num_passed_args, takes_varargs);
 
                     // Then just jump back to the start of this closure.
-                    self.call_stack[self.call_stack_index - 1].ip = 0;
+                    self.call_stack[self.call_stack_index - 1].set_ip(0);
                     continue;
                 }
                 instr @ Instruction::Return
@@ -1351,10 +1505,10 @@ impl<'source> VM<'source> {
 
                     // Check if this is the root frame, or if we're leaving this chunk
                     if frame.border_frame {
-                        return Ok(return_values);
+                        return Ok(ExecutionResult::Completed(return_values));
                     }
 
-                    self.call_stack[self.call_stack_index - 1].ip = frame.return_addr;
+                    self.call_stack[self.call_stack_index - 1].set_ip(frame.return_addr);
 
                     self.ensure_stack_space(
                         frame.return_value_register as usize + return_values.len(),
@@ -1386,9 +1540,9 @@ impl<'source> VM<'source> {
                         // TODO: We probably want a nicer error here. Was this a break
                         // outside of a loop? Was it a goto statement with no matching
                         // label?
-                        return Err(self.err("attempt to jump to an invalid address"));
+                        return Err(lua_error!("attempt to jump to an invalid address"));
                     }
-                    self.call_stack[self.call_stack_index - 1].ip = addr as usize;
+                    self.call_stack[self.call_stack_index - 1].set_ip(addr as usize);
                     continue;
                 }
                 Instruction::JmpTrue => {
@@ -1396,7 +1550,7 @@ impl<'source> VM<'source> {
                     let value = self.get_ref(register);
                     if value.as_boolean() {
                         let addr = jump_addr!(2);
-                        self.call_stack[self.call_stack_index - 1].ip = addr as usize;
+                        self.call_stack[self.call_stack_index - 1].set_ip(addr as usize);
                         continue;
                     }
                     2 + size_of::<JumpAddr>()
@@ -1406,7 +1560,7 @@ impl<'source> VM<'source> {
                     let value = self.get_ref(register);
                     if !value.as_boolean() {
                         let addr = jump_addr!(2);
-                        self.call_stack[self.call_stack_index - 1].ip = addr as usize;
+                        self.call_stack[self.call_stack_index - 1].set_ip(addr as usize);
                         continue;
                     }
                     2 + size_of::<JumpAddr>()
@@ -1418,11 +1572,11 @@ impl<'source> VM<'source> {
                         // TODO: We probably want a nicer error here. Was this a break
                         // outside of a loop? Was it a goto statement with no matching
                         // label?
-                        return Err(self.err("attempt to jump to an invalid address"));
+                        return Err(lua_error!("attempt to jump to an invalid address"));
                     }
 
                     self.close(from_register, None)?;
-                    self.call_stack[self.call_stack_index - 1].ip = addr as usize;
+                    self.call_stack[self.call_stack_index - 1].set_ip(addr as usize);
 
                     continue;
                 }
@@ -1433,29 +1587,7 @@ impl<'source> VM<'source> {
                     return Err(RuntimeError::try_from(error_type)?).into_lua_error();
                 }
             };
-            self.call_stack[self.call_stack_index - 1].ip += instruction_increment;
-        }
-    }
-
-    fn op_err(&self, op_name: &str, a: &LuaValue, b: Option<&LuaValue>) -> LuaError {
-        let mut message = format!("cannot {} a '{}'", op_name, a.type_name());
-        if let Some(b) = b {
-            message.push_str(&format!(" and a '{}'", b.type_name()));
-        }
-
-        self.err(message)
-    }
-
-    pub(crate) fn err<T: std::fmt::Display>(&self, message: T) -> LuaError {
-        let frame = &self.call_stack[self.call_stack_index - 1];
-        let chunk = &self.chunks[frame.chunk as usize];
-
-        let mut error = LuaError::new(message.to_string());
-        error.chunk = Some(frame.chunk);
-        if let Some(span) = chunk.instruction_spans.get(&frame.ip) {
-            error.with_labels(*span)
-        } else {
-            error
+            self.call_stack[self.call_stack_index - 1].inc_ip(instruction_increment);
         }
     }
 }

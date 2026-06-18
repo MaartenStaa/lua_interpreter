@@ -2,9 +2,9 @@ use std::sync::LazyLock;
 
 use crate::{
     error::lua_error,
-    macros::{get_number, require_table},
-    value::{LuaNumber, LuaObject, LuaTable, LuaValue},
-    vm::VM,
+    macros::require_table,
+    state::LuaState,
+    value::{LuaObject, LuaTable, LuaValue},
 };
 
 pub static TABLE: LazyLock<LuaValue> = LazyLock::new(|| {
@@ -12,35 +12,36 @@ pub static TABLE: LazyLock<LuaValue> = LazyLock::new(|| {
 
     table.insert(
         "concat".into(),
-        LuaObject::NativeFunction("concat", concat).into(),
+        LuaObject::NativeFunction("table.concat", concat).into(),
     );
     table.insert(
         "insert".into(),
-        LuaObject::NativeFunction("insert", insert).into(),
+        LuaObject::NativeFunction("table.insert", insert).into(),
     );
     table.insert(
         "pack".into(),
-        LuaObject::NativeFunction("pack", pack).into(),
+        LuaObject::NativeFunction("table.pack", pack).into(),
     );
     table.insert(
         "unpack".into(),
-        LuaObject::NativeFunction("unpack", unpack).into(),
+        LuaObject::NativeFunction("table.unpack", unpack).into(),
     );
 
     table.into()
 });
 
-fn concat(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
+fn concat(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
     // Temporary storage for number conversion, avoids needing to clone a string separator to match
     // the Vec<u8> type.
     let temp;
-    let sep = match input.get(1) {
+    let sep = state.try_arg(1);
+    let sep = match sep.as_ref() {
         Some(LuaValue::String(s)) => Some(s.as_slice()),
         Some(LuaValue::Number(n)) => {
             temp = Some(n.to_string());
             temp.as_ref().map(|s| s.as_bytes())
         }
-        Some(LuaValue::Nil) | None => None,
+        None | Some(LuaValue::Nil) => None,
         Some(v) => {
             return Err(lua_error!(
                 "bad argument #1 to 'table.concat' (string expected, got {type_name})",
@@ -48,90 +49,48 @@ fn concat(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
             ));
         }
     };
-    let i = match input.get(2) {
-        Some(LuaValue::Number(n)) => n.integer_repr()?,
-        Some(v) => {
-            return Err(lua_error!(
-                "bad argument #2 to 'table.concat' (number expected, got {type_name})",
-                type_name = v.type_name()
-            ));
-        }
-        None => 1,
-    };
-    let j = match input.get(3) {
-        Some(LuaValue::Number(n)) => Some(n.integer_repr()?),
-        Some(v) => {
-            return Err(lua_error!(
-                "bad argument #3 to 'table.concat' (number expected, got {type_name})",
-                type_name = v.type_name()
-            ));
-        }
-        None => None,
-    };
+    let i = state.try_arg_as_integer(2)?.unwrap_or(1);
+    let j = state.try_arg_as_integer(3)?;
 
     let mut result = Vec::new();
 
-    match input.first() {
-        Some(LuaValue::Object(o)) => match &*o.read().unwrap() {
-            LuaObject::Table(t) => {
-                let j = j.unwrap_or_else(|| t.len() as i64);
-                for k in i..=j {
-                    if k > i
-                        && let Some(sep) = sep.as_ref()
-                    {
-                        result.extend(*sep);
-                    }
+    require_table!(state.try_arg(0), "table.concat", 0, t, {
+        let j = j.unwrap_or_else(|| t.len() as i64);
+        for k in i..=j {
+            if k > i
+                && let Some(sep) = sep.as_ref()
+            {
+                result.extend(*sep);
+            }
 
-                    match t.get(&k.into()).unwrap_or(&LuaValue::Nil) {
-                        LuaValue::String(s) => result.extend(s),
-                        LuaValue::Number(n) => result.extend(n.to_string().as_bytes()),
-                        v => {
-                            return Err(lua_error!(
-                                "invalid value ({type_name}) at index {index} in table for 'table.concat'",
-                                type_name = v.type_name(),
-                                index = k
-                            ));
-                        }
-                    }
+            match t.get(&k.into()).unwrap_or(&LuaValue::Nil) {
+                LuaValue::String(s) => result.extend(s),
+                LuaValue::Number(n) => result.extend(n.to_string().as_bytes()),
+                v => {
+                    return Err(lua_error!(
+                        "invalid value ({type_name}) at index {index} in table for 'table.concat'",
+                        type_name = v.type_name(),
+                        index = k
+                    ));
                 }
             }
-            _ => {
-                return Err(lua_error!(
-                    "bad argument #1 to 'table.concat' (table expected)"
-                ));
-            }
-        },
-        Some(v) => {
-            return Err(lua_error!(
-                "bad argument #1 to 'table.concat' (table expected, got {type_name})",
-                type_name = v.type_name()
-            ));
         }
-        None => {
-            return Err(lua_error!(
-                "bad argument #1 to 'table.concat' (value expected)"
-            ));
-        }
-    }
+    });
 
     Ok(vec![LuaValue::String(result.into())])
 }
 
-fn insert(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
-    require_table!(write, input, "table.insert", 0, table, {
+fn insert(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+    require_table!(write, state.try_arg(0), "table.insert", 0, table, {
         let len = table.len() as i64;
 
-        match input.get(1) {
+        match state.try_arg(1) {
             Some(LuaValue::Number(n)) => {
                 let i = n.integer_repr()?;
-                let value = input.get(2).cloned().ok_or_else(|| {
-                    lua_error!("bad argument #3 to 'table.insert' (value expected)")
-                })?;
+                let value = state.ensure_arg(2)?;
 
                 if i < 1 || i > len + 1 {
-                    return Err(lua_error!(
-                        "bad argument #2 to 'table.insert' (position out of bounds)"
-                    ));
+                    return state.arg_err(1, "position out of bounds");
                 }
 
                 for k in (i..=len).rev() {
@@ -153,11 +112,12 @@ fn insert(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     })
 }
 
-fn pack(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
+fn pack(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
     let mut result = LuaTable::new();
 
-    let len = input.len();
-    for (i, v) in input.into_iter().enumerate() {
+    let len = state.num_args();
+    for i in 0..len {
+        let v = state.arg(i);
         result.insert((i as i64 + 1).into(), v);
     }
 
@@ -166,14 +126,10 @@ fn pack(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     Ok(vec![result.into()])
 }
 
-fn unpack(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
-    require_table!(read, input, "table.unpack", 0, table, {
-        let i = get_number!(input, "table.unpack", 1)
-            .unwrap_or(&LuaNumber::Integer(1))
-            .integer_repr()?;
-        let j = get_number!(input, "table.unpack", 2)
-            .unwrap_or(&LuaNumber::Integer(table.len() as i64))
-            .integer_repr()?;
+fn unpack(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+    require_table!(read, state.try_arg(0), "table.unpack", 0, table, {
+        let i = state.try_arg_as_integer(1)?.unwrap_or(1);
+        let j = state.try_arg_as_integer(2)?.unwrap_or(table.len() as i64);
 
         let mut result = Vec::new();
         for k in i..=j {

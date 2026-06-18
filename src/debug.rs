@@ -1,11 +1,12 @@
 use std::mem::size_of;
 
 use crate::{
+    LuaState,
     chunk::Chunk,
     error::RuntimeError,
     instruction::Instruction,
     value::LuaConst,
-    vm::{ConstIndex, JumpAddr, VM},
+    vm::{ConstIndex, JumpAddr},
 };
 
 const IP_WIDTH: usize = 4;
@@ -19,9 +20,10 @@ macro_rules! instr {
     };
 }
 
-pub fn print_instructions(vm: &VM, chunk: &Chunk<'_>) {
+pub fn print_instructions(state: &LuaState, chunk: &Chunk) {
     let instructions = chunk.get_instructions();
-    let consts = vm.get_consts();
+    let global_state = state.global.read().unwrap();
+    let consts = global_state.get_consts();
     let mut instruction_pointer = 0;
 
     macro_rules! reg {
@@ -63,11 +65,10 @@ pub fn print_instructions(vm: &VM, chunk: &Chunk<'_>) {
                 let chunk_index = ConstIndex::from_be_bytes(const_index_bytes.try_into().unwrap());
                 instr!("LOAD_CLOSURE");
                 reg!();
-                let chunk = vm.get_chunk(chunk_index).expect("valid chunk index");
-                println!(
-                    "FUNCTION<{name}:{chunk_index:04}>",
-                    name = String::from_utf8_lossy(&chunk.name)
-                );
+                let chunk_name = state
+                    .with_chunk(chunk_index, |c| c.name.to_string())
+                    .expect("valid chunk index");
+                println!("FUNCTION<{name}:{chunk_index:04}>", name = chunk_name);
 
                 2 + size_of::<ConstIndex>()
             }

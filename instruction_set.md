@@ -106,7 +106,7 @@ Pops the top value from the stack, discarding it.
 #### `Discard`
 
 Keeps popping values from the stack until a `Marker` is found, discarding all of
-them.
+them, including the marker.
 
 #### `Swap`
 
@@ -157,6 +157,14 @@ For example, if the stack is `[1, 2, Marker, 3, 4, 5]` and the instruction is
 The arithmetic operations are `Add`, `Sub`, `Mul`, `Div`, `Mod`, `Pow`, `IDiv`,
 `BAnd`, `BOr`, `BXor`, `Shl`, and `Shr`. All of these operations pop two values
 from the stack, perform the operation, and push the result back onto the stack.
+
+#### Logical
+
+The logical operations are `And` and `Or`. Both of these operations pop two
+values off the stack. In the case of `And`, if the first value is falsy, that
+first value is pushed back onto the stack. Otherwise, the second value is pushed
+back onto the stack. `Or` behaves the same way, but pushes the first value back
+if its truthy, rather than when it's falsy.
 
 #### Comparison
 
@@ -268,6 +276,11 @@ table, `nil` is pushed.
 
 For example, if the stack is `[table, key]`, the stack will become `[value]`.
 
+### `AppendToTable`
+
+Appends all the values on the stack to the table, which is assumed to be the
+value before the marker. The values and the marker are popped from the stack.
+
 ## Function operations
 
 ### `Call`
@@ -316,3 +329,10 @@ size of the instruction.
 ### `JmpFalse`
 
 The same as `JmpTrue`, but the jump is taken if the value is false.
+
+## Other
+
+### `Error`
+
+Triggers a runtime error, with the error code being the byte directly following
+the instruction.

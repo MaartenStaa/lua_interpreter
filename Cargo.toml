@@ -16,5 +16,8 @@ short-uuid = "0.2.1"
 subslice = "0.2.3"
 thiserror = "2.0.17"
 
+[profile.release]
+debug = "line-tables-only"
+
 [dev-dependencies]
 rstest = "0.26.1"

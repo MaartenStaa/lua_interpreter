@@ -1,8 +1,13 @@
 use std::{
-    borrow::Cow, collections::HashMap, mem::MaybeUninit, path::PathBuf, ptr::NonNull, sync::Arc,
+    collections::HashMap,
+    mem::MaybeUninit,
+    path::PathBuf,
+    ptr::NonNull,
+    sync::{Arc, RwLock},
 };
 
 use crate::{
+    GlobalState, LuaState,
     ast::{
         BinaryOperator, Block, Expression, Field, ForCondition, FunctionCall, FunctionDef, Literal,
         LocalAttribute, Name, Number, NumericFor, PrefixExpression, Statement, TableConstructor,
@@ -21,7 +26,7 @@ use crate::{
     parser::Parser,
     token::Span,
     value::{LuaConst, LuaNumber, LuaString, LuaTable, LuaVariableAttribute},
-    vm::{ConstIndex, JumpAddr, VM},
+    vm::{ConstIndex, JumpAddr},
 };
 
 pub(crate) use expression::ExpressionResultMode;
@@ -34,7 +39,7 @@ mod variable;
 
 const ENV_NAME: &[u8] = b"_ENV";
 
-impl<'vm, 'source> Compiler<'vm, 'source> {
+impl Compiler {
     fn scope_id(&self) -> usize {
         *self.scope_ids.last().expect("scope_ids is not empty")
     }
@@ -81,9 +86,9 @@ impl<'vm, 'source> Compiler<'vm, 'source> {
 }
 
 #[derive(Debug)]
-pub struct Compiler<'vm, 'source> {
-    vm: &'vm mut VM<'source>,
-    chunk: Chunk<'source>,
+pub struct Compiler {
+    global_state: Arc<RwLock<GlobalState>>,
+    chunk: Chunk,
     method_name: Option<LuaString>,
     frame: Frame,
     to_close: Vec<u8>,
@@ -102,18 +107,18 @@ pub struct CompiledChunk {
     pub chunk_index: ConstIndex,
 }
 
-impl<'vm, 'source> Compiler<'vm, 'source> {
+impl Compiler {
     pub fn new(
-        vm: &'vm mut VM<'source>,
+        global_state: Arc<RwLock<GlobalState>>,
         chunk_name: LuaString,
         filename: Option<impl Into<PathBuf>>,
         method_name: Option<LuaString>,
-        source: Arc<Cow<'source, [u8]>>,
+        source: Arc<Vec<u8>>,
         parameters: Vec<TokenTree<Name>>,
         has_varargs: bool,
     ) -> Self {
         let mut result = Self {
-            vm,
+            global_state,
             chunk: Chunk::new(
                 chunk_name,
                 filename.map(|f| f.into()),
@@ -153,17 +158,17 @@ impl<'vm, 'source> Compiler<'vm, 'source> {
     /// Create a new compiler instance for a non-main chunk, e.g. a function body.
     #[allow(clippy::too_many_arguments)]
     fn new_sub(
-        vm: &'vm mut VM<'source>,
+        global_state: Arc<RwLock<GlobalState>>,
         chunk_name: LuaString,
         filename: Option<impl Into<PathBuf>>,
         method_name: Option<LuaString>,
-        source: Arc<Cow<'source, [u8]>>,
+        source: Arc<Vec<u8>>,
         parameters: Vec<TokenTree<Name>>,
         has_varargs: bool,
         parent_frame: std::ptr::NonNull<Frame>,
     ) -> Self {
         let mut result = Self {
-            vm,
+            global_state,
             chunk: Chunk::new(
                 chunk_name,
                 filename.map(|f| f.into()),
@@ -193,7 +198,17 @@ impl<'vm, 'source> Compiler<'vm, 'source> {
         result
     }
 
-    pub fn compile_chunk(mut self, ast: Option<TokenTree<Block>>) -> crate::Result<CompiledChunk> {
+    pub fn compile(self, ast: Option<TokenTree<Block>>) -> crate::Result<LuaState> {
+        let global_state = Arc::clone(&self.global_state);
+        let compiled_chunk = self.compile_chunk(ast)?;
+
+        Ok(LuaState::new(global_state, compiled_chunk.chunk_index))
+    }
+
+    pub(crate) fn compile_chunk(
+        mut self,
+        ast: Option<TokenTree<Block>>,
+    ) -> crate::Result<CompiledChunk> {
         let ast = match ast {
             Some(ast) => Ok(ast),
             None => Parser::new(&self.chunk.name, &self.chunk.source).parse(),
@@ -263,7 +278,7 @@ impl<'vm, 'source> Compiler<'vm, 'source> {
         };
 
         Ok(CompiledChunk {
-            chunk_index: self.vm.add_chunk(self.chunk)?,
+            chunk_index: self.global_state.write().unwrap().add_chunk(self.chunk)?,
         })
     }
 
@@ -303,9 +318,15 @@ impl<'vm, 'source> Compiler<'vm, 'source> {
     }
 
     fn get_const_index(&mut self, lua_const: LuaConst) -> ConstIndex {
-        self.vm
-            .lookup_const(&lua_const)
-            .unwrap_or_else(|| self.vm.register_const(lua_const))
+        let global_state = self.global_state.read().unwrap();
+        if let Some(const_index) = global_state.lookup_const(&lua_const) {
+            return const_index;
+        }
+
+        // Release the read lock
+        drop(global_state);
+
+        self.global_state.write().unwrap().register_const(lua_const)
     }
 
     fn get_global_name_index(&mut self, name: LuaString) -> ConstIndex {
@@ -485,7 +506,7 @@ impl<'vm, 'source> Compiler<'vm, 'source> {
                 // The statement `local function f () body end` translates to `local f; f =
                 // function () body end`, not to `local f = function () body end` (This only makes
                 // a difference when the body of the function contains references to f.)
-                let name_r = self.push_load_nil(Some(name.span));
+                let name_r = self.push_load_nil(Some(span));
                 self.add_local(name.node.0, name_r, 0, Some(name.span));
 
                 self.compile_function_def(function_def, Some(name_r))?;
@@ -1532,7 +1553,7 @@ impl<'vm, 'source> Compiler<'vm, 'source> {
     ) -> crate::Result<u8> {
         // Compile the function definition as a new chunk.
         let function_chunk = Compiler::new_sub(
-            &mut *self.vm,
+            Arc::clone(&self.global_state),
             function_def
                 .node
                 .name

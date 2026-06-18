@@ -37,13 +37,15 @@ impl<'name, 'source> Lexer<'name, 'source> {
         LabeledSpan::at(position..position, message)
     }
 
-    pub fn with_source_code(&self, report: LuaError) -> LuaError {
-        report.with_source_code(
-            miette::NamedSource::new(
-                String::from_utf8_lossy(self.chunk_name),
-                self.source.to_vec(),
-            )
-            .with_language("lua"),
+    pub fn with_source_code(&self, report: LuaError) -> Box<LuaError> {
+        Box::new(
+            report.with_source_code(
+                miette::NamedSource::new(
+                    String::from_utf8_lossy(self.chunk_name),
+                    self.source.to_vec(),
+                )
+                .with_language("lua"),
+            ),
         )
     }
 }
@@ -231,14 +233,15 @@ impl<'path, 'source> Iterator for Lexer<'path, 'source> {
                 b'0'..=b'9' => State::Number,
 
                 c if c.is_ascii_whitespace() => continue,
+                0xb => continue, // Vertical tab
 
                 _ => {
-                    return Some(Err(self.with_source_code(lua_error!(
+                    return Some(Err(self.with_source_code(*lua_error!(
                         labels = vec![LabeledSpan::at(
                             c_start..self.position,
                             "unexpected character"
                         )],
-                        "unexpected token {c}"
+                        "unexpected token 0x{c:0x}"
                     ))));
                 }
             };
@@ -453,7 +456,7 @@ impl<'path, 'source> Lexer<'path, 'source> {
                         let mut hex = [b'0'; 2];
                         (0..2).try_for_each(|i| -> crate::Result<()> {
                             hex[i] = chars.next().copied().ok_or_else(|| {
-                                self.with_source_code(lua_error!(
+                                self.with_source_code(*lua_error!(
                                     labels = vec![LabeledSpan::at(
                                         self.position..self.position + 2,
                                         "expected two hex digits"
@@ -470,7 +473,7 @@ impl<'path, 'source> Lexer<'path, 'source> {
                         hex.iter().try_fold(0u8, |acc, c| {
                             c.to_digit(16)
                                 .ok_or_else(|| {
-                                    self.with_source_code(lua_error!(
+                                    self.with_source_code(*lua_error!(
                                         labels = vec![LabeledSpan::at(
                                             self.position - 2..self.position + 1,
                                             "invalid hex escape"
@@ -485,7 +488,7 @@ impl<'path, 'source> Lexer<'path, 'source> {
                         let escape_start = self.position - 1;
 
                         if !matches!(chars.next(), Some(b'{')) {
-                            return Err(self.with_source_code(lua_error!(
+                            return Err(self.with_source_code(*lua_error!(
                                 labels = vec![LabeledSpan::at(
                                     self.position - 1..self.position + 1,
                                     "expected { after \\u"
@@ -495,7 +498,8 @@ impl<'path, 'source> Lexer<'path, 'source> {
                         }
 
                         // Lua allows any value up to 2^31 - 1, so account for up to 8 hex digits
-                        let mut hex = [b'0'; 8];
+                        let max_hex_value: u64 = 0x7FFFFFFF >> 4;
+                        let mut hex: u64 = 0;
                         let mut n = 0;
                         let mut seen_close_brace = false;
                         for c in chars.by_ref().copied() {
@@ -505,7 +509,7 @@ impl<'path, 'source> Lexer<'path, 'source> {
                             }
 
                             if !c.is_ascii_hexdigit() {
-                                return Err(self.with_source_code(lua_error!(
+                                return Err(self.with_source_code(*lua_error!(
                                     labels = vec![LabeledSpan::at(
                                         self.position - 1..self.position + 1,
                                         "expected hex digit"
@@ -515,7 +519,7 @@ impl<'path, 'source> Lexer<'path, 'source> {
                             }
 
                             if n == 8 {
-                                return Err(self.with_source_code(lua_error!(
+                                return Err(self.with_source_code(*lua_error!(
                                     labels = vec![LabeledSpan::at(
                                         escape_start..self.position + 1,
                                         "too many hex digits"
@@ -524,12 +528,22 @@ impl<'path, 'source> Lexer<'path, 'source> {
                                 )));
                             }
 
-                            hex[n] = c;
+                            if hex > max_hex_value {
+                                return Err(self.with_source_code(*lua_error!(
+                                    labels = vec![LabeledSpan::at(
+                                        escape_start..self.position + 1,
+                                        "hex escape too large"
+                                    )],
+                                    "UTF-8 value too large"
+                                )));
+                            }
+
+                            hex = (hex << 4) + c.to_digit(16).unwrap() as u64;
                             n += 1;
                         }
 
                         if n == 0 {
-                            return Err(self.with_source_code(lua_error!(
+                            return Err(self.with_source_code(*lua_error!(
                                 labels = vec![LabeledSpan::at(
                                     escape_start..self.position + 1,
                                     "expected at least one hex digit"
@@ -537,7 +551,7 @@ impl<'path, 'source> Lexer<'path, 'source> {
                                 "expected at least one hex digit"
                             )));
                         } else if !seen_close_brace {
-                            return Err(self.with_source_code(lua_error!(
+                            return Err(self.with_source_code(*lua_error!(
                                 labels = vec![LabeledSpan::at(
                                     escape_start..self.position + 1,
                                     "expected } to close escape"
@@ -548,20 +562,48 @@ impl<'path, 'source> Lexer<'path, 'source> {
 
                         self.position += n + 3;
 
-                        let value = numbers::parse_hex_number(hex[..n].iter().copied());
-                        string.extend(value.to_be_bytes().iter());
+                        // The below is a port of `luaO_utf8esc` from the Lua source code
+                        if hex < 0x80 {
+                            // ascii
+                            string.push(hex as u8);
+                        } else {
+                            // need continuation bytes
+                            let mut maximum_first_byte = 0x3f;
+                            let mut buffer = [0u8; 8];
+                            let mut n = 1;
+                            loop {
+                                buffer[8 - n] = 0x80 | (hex & 0x3f) as u8;
+                                n += 1;
+
+                                // remove added bits
+                                hex >>= 6;
+                                // now there is one less bit available in the first byte
+                                maximum_first_byte >>= 1;
+
+                                if hex <= maximum_first_byte {
+                                    break;
+                                }
+                            }
+
+                            // add first byte
+                            buffer[8 - n] = ((!maximum_first_byte << 1) | hex) as u8;
+
+                            string.extend(&buffer[8 - n..]);
+                        }
 
                         escape = false;
                         continue;
                     }
                     _ if c.is_ascii_digit() => {
-                        let mut digits = [c; 3];
+                        let mut i: u32 = c.to_digit(10).unwrap() as u32;
                         let mut n = 1;
-                        for digit in digits.iter_mut().skip(1) {
+                        for _ in 0..2 {
                             match chars.peek() {
                                 Some(c) if c.is_ascii_digit() => {
-                                    *digit = chars.next().unwrap();
+                                    // digits[i as usize] = *c;
+                                    i = i * 10 + c.to_digit(10).unwrap() as u32;
                                     n += 1;
+                                    chars.next();
                                 }
                                 _ => break,
                             }
@@ -570,22 +612,20 @@ impl<'path, 'source> Lexer<'path, 'source> {
                         // We'll advance for `c` below, so subtract 1 here
                         self.position += n - 1;
 
-                        digits[..n].iter().try_fold(0u8, |acc, c| {
-                            c.to_digit(10)
-                                .ok_or_else(|| {
-                                    self.with_source_code(lua_error!(
-                                        labels = vec![LabeledSpan::at(
-                                            self.position - n..self.position + 1,
-                                            "invalid decimal escape"
-                                        )],
-                                        "invalid decimal escape"
-                                    ))
-                                })
-                                .map(|d| acc * 10u8 + d)
-                        })?
+                        if i > u8::MAX as u32 {
+                            return Err(self.with_source_code(*lua_error!(
+                                labels = vec![LabeledSpan::at(
+                                    self.position - n..self.position + 1,
+                                    "decimal escape too large"
+                                )],
+                                "decimal escape too large"
+                            )));
+                        }
+
+                        i as u8
                     }
                     _ => {
-                        return Err(self.with_source_code(lua_error!(
+                        return Err(self.with_source_code(*lua_error!(
                             labels = vec![LabeledSpan::at(
                                 self.position - 1..self.position + 1,
                                 "invalid escape sequence"
@@ -645,7 +685,7 @@ impl<'path, 'source> Lexer<'path, 'source> {
                     }
                 }
                 b'\r' | b'\n' if long_form.is_none() => {
-                    return Err(self.with_source_code(lua_error!(
+                    return Err(self.with_source_code(*lua_error!(
                         labels = vec![LabeledSpan::at(
                             self.position - 1..self.position,
                             "unexpected newline in string"
@@ -673,7 +713,7 @@ impl<'path, 'source> Lexer<'path, 'source> {
             self.position += 1;
         }
 
-        Err(self.with_source_code(lua_error!(
+        Err(self.with_source_code(*lua_error!(
             labels = vec![LabeledSpan::at(
                 self.position..self.position + 1,
                 if let Some(equals) = long_form {
@@ -925,6 +965,19 @@ mod tests {
             let mut lexer = Lexer::new(b"test.lua", input.as_bytes());
             let token = lexer.next().unwrap().unwrap();
             assert_eq!(token.kind, TokenKind::String(expected.into()));
+        }
+    }
+
+    #[test]
+    fn unicode_escapes() {
+        for input in [r#""\u{0}""#, r#""\u{00000000}""#, r#""\x00""#, r#""\0""#] {
+            let mut lexer = Lexer::new(b"test.lua", input.as_bytes());
+            let token = lexer.next().unwrap().unwrap();
+            assert_eq!(
+                token.kind,
+                TokenKind::String(vec![0].into()),
+                "when parsing '{input}'"
+            );
         }
     }
 }

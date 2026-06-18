@@ -3,7 +3,7 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use crate::{ast, value::LuaString};
+use crate::{LuaState, ast, value::LuaString};
 
 use super::{
     LuaValue, UserData, closure::LuaClosure, constant::LuaConst, number::LuaNumber,
@@ -84,6 +84,14 @@ impl From<LuaTable> for LuaValue {
 impl From<LuaClosure> for LuaValue {
     fn from(closure: LuaClosure) -> Self {
         LuaValue::Object(Arc::new(RwLock::new(LuaObject::Closure(closure))))
+    }
+}
+
+impl From<LuaState> for LuaValue {
+    fn from(state: LuaState) -> Self {
+        LuaValue::Object(Arc::new(RwLock::new(LuaObject::Thread(Arc::new(
+            RwLock::new(state),
+        )))))
     }
 }
 

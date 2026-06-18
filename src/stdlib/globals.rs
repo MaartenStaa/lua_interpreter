@@ -1,6 +1,6 @@
 use std::{
-    borrow::Cow,
     fs,
+    io::Write,
     path::{Path, PathBuf},
     sync::{
         Arc, LazyLock, RwLock,
@@ -9,16 +9,16 @@ use std::{
 };
 
 use crate::{
+    ExecutionResult, LuaState,
     compiler::Compiler,
-    error::lua_error,
-    macros::{assert_string, assert_table, get_number, require_string, require_table},
+    error::{IntoLuaError, lua_error},
+    macros::{assert_string, assert_table, require_table},
     stdlib::package,
     value::{
-        LuaClosure, LuaNumber, LuaObject, LuaValue, UpValue,
+        LuaClosure, LuaNumber, LuaObject, LuaValue,
         callable::{Callable, Method},
         metatables,
     },
-    vm::VM,
 };
 
 use super::{
@@ -26,16 +26,16 @@ use super::{
     utf8::UTF8,
 };
 
-pub const _VERSION: &str = "LuaRust 5.4";
+pub const _VERSION: &str = "Lua 5.4";
 
-pub(crate) fn assert(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
-    let Some(value) = input.first() else {
+pub(crate) fn assert(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+    let Some(value) = state.try_arg(0) else {
         return Err(lua_error!("bad argument #1 to 'assert' (value expected)"));
     };
 
     if !value {
-        return match input.get(1) {
-            Some(LuaValue::String(s)) => Err(lua_error!("{}", String::from_utf8_lossy(s))),
+        return match state.try_arg(1) {
+            Some(LuaValue::String(s)) => Err(lua_error!("{s}")),
             Some(LuaValue::Number(n)) => Err(lua_error!("{n}")),
             Some(value) => Err(lua_error!(
                 "(error object is a {} value)",
@@ -45,7 +45,7 @@ pub(crate) fn assert(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaV
         };
     }
 
-    Ok(input)
+    Ok(state.args())
 }
 
 static GC_STATUS: LazyLock<AtomicBool> = LazyLock::new(|| AtomicBool::new(true));
@@ -56,62 +56,66 @@ static GC_STEP_MULTIPLIER: LazyLock<AtomicUsize> = LazyLock::new(|| AtomicUsize:
 const GC_PAUSE_MAX: usize = 1020;
 const GC_STEP_MULTIPLIER_MAX: usize = 572;
 
-pub(crate) fn collectgarbage(vm: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
-    let result = match input.first() {
-        Some(LuaValue::String(s)) if s == b"collect" => {
+pub(crate) fn collectgarbage(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+    let result = match state.try_arg(0) {
+        Some(LuaValue::String(s)) if &s == b"collect" => {
             // Performs a full garbage-collection cycle. This is the default option.
             // We don't use a garbage collector, so do nothing.
             vec![LuaValue::Nil]
         }
-        Some(LuaValue::String(s)) if s == b"stop" => {
+        Some(LuaValue::String(s)) if &s == b"stop" => {
             // Stops automatic execution of the garbage collector. The collector will run only when explicitly invoked, until a call to restart it.
             // We don't use a garbage collector, so do nothing.
             GC_STATUS.store(false, Ordering::Relaxed);
             vec![LuaValue::Nil]
         }
-        Some(LuaValue::String(s)) if s == b"restart" => {
+        Some(LuaValue::String(s)) if &s == b"restart" => {
             // Restarts automatic execution of the garbage collector.
             // We don't use a garbage collector, so do nothing.
             GC_STATUS.store(true, Ordering::Relaxed);
             vec![LuaValue::Nil]
         }
-        Some(LuaValue::String(s)) if s == b"count" => {
+        Some(LuaValue::String(s)) if &s == b"count" => {
             // Returns the total memory in use by Lua (in Kbytes).
             // We don't use a garbage collector, so return 0.
             // FIXME: Account for upvalues held only by call frames.
             vec![
-                ((vm.get_stack().iter().map(|v| v.size_bytes()).sum::<u64>() as f64) / 1024.)
+                ((state
+                    .get_stack()
+                    .iter()
+                    .map(|v| v.size_bytes())
+                    .sum::<u64>() as f64)
+                    / 1024.)
                     .into(),
             ]
             // TODO: Maybe we can give an approximation of memory used by the VM?
             // vec![LuaValue::Number(LuaNumber::Float(0.0))]
         }
-        Some(LuaValue::String(s)) if s == b"step" => {
+        Some(LuaValue::String(s)) if &s == b"step" => {
             // Performs a garbage-collection step. The step "size" is controlled by arg. With a zero value, the collector will perform one basic (indivisible) step. For non-zero values, the collector will perform as if that amount of memory (in Kbytes) had been allocated by Lua. Returns true if the step finished a collection cycle.
             // We don't use a garbage collector, so return false.
             vec![LuaValue::Boolean(false)]
         }
-        Some(LuaValue::String(s)) if s == b"isrunning" => {
+        Some(LuaValue::String(s)) if &s == b"isrunning" => {
             // Returns a boolean that tells whether the collector is running (i.e., not stopped).
             vec![LuaValue::Boolean(GC_STATUS.load(Ordering::Relaxed))]
         }
         // Changes the GC mode, no-op in our case. Just return the previous mode.
-        Some(LuaValue::String(s)) if s == b"incremental" => {
+        Some(LuaValue::String(s)) if &s == b"incremental" => {
             let mut mode = GC_MODE.write().unwrap();
             let previous_mode = *mode;
             *mode = "incremental";
             vec![LuaValue::String(previous_mode.as_bytes().into())]
         }
-        Some(LuaValue::String(s)) if s == b"generational" => {
+        Some(LuaValue::String(s)) if &s == b"generational" => {
             let mut mode = GC_MODE.write().unwrap();
             let previous_mode = *mode;
             *mode = "generational";
             vec![LuaValue::String(previous_mode.as_bytes().into())]
         }
-        Some(LuaValue::String(s)) if s == b"setpause" => {
-            let val = get_number!(input, "collectgarbage", 1)
-                .map(|v| v.integer_repr())
-                .transpose()?
+        Some(LuaValue::String(s)) if &s == b"setpause" => {
+            let val = state
+                .try_arg_as_integer(1)?
                 .map(|n| n as usize)
                 .unwrap_or(0)
                 .min(GC_PAUSE_MAX);
@@ -119,10 +123,9 @@ pub(crate) fn collectgarbage(vm: &mut VM, input: Vec<LuaValue>) -> crate::Result
             GC_PAUSE.store(val, Ordering::Relaxed);
             vec![LuaValue::Number(LuaNumber::Integer(previous_value as i64))]
         }
-        Some(LuaValue::String(s)) if s == b"setstepmul" => {
-            let val = get_number!(input, "collectgarbage", 1)
-                .map(|v| v.integer_repr())
-                .transpose()?
+        Some(LuaValue::String(s)) if &s == b"setstepmul" => {
+            let val = state
+                .try_arg_as_integer(1)?
                 .map(|n| n as usize)
                 .unwrap_or(0)
                 .min(GC_STEP_MULTIPLIER_MAX);
@@ -132,8 +135,7 @@ pub(crate) fn collectgarbage(vm: &mut VM, input: Vec<LuaValue>) -> crate::Result
         }
         Some(LuaValue::String(s)) => {
             return Err(lua_error!(
-                "bad argument #1 to 'collectgarbage' (invalid option '{}')",
-                String::from_utf8_lossy(s)
+                "bad argument #1 to 'collectgarbage' (invalid option '{s}')",
             ));
         }
         Some(LuaValue::Number(n)) => {
@@ -154,56 +156,49 @@ pub(crate) fn collectgarbage(vm: &mut VM, input: Vec<LuaValue>) -> crate::Result
     Ok(result)
 }
 
-pub(crate) fn error(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
+pub(crate) fn error(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
     // TODO: You can call error with no arguments, in which case the error value is nil. How can we
     // do that with miette?
-    let message = require_string!(input, "error");
-    if input.len() > 1 {
+    let message = state.arg_as_string(0)?;
+    if state.num_args() > 1 {
         // TODO: Second argument is level, which specifies the offset in the call stack at which to
         // raise the error.
     }
 
-    Err(lua_error!("{}", String::from_utf8_lossy(message)))
+    Err(lua_error!("{}", message.to_string()))
 }
 
-pub(crate) fn getmetatable(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
-    let value = match input.first() {
+pub(crate) fn getmetatable(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+    let value = match state.try_arg(0) {
         Some(value) => value,
         None => {
-            return Err(lua_error!(
-                "bad argument #1 to 'getmetatable' (value expected)"
-            ));
+            return state.arg_err(0, "value expected");
         }
     };
 
-    let metatable = value.get_metatable();
+    // NOTE: Only tables and full user data objects have metatables. Under the hood there are
+    // metatables for other values as well, but these are only accessible in native code, or via
+    // `debug.getmetatable`.
+    let metatable = match value {
+        LuaValue::Object(o) => {
+            let o = o.read().unwrap();
+
+            // "if the object's metatable has a __metatable field, returns the associated value"
+            o.get_metavalue(&metatables::METATABLE_KEY)
+                .or_else(|| o.get_metatable())
+        }
+        _ => None,
+    };
 
     Ok(vec![metatable.unwrap_or(LuaValue::Nil)])
 }
 
-fn iter(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
-    let a = match input.first() {
-        Some(value) => value,
-        None => {
-            return Err(lua_error!("bad argument #1 to 'iter' (value expected)"));
-        }
+fn iter(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+    let Some(a) = state.try_arg(0) else {
+        return state.arg_err(0, "value expected");
     };
-    let i = match input.get(1) {
-        Some(LuaValue::Number(n)) => n,
-        Some(value) => {
-            return Err(lua_error!(
-                "bad argument #2 to 'iter' (number expected, got {})",
-                value.type_name(),
-            ));
-        }
-        None => {
-            return Err(lua_error!(
-                "bad argument #2 to 'iter' (number expected, got no value)"
-            ));
-        }
-    };
+    let i = state.arg_as_integer(1)?;
 
-    let i = i.integer_repr()?;
     let i = (i.overflowing_add(1).0).into();
 
     let v = match a {
@@ -220,10 +215,8 @@ fn iter(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     }
 }
 
-pub(crate) fn ipairs(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
-    let Some(value) = input.first() else {
-        return Err(lua_error!("bad argument #1 to 'ipairs' (value expected)"));
-    };
+pub(crate) fn ipairs(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+    let value = state.ensure_arg(0)?;
 
     // Return three values: the iterator function, the target value, and the initial index
     Ok(vec![
@@ -233,9 +226,9 @@ pub(crate) fn ipairs(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaV
     ])
 }
 
-pub(crate) fn load(vm: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
+pub(crate) fn load(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
     let mut load_from_closure = false;
-    let source: Vec<u8> = match input.first() {
+    let source: Vec<u8> = match state.try_arg(0) {
         Some(LuaValue::String(s)) => s.clone().into(),
         Some(LuaValue::Object(o)) => {
             let object = &*o.read().unwrap();
@@ -252,10 +245,12 @@ pub(crate) fn load(vm: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaVa
                 let mut piece_result = match &callable.method {
                     Method::Closure(closure) => {
                         load_from_closure = true;
-                        vm.run_closure(closure.clone(), vec![])
+                        state
+                            .run_closure(closure.clone(), vec![])?
+                            .unwrap_completed()
                     }
-                    Method::NativeFunction(_, f) => f(vm, vec![]),
-                }?;
+                    Method::NativeFunction(name, f) => state.run_native_function(name, *f, 0, 0)?,
+                };
 
                 if piece_result.is_empty() {
                     break;
@@ -281,19 +276,14 @@ pub(crate) fn load(vm: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaVa
             result
         }
         Some(value) => {
-            return Err(lua_error!(
-                "bad argument #1 to 'load' (string expected, got {})",
-                value.type_name(),
-            ));
+            return state.arg_err(0, format!("function expected, got {}", value.type_name()));
         }
         None => {
-            return Err(lua_error!(
-                "bad argument #1 to 'load' (string expected, got no value)"
-            ));
+            return state.arg_err(0, "function expected, got no value");
         }
     };
 
-    let name = match input.get(1) {
+    let name = match state.try_arg(1) {
         Some(LuaValue::String(s)) => s.clone(),
         Some(LuaValue::Nil) | None => {
             if load_from_closure {
@@ -303,25 +293,17 @@ pub(crate) fn load(vm: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaVa
             }
         }
         Some(value) => {
-            return Err(lua_error!(
-                "bad argument #2 to 'load' (string expected, got {})",
-                value.type_name(),
-            ));
+            return state.arg_err(1, format!("string expected, got {}", value.type_name()));
         }
-    };
-
-    let env = match input.get(3) {
-        Some(value) => value.clone(),
-        None => vm.get_global_env(),
     };
 
     let filename: Option<PathBuf> = None;
     let compiler = Compiler::new(
-        vm,
+        Arc::clone(&state.global),
         name,
         filename,
         None,
-        Arc::new(Cow::Owned(source)),
+        Arc::new(source),
         vec![],
         true,
     );
@@ -337,17 +319,20 @@ pub(crate) fn load(vm: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaVa
 
     // Return a function that runs the chunk
     let mut closure = LuaClosure::new(compiled_chunk.chunk_index);
-    // FIXME: This needs to capture the upvalue from the stack in the VM!
-    closure
-        .upvalues
-        .insert(0, Arc::new(RwLock::new(UpValue(env))));
+
+    let env = if state.num_args() > 3 {
+        state.capture_upvalue(3)
+    } else {
+        state.get_global_env()
+    };
+    closure.upvalues.insert(0, env);
 
     Ok(vec![closure.into()])
 }
 
-pub(crate) fn next(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
-    require_table!(read, input, "next", 0, table, {
-        let kv = match input.get(1) {
+pub(crate) fn next(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+    require_table!(read, state.try_arg(0), "next", 0, table, {
+        let kv = match state.try_arg(1) {
             None | Some(LuaValue::Nil) => table.iter().next(),
             Some(key) => {
                 // Find the key-value _after_ the given key
@@ -359,7 +344,7 @@ pub(crate) fn next(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaVal
                         kv = Some((k, v));
                         break;
                     }
-                    if k == key {
+                    if k == &key {
                         key_found = true;
                     }
                 }
@@ -375,21 +360,20 @@ pub(crate) fn next(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaVal
     })
 }
 
-pub(crate) fn pairs(vm: &mut VM, mut input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
-    if input.is_empty() {
-        return Err(lua_error!("bad argument #1 to 'pairs' (value expected)"));
-    }
+pub(crate) fn pairs(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+    let t = state.ensure_arg(0)?;
 
     // If t has a metamethod __pairs, calls it with t as argument and returns the first three results from the call.
-    let t = input.swap_remove(0);
     if let Some(Callable { method, .. }) = t
         .get_metavalue(&metatables::PAIRS_KEY)
         .and_then(|v| v.try_into().ok())
     {
-        let args = vec![t.clone()];
         let mut result = match method {
-            Method::Closure(closure) => vm.run_closure(closure, args)?,
-            Method::NativeFunction(_, f) => f(vm, args)?,
+            Method::Closure(closure) => {
+                let args = vec![t.clone()];
+                state.run_closure(closure, args)?.unwrap_completed()
+            }
+            Method::NativeFunction(name, f) => state.run_native_function(name, f, 0, 1)?,
         };
         result.resize(3, LuaValue::Nil);
 
@@ -403,18 +387,10 @@ pub(crate) fn pairs(vm: &mut VM, mut input: Vec<LuaValue>) -> crate::Result<Vec<
     ])
 }
 
-pub(crate) fn pcall(vm: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
-    let mut input = input.into_iter();
-    let function = match input.next() {
-        Some(value) => value,
-        None => {
-            return Err(lua_error!(
-                "bad argument #1 to 'pcall' (function expected, got no value)"
-            ));
-        }
-    };
+pub(crate) fn pcall(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+    // TODO: This will produce error "value expected" rather than "function expected, got no value"
+    let function = state.ensure_arg(0)?;
 
-    let mut args: Vec<_> = input.collect();
     let callable_function: Callable = (&function).try_into().map_err(|_| {
         lua_error!(
             "bad argument #1 to 'pcall' (function expected, got {})",
@@ -422,13 +398,27 @@ pub(crate) fn pcall(vm: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaV
         )
     })?;
 
-    if callable_function.is_metamethod {
-        args.insert(0, function);
-    }
-
     let result = match callable_function.method {
-        Method::Closure(closure) => vm.run_closure(closure.clone(), args),
-        Method::NativeFunction(_, f) => f(vm, args),
+        Method::Closure(closure) => {
+            let args = (if callable_function.is_metamethod {
+                0
+            } else {
+                1
+            }..state.num_args())
+                .map(|i| state.arg(i))
+                .collect();
+            state
+                .run_closure(closure.clone(), args)
+                .map(ExecutionResult::unwrap_completed)
+        }
+        Method::NativeFunction(name, f) => {
+            let (args_r, num_args) = if callable_function.is_metamethod {
+                (0, state.num_args())
+            } else {
+                (1, state.num_args() - 1)
+            };
+            state.run_native_function(name, f, args_r, num_args as u16)
+        }
     };
 
     Ok(match result {
@@ -443,43 +433,42 @@ pub(crate) fn pcall(vm: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaV
     })
 }
 
-pub(crate) fn print(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
-    for (i, value) in input.into_iter().enumerate() {
+pub(crate) fn print(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+    let mut output = std::io::stdout();
+
+    for (i, value) in state.args().into_iter().enumerate() {
         if i != 0 {
-            print!("\t");
+            output.write_all(b"\t").into_lua_error()?;
         }
-        print!("{}", value);
+        output
+            .write_all(&value.as_string(state)?)
+            .into_lua_error()?;
     }
-    println!();
+
+    output.write_all(b"\n").into_lua_error()?;
+    output.flush().into_lua_error()?;
 
     Ok(vec![LuaValue::Nil])
 }
 
-pub(crate) fn rawequal(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
-    let lhs = input
-        .first()
-        .ok_or_else(|| lua_error!("bad argument #1 to 'rawequal' (value expected)"))?;
-    let rhs = input
-        .get(1)
-        .ok_or_else(|| lua_error!("bad argument #2 to 'rawequal' (value expected)"))?;
+pub(crate) fn rawequal(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+    let lhs = state.ensure_arg(0)?;
+    let rhs = state.ensure_arg(1)?;
 
     Ok(vec![LuaValue::Boolean(lhs == rhs)])
 }
 
-pub(crate) fn rawget(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
-    require_table!(input, "rawget", 0, table, {
-        let key = input
-            .get(1)
-            .ok_or_else(|| lua_error!("bad argument #2 to 'rawget' (value expected)"))?;
-        let value = table.get(key).cloned().unwrap_or(LuaValue::Nil);
+pub(crate) fn rawget(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+    require_table!(state.try_arg(0), "rawget", 0, table, {
+        let key = state.ensure_arg(1)?;
+        let value = table.get(&key).cloned().unwrap_or(LuaValue::Nil);
 
         Ok(vec![value])
     })
 }
 
-pub(crate) fn rawlen(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
-    let value = input.first();
-    let result = match value {
+pub(crate) fn rawlen(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+    let result = match state.try_arg(0) {
         Some(LuaValue::Object(o)) => match &*o.read().unwrap() {
             LuaObject::Table(t) => t.len(),
             _ => {
@@ -506,11 +495,8 @@ pub(crate) fn rawlen(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaV
     Ok(vec![result.into()])
 }
 
-pub(crate) fn rawset(_: &mut VM, mut input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
-    let key = input
-        .get(1)
-        .cloned()
-        .ok_or_else(|| lua_error!("bad argument #2 to 'rawset' (value expected)"))?;
+pub(crate) fn rawset(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+    let key = state.ensure_arg(1)?;
     match key {
         LuaValue::Nil => {
             return Err(lua_error!("bad argument #2 to 'rawset' (value expected)"));
@@ -523,33 +509,17 @@ pub(crate) fn rawset(_: &mut VM, mut input: Vec<LuaValue>) -> crate::Result<Vec<
         _ => {}
     }
 
-    if input.len() < 3 {
-        return Err(lua_error!("bad argument #3 to 'rawset' (value expected)"));
-    }
-    let value = input.swap_remove(2);
+    let value = state.ensure_arg(2)?;
 
-    require_table!(write, input, "rawset", 0, table, {
+    require_table!(write, state.try_arg(0), "rawset", 0, table, {
         table.insert(key.clone(), value);
     });
 
-    Ok(vec![input.swap_remove(0)])
+    Ok(vec![state.ensure_arg(0)?])
 }
 
-pub(crate) fn require(vm: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
-    let name = match input.first() {
-        Some(LuaValue::String(s)) => s,
-        Some(value) => {
-            return Err(lua_error!(
-                "bad argument #1 to 'require' (string expected, got {})",
-                value.type_name(),
-            ));
-        }
-        None => {
-            return Err(lua_error!(
-                "bad argument #1 to 'require' (string expected, got no value)"
-            ));
-        }
-    };
+pub(crate) fn require(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+    let name = state.arg_as_string(0)?;
 
     // Allow loading stdlib modules via `require`
     match name.as_slice() {
@@ -587,7 +557,14 @@ pub(crate) fn require(vm: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<Lu
 
     // Loop through each package path option
     let package_config = &package::CONFIG;
-    let called_from = vm.get_current_chunk().get_filename();
+    let called_from = match state.call_stack[state.call_stack_index - 1].kind {
+        crate::vm::CallFrameKind::Lua { chunk, .. } => state
+            .with_chunk(chunk, |c| c.get_filename().map(|p| p.to_path_buf()))
+            .expect("valid chunk"),
+        crate::vm::CallFrameKind::Native { .. } => {
+            panic!("don't call require from native function")
+        }
+    };
     for mut option in package_path
         .split(|c| *c == package_config.template_separator)
         .map(|s| s.to_vec())
@@ -609,7 +586,7 @@ pub(crate) fn require(vm: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<Lu
         let mut path = Path::new(path_str.as_ref()).to_owned();
         if path.is_relative() {
             // Resolve to the current file's directory
-            if let Some(filename) = called_from {
+            if let Some(ref filename) = called_from {
                 path = filename
                     .parent()
                     .map(|parent| parent.join(&path).canonicalize())
@@ -618,7 +595,6 @@ pub(crate) fn require(vm: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<Lu
                         lua_error!(
                             "error loading module '{name}' from file '{source}': cannot resolve path '{}': {err}",
                             path.display(),
-                            name = String::from_utf8_lossy(name),
                             source = &filename.to_string_lossy(),
                         )
                     })?
@@ -633,7 +609,6 @@ pub(crate) fn require(vm: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<Lu
             return Err(lua_error!(
                 "error loading module '{name}' from file '{source}': cannot read '{dir_name}': is a directory",
                 source = "<unknown>",
-                name = String::from_utf8_lossy(name),
                 dir_name = path
                     .file_name()
                     .map(|s| s.to_string_lossy())
@@ -654,24 +629,19 @@ pub(crate) fn require(vm: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<Lu
             })
         });
 
-        let source = fs::read(&path).map_err(|_| {
-            lua_error!(
-                "unable to read module {name}",
-                name = String::from_utf8_lossy(name)
-            )
-        })?;
+        let source = fs::read(&path).map_err(|_| lua_error!("unable to read module {name}"))?;
 
         let compiler = Compiler::new(
-            vm,
+            Arc::clone(&state.global),
             name.clone(),
             Some(path),
             None,
-            Arc::new(source.into()),
+            Arc::new(source),
             vec![],
             false,
         );
-        let compiled_chunk = compiler.compile_chunk(None)?;
-        let mut result = vm.run_chunk(compiled_chunk.chunk_index)?;
+        let mut state = compiler.compile(None)?;
+        let mut result = state.run()?;
         let result = result.swap_remove(0);
 
         assert_table!(write, package, package_table, {
@@ -686,19 +656,16 @@ pub(crate) fn require(vm: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<Lu
         return Ok(vec![result, path_value]);
     }
 
-    Err(lua_error!(
-        "module '{name}' not found",
-        name = String::from_utf8_lossy(name)
-    ))
+    Err(lua_error!("module '{name}' not found"))
 }
 
-pub(crate) fn select(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
-    let index = match input.first() {
+pub(crate) fn select(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+    let index = match state.try_arg(0) {
         Some(LuaValue::Number(n)) => n,
         Some(LuaValue::String(s)) => {
-            if s == b"#" {
+            if &s == b"#" {
                 return Ok(vec![LuaValue::Number(LuaNumber::Integer(
-                    input.len() as i64 - 1,
+                    state.num_args() as i64 - 1,
                 ))]);
             } else {
                 return Err(lua_error!(
@@ -726,11 +693,11 @@ pub(crate) fn select(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaV
         ));
     }
 
-    Ok(input.into_iter().skip(index as usize).collect())
+    Ok(state.args().into_iter().skip(index as usize).collect())
 }
 
-pub(crate) fn setmetatable(_: &mut VM, mut input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
-    match (input.first(), input.get(1)) {
+pub(crate) fn setmetatable(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+    match (state.try_arg(0), state.try_arg(1)) {
         (Some(LuaValue::Object(target)), Some(LuaValue::Object(metatable))) => {
             match (&mut *target.write().unwrap(), &*metatable.read().unwrap()) {
                 (LuaObject::Table(table), LuaObject::Table(_)) => {
@@ -778,21 +745,14 @@ pub(crate) fn setmetatable(_: &mut VM, mut input: Vec<LuaValue>) -> crate::Resul
         }
     }
 
-    Ok(vec![input.swap_remove(0)])
+    Ok(vec![state.arg(0)])
 }
 
-pub(crate) fn tonumber(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
-    let value = match input.first() {
-        Some(value) => value,
-        None => {
-            return Err(lua_error!("bad argument #1 to 'tonumber' (value expected)"));
-        }
-    };
-
-    let value = match value {
+pub(crate) fn tonumber(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+    let value = match state.ensure_arg(0)? {
         n @ LuaValue::Number(_) => n.clone(),
         LuaValue::String(s) => {
-            let s = String::from_utf8_lossy(s);
+            let s = String::from_utf8_lossy(&s);
             match s.parse::<i64>() {
                 Ok(n) => n.into(),
                 Err(_) => match s.parse::<f64>() {
@@ -807,18 +767,14 @@ pub(crate) fn tonumber(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<Lu
     Ok(vec![value])
 }
 
-pub(crate) fn tostring(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
-    let value = input.first().unwrap_or(&LuaValue::Nil);
+pub(crate) fn tostring(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+    let value = state.arg(0);
 
-    Ok(vec![LuaValue::String(
-        value.to_string().into_bytes().into(),
-    )])
+    Ok(vec![LuaValue::String(value.as_string(state)?)])
 }
 
-pub(crate) fn r#type(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
-    let Some(value) = input.first() else {
-        return Err(lua_error!("bad argument #1 to 'type' (value expected)"));
-    };
+pub(crate) fn r#type(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+    let value = state.ensure_arg(0)?;
 
     Ok(vec![LuaValue::String(
         value.type_name().bytes().collect::<Vec<_>>().into(),
@@ -827,12 +783,13 @@ pub(crate) fn r#type(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaV
 
 static CONTROL_MESSAGES_ENABLED: AtomicBool = AtomicBool::new(false);
 
-pub(crate) fn warn(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
-    let strings: Vec<_> = input
+pub(crate) fn warn(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+    let strings: Vec<_> = state
+        .args_ref()
         .iter()
         .enumerate()
-        .map(|(i, v)| match v {
-            LuaValue::String(s) => Ok(String::from_utf8_lossy(s).to_string()),
+        .map(|(i, v)| match &**v {
+            LuaValue::String(s) => Ok(s.to_string()),
             _ => Err(lua_error!(
                 "bad argument #{i} to 'warn' (string expected, got {})",
                 v.type_name(),
@@ -867,27 +824,10 @@ pub(crate) fn warn(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaVal
     Ok(vec![LuaValue::Nil])
 }
 
-pub(crate) fn xpcall(vm: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
-    let mut input = input.into_iter();
-    let function = match input.next() {
-        Some(value) => value,
-        None => {
-            return Err(lua_error!(
-                "bad argument #1 to 'xpcall' (function expected, got no value)"
-            ));
-        }
-    };
-
-    let msgh = match input.next() {
-        Some(value) => value,
-        None => {
-            return Err(lua_error!(
-                "bad argument #2 to 'xpcall' (function expected, got no value)"
-            ));
-        }
-    };
-
-    let mut args: Vec<_> = input.collect();
+pub(crate) fn xpcall(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+    // TODO: Will produce error "value expected" rather than "function expected, got no value"
+    let function = state.ensure_arg(0)?;
+    let msgh = state.ensure_arg(1)?;
 
     let function_callable: Callable = (&function).try_into().map_err(|_| {
         lua_error!(
@@ -902,13 +842,27 @@ pub(crate) fn xpcall(vm: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<Lua
         )
     })?;
 
-    if function_callable.is_metamethod {
-        args.insert(0, function);
-    }
-
     let mut result = match function_callable.method {
-        Method::Closure(closure) => vm.run_closure(closure.clone(), args),
-        Method::NativeFunction(_, f) => f(vm, args),
+        Method::Closure(closure) => {
+            let mut args = vec![function];
+            args.extend((2..state.num_args()).map(|i| state.arg(i)));
+            state
+                .run_closure(closure.clone(), args)
+                .map(ExecutionResult::unwrap_completed)
+        }
+        Method::NativeFunction(name, f) => {
+            let (args_r, num_args) = if function_callable.is_metamethod {
+                let mut args = vec![function];
+                args.extend((2..state.num_args()).map(|i| state.arg(i)));
+                let num_args = args.len();
+                let args_r = state.extend_stack(args);
+                (args_r, num_args)
+            } else {
+                (1, state.num_args() - 1)
+            };
+
+            state.run_native_function(name, f, args_r, num_args as u16)
+        }
     };
 
     const MAX_MESSAGE_HANDLER_DEPTH: usize = 200;
@@ -917,14 +871,17 @@ pub(crate) fn xpcall(vm: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<Lua
             Ok(_) => break,
             Err(e) => {
                 result = match &msgh.method {
-                    Method::Closure(closure) => vm.run_closure(
-                        closure.clone(),
-                        vec![LuaValue::String(e.to_string().into_bytes().into())],
-                    ),
-                    Method::NativeFunction(_, f) => f(
-                        vm,
-                        vec![LuaValue::String(e.to_string().into_bytes().into())],
-                    ),
+                    Method::Closure(closure) => state
+                        .run_closure(
+                            closure.clone(),
+                            vec![LuaValue::String(e.to_string().into_bytes().into())],
+                        )
+                        .map(ExecutionResult::unwrap_completed),
+                    Method::NativeFunction(name, f) => {
+                        let args_r = state
+                            .extend_stack([LuaValue::String(e.to_string().into_bytes().into())]);
+                        state.run_native_function(name, *f, args_r, 1)
+                    }
                 };
             }
         }
