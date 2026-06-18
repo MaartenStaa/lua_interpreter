@@ -324,6 +324,7 @@ fn format(_: &mut VM, input: Vec<LuaValue>) -> miette::Result<Vec<LuaValue>> {
                     ));
                 }
             },
+            'p' => format!("{:x}", v as *const _ as usize),
             other => return Err(miette::miette!("unsupported format specifier: {:?}", other)),
         };
 
