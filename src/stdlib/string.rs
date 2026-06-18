@@ -4,11 +4,11 @@ use subslice::SubsliceExt;
 
 use crate::{
     error::lua_error,
-    macros::{get_number, get_string, require_number, require_string},
+    macros::{get_number, get_string, require_number, require_string, require_userdata},
     stdlib::utils::pack::{
         PackOption, PackOptionItem, copy_bytes_fix_endian, get_pack_option, pack_int, unpack_int,
     },
-    value::{LuaNumber, LuaObject, LuaString, LuaTable, LuaValue},
+    value::{LuaNumber, LuaObject, LuaString, LuaTable, LuaValue, UserData},
     vm::VM,
 };
 
@@ -30,6 +30,10 @@ pub static STRING: LazyLock<LuaValue> = LazyLock::new(|| {
     string.insert(
         "format".into(),
         LuaObject::NativeFunction("format", format).into(),
+    );
+    string.insert(
+        "gmatch".into(),
+        LuaObject::NativeFunction("gmatch", gmatch).into(),
     );
     string.insert("len".into(), LuaObject::NativeFunction("len", len).into());
     string.insert(
@@ -309,6 +313,143 @@ fn find(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
             ]
         }
         None => vec![LuaValue::Nil],
+    })
+}
+
+#[derive(Debug)]
+struct GmatchState {
+    s: LuaString,
+    pattern: LuaPattern,
+    pos: usize,
+    last_match_empty: bool,
+}
+
+fn gmatch(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
+    let s = require_string!(input, "string.gmatch");
+    let pattern_str = require_string!(input, "string.gmatch", 1);
+    let init = match input.get(2) {
+        Some(LuaValue::Number(LuaNumber::Integer(i))) => *i,
+        Some(LuaValue::Number(f @ LuaNumber::Float(_))) => f.integer_repr()?,
+        Some(LuaValue::Nil) | None => 1,
+        Some(v) => {
+            return Err(lua_error!(
+                "bad argument #3 to 'gmatch' (number expected, got {type_name})",
+                type_name = v.type_name()
+            ));
+        }
+    };
+
+    let init = match init.cmp(&0) {
+        Ordering::Less => (s.len() as i64 + init + 1).max(1) as usize,
+        Ordering::Greater => init as usize,
+        Ordering::Equal => 1,
+    };
+
+    let pattern_str = if pattern_str.first() == Some(&b'^') {
+        &pattern_str[1..]
+    } else {
+        pattern_str
+    };
+    let pattern = pattern_to_regex(pattern_str)?;
+
+    let state = GmatchState {
+        s: s.clone(),
+        pattern,
+        pos: (init - 1).min(s.len()),
+        last_match_empty: false,
+    };
+
+    Ok(vec![
+        LuaObject::NativeFunction("gmatch_iter", gmatch_iter).into(),
+        UserData::new_light(state).into(),
+        LuaValue::Nil,
+    ])
+}
+
+fn gmatch_iter(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
+    require_userdata!(write, input, "gmatch_iter", 0, userdata, {
+        let data = match userdata {
+            UserData::Light(data) => data,
+            _ => return Ok(vec![LuaValue::Nil]),
+        };
+        let state = match data.write().unwrap().downcast_mut::<GmatchState>() {
+            Some(s) => s as *mut GmatchState,
+            None => return Ok(vec![LuaValue::Nil]),
+        };
+
+        // SAFETY: we hold the write lock on the Arc<RwLock<..>> for the duration of this
+        // block (the require_userdata macro holds it), so exclusive access is guaranteed.
+        let state = unsafe { &mut *state };
+
+        loop {
+            if state.pos > state.s.len() {
+                return Ok(vec![LuaValue::Nil]);
+            }
+
+            let haystack = &state.s[state.pos..];
+
+            match &state.pattern {
+                LuaPattern::Plain(pattern) => match haystack.find(pattern) {
+                    Some(offset) => {
+                        let abs_start = state.pos + offset;
+                        let abs_end = abs_start + pattern.len();
+                        if pattern.is_empty() {
+                            if state.last_match_empty {
+                                state.pos = abs_end + 1;
+                                state.last_match_empty = false;
+                                continue;
+                            }
+                            state.last_match_empty = true;
+                        } else {
+                            state.last_match_empty = false;
+                        }
+                        state.pos = abs_end;
+                        return Ok(vec![LuaValue::String(state.s[abs_start..abs_end].into())]);
+                    }
+                    None => return Ok(vec![LuaValue::Nil]),
+                },
+                LuaPattern::Regex(regex) => {
+                    let captures = regex.captures(haystack);
+
+                    match captures {
+                        Some(captures) => {
+                            let full_match = captures.get(0).unwrap();
+                            let abs_end = state.pos + full_match.end();
+
+                            if full_match.as_bytes().is_empty() {
+                                if state.last_match_empty {
+                                    state.pos += 1;
+                                    state.last_match_empty = false;
+                                    continue;
+                                }
+                                state.last_match_empty = true;
+                            } else {
+                                state.last_match_empty = false;
+                            }
+
+                            state.pos = abs_end;
+
+                            let has_groups = regex.captures_len() > 1;
+                            if has_groups {
+                                let mut results = Vec::with_capacity(regex.captures_len() - 1);
+                                for i in 1..regex.captures_len() {
+                                    match captures.get(i) {
+                                        Some(m) => {
+                                            results.push(LuaValue::String(m.as_bytes().into()))
+                                        }
+                                        None => results.push(LuaValue::Nil),
+                                    }
+                                }
+                                return Ok(results);
+                            } else {
+                                return Ok(vec![LuaValue::String(full_match.as_bytes().into())]);
+                            }
+                        }
+                        None => return Ok(vec![LuaValue::Nil]),
+                    }
+                }
+            }
+        }
     })
 }
 

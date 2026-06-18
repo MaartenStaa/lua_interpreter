@@ -84,14 +84,14 @@ Legend:
     7. 🚫 package.preload
     8. 🚫 package.searchers
     9. 🚫 package.searchpath
-4. String manipulation \[11/17]
+4. String manipulation \[12/17]
     1. ✅ string.byte
     2. ✅ string.char
     3. 🚫 string.dump
     4. ✅ string.find
     5. ⚠️ string.format
        Only the `s` and `d` format specifiers are supported.
-    6. 🚫 string.gmatch
+    6. ✅ string.gmatch
     7. 🚫 string.gsub
     8. ✅ string.len
     9. ⚠️ string.lower
