@@ -12,6 +12,7 @@ cpu-time = "1.0.0"
 miette = { version = "7.6.0", features = ["fancy", "syntect-highlighter"] }
 rand = { version = "0.9.3", features = ["thread_rng"] }
 regex = "1.12.2"
+short-uuid = "0.2.1"
 subslice = "0.2.3"
 thiserror = "2.0.17"
 

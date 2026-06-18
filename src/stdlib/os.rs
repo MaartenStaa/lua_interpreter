@@ -23,6 +23,10 @@ pub static OS: LazyLock<LuaValue> = LazyLock::new(|| {
         "time".into(),
         LuaObject::NativeFunction("time", time).into(),
     );
+    os.insert(
+        "tmpname".into(),
+        LuaObject::NativeFunction("tmpname", tmpname).into(),
+    );
 
     os.into()
 });
@@ -54,4 +58,15 @@ fn time(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     let now = chrono::Utc::now();
 
     Ok(vec![(now - epoch).num_seconds().into()])
+}
+
+fn tmpname(_: &mut VM, _: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
+    let tmp_dir = std::env::temp_dir();
+    let tmp_file = tmp_dir.join(format!("lua_{}", short_uuid::ShortUuid::generate()));
+
+    if tmp_file.exists() {
+        return Err(lua_error!("temporary file already exists"));
+    }
+
+    Ok(vec![tmp_file.to_string_lossy().into()])
 }

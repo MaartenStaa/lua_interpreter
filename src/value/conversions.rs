@@ -1,4 +1,7 @@
-use std::sync::{Arc, RwLock};
+use std::{
+    borrow::Cow,
+    sync::{Arc, RwLock},
+};
 
 use crate::{ast, value::LuaString};
 
@@ -32,7 +35,13 @@ impl From<&str> for LuaValue {
 
 impl From<String> for LuaValue {
     fn from(s: String) -> Self {
-        LuaValue::String(s.as_bytes().to_vec().into())
+        LuaValue::String(s.into_bytes().into())
+    }
+}
+
+impl From<Cow<'_, str>> for LuaValue {
+    fn from(s: Cow<'_, str>) -> Self {
+        LuaValue::String(s.into_owned().into_bytes().into())
     }
 }
 
