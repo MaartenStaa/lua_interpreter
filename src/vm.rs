@@ -13,7 +13,7 @@ use crate::{
     macros::{assert_closure, assert_table},
     state::LuaState,
     value::{
-        LuaClosure, LuaConst, LuaObject, LuaValue, NativeLuaFunction, UpValue,
+        LuaClosure, LuaConst, LuaObject, LuaString, LuaValue, NativeLuaFunction, UpValue,
         callable::{Callable, Method},
         metatables::{self, INDEX_KEY, NEWINDEX_KEY},
     },
@@ -59,11 +59,15 @@ impl LuaState {
         global.chunks.get(index as usize).map(f)
     }
 
-    pub fn get_current_chunk_name(&self) -> Option<String> {
+    pub fn get_current_chunk_name(&self) -> Option<LuaString> {
         match self.call_stack[self.call_stack_index - 1].kind {
-            CallFrameKind::Lua { chunk, .. } => self.with_chunk(chunk, |c| c.name.to_string()),
+            CallFrameKind::Lua { chunk, .. } => self.with_chunk(chunk, |c| c.name.clone()),
             CallFrameKind::Native { .. } => None,
         }
+    }
+
+    pub fn get_chunk_name(&self, chunk: ConstIndex) -> Option<LuaString> {
+        self.with_chunk(chunk, |c| c.name.clone())
     }
 
     pub(crate) fn get_stack(&self) -> &[LuaValue] {
