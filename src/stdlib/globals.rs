@@ -124,7 +124,8 @@ pub(crate) fn collectgarbage(state: &mut LuaState) -> crate::Result<Vec<LuaValue
             vec![LuaValue::from_string(previous_mode.as_bytes())]
         }
         b"setpause" => {
-            let val = get_number!(input, "collectgarbage", 1)
+            let val = state
+                .try_arg_as_number(1)?
                 .map(|v| v.integer_repr())
                 .transpose()?
                 .map(|n| n as usize)
@@ -135,7 +136,8 @@ pub(crate) fn collectgarbage(state: &mut LuaState) -> crate::Result<Vec<LuaValue
             vec![LuaValue::from_integer(previous_value as i64)]
         }
         b"setstepmul" => {
-            let val = get_number!(input, "collectgarbage", 1)
+            let val = state
+                .try_arg_as_number(1)?
                 .map(|v| v.integer_repr())
                 .transpose()?
                 .map(|n| n as usize)
