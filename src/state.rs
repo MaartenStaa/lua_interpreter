@@ -5,7 +5,10 @@ use crate::{
         LuaConst, LuaValue, UpValue,
         callable::{Callable, Method},
     },
-    vm::{CallFrameKind, ConstIndex, MAX_STACK_SIZE, call_frame::CallFrame, trace::VMTracer},
+    vm::{
+        CallFrameKind, ChunkIndex, ConstIndex, MAX_STACK_SIZE, call_frame::CallFrame,
+        trace::VMTracer,
+    },
 };
 use std::{
     collections::HashMap,
@@ -18,7 +21,7 @@ use std::{
 pub struct GlobalState {
     pub(crate) chunks: Vec<Chunk>,
     pub(crate) consts: Vec<LuaConst>,
-    pub(crate) const_index: u16,
+    pub(crate) const_index: ConstIndex,
     pub(crate) global_env: Arc<RwLock<UpValue>>,
 }
 
@@ -39,31 +42,36 @@ impl GlobalState {
         }
     }
 
-    pub fn add_chunk(&mut self, chunk: Chunk) -> crate::Result<u16> {
+    pub fn add_chunk(&mut self, chunk: Chunk) -> crate::Result<ChunkIndex> {
         let index = self.chunks.len();
-        if index >= u16::MAX as usize {
+        if index >= ChunkIndex::MAX as usize {
             return Err(crate::error::lua_error!("too many chunks"));
         }
         self.chunks.push(chunk);
-        Ok(index as u16)
+        Ok(index as ChunkIndex)
     }
 
-    pub fn get_chunk(&self, index: u16) -> Option<&Chunk> {
+    pub fn get_chunk(&self, index: ChunkIndex) -> Option<&Chunk> {
         self.chunks.get(index as usize)
     }
 
-    pub fn register_const(&mut self, constant: LuaConst) -> u16 {
+    pub fn register_const(&mut self, constant: LuaConst) -> ConstIndex {
         let index = self.const_index;
+        assert!(
+            index < ConstIndex::MAX,
+            "too many constants registered (max {})",
+            ConstIndex::MAX
+        );
         self.consts.push(constant);
         self.const_index += 1;
         index
     }
 
-    pub fn lookup_const(&self, constant: &LuaConst) -> Option<u16> {
+    pub fn lookup_const(&self, constant: &LuaConst) -> Option<ConstIndex> {
         self.consts[..self.const_index as usize]
             .iter()
             .position(|c| c == constant)
-            .map(|i| i as u16)
+            .map(|i| i as ConstIndex)
     }
 
     pub fn get_consts(&self) -> &[LuaConst] {
@@ -131,10 +139,10 @@ pub struct LuaState {
 }
 
 impl LuaState {
-    pub(crate) fn new(global: Arc<RwLock<GlobalState>>, chunk_index: ConstIndex) -> Self {
+    pub(crate) fn new(global: Arc<RwLock<GlobalState>>, chunk_index: ChunkIndex) -> Self {
         let max_registers = {
             let global_state = global.read().unwrap();
-            assert!(chunk_index < global_state.chunks.len() as u16);
+            assert!(chunk_index < global_state.chunks.len() as ChunkIndex);
 
             let chunk = &global_state.chunks[chunk_index as usize];
             assert!(

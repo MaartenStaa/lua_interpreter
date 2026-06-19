@@ -26,7 +26,7 @@ use crate::{
     parser::Parser,
     token::Span,
     value::{LuaConst, LuaNumber, LuaString, LuaTable, LuaVariableAttribute},
-    vm::{ConstIndex, JumpAddr},
+    vm::{ChunkIndex, ConstIndex, JumpAddr},
 };
 
 pub(crate) use expression::ExpressionResultMode;
@@ -104,7 +104,7 @@ pub struct Compiler {
 
 #[derive(Debug)]
 pub struct CompiledChunk {
-    pub chunk_index: ConstIndex,
+    pub chunk_index: ChunkIndex,
 }
 
 impl Compiler {

@@ -1,7 +1,7 @@
 use crate::compiler::ExpressionResultMode;
 use crate::error::RuntimeError;
 use crate::instruction::Instruction;
-use crate::vm::{ConstIndex, JumpAddr};
+use crate::vm::{ChunkIndex, ConstIndex, JumpAddr};
 
 #[derive(Debug)]
 pub(crate) enum Bytecode {
@@ -14,7 +14,7 @@ pub(crate) enum Bytecode {
     /// Load a closure (function) into a register, and specify its upvalues.
     LoadClosure {
         register: u8,
-        chunk_index: ConstIndex,
+        chunk_index: ChunkIndex,
     },
     /// Load `nil` into a range of registers.
     LoadNil {

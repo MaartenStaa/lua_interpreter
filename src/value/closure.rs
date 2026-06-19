@@ -3,16 +3,16 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use crate::{value::UpValue, vm::ConstIndex};
+use crate::{value::UpValue, vm::ChunkIndex};
 
 #[derive(Debug, Clone)]
 pub struct LuaClosure {
-    pub chunk: ConstIndex,
+    pub chunk: ChunkIndex,
     pub upvalues: HashMap<usize, Arc<RwLock<UpValue>>>,
 }
 
 impl LuaClosure {
-    pub(crate) fn new(chunk_index: ConstIndex) -> Self {
+    pub(crate) fn new(chunk_index: ChunkIndex) -> Self {
         Self {
             chunk: chunk_index,
             upvalues: HashMap::new(),

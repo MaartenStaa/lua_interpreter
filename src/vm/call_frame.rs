@@ -5,17 +5,17 @@ use std::{
 
 use crate::{
     value::{LuaValue, UpValue},
-    vm::ConstIndex,
+    vm::ChunkIndex,
 };
 
 #[derive(Debug, Copy, Clone)]
 pub(crate) enum CallFrameKind {
-    Lua { chunk: ConstIndex, ip: usize },
+    Lua { chunk: ChunkIndex, ip: usize },
     Native { name: &'static str },
 }
 
 impl CallFrameKind {
-    pub(crate) fn for_chunk(chunk: ConstIndex) -> Self {
+    pub(crate) fn for_chunk(chunk: ChunkIndex) -> Self {
         Self::Lua { chunk, ip: 0 }
     }
 }

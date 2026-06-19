@@ -6,7 +6,7 @@ use crate::{
     error::RuntimeError,
     instruction::Instruction,
     value::LuaConst,
-    vm::{ConstIndex, JumpAddr},
+    vm::{ChunkIndex, ConstIndex, JumpAddr},
 };
 
 const IP_WIDTH: usize = 4;
@@ -80,7 +80,7 @@ pub(crate) fn print_instruction(
         }
         Instruction::LoadClosure => {
             let const_index_bytes = &instructions
-                [instruction_pointer + 2..instruction_pointer + 2 + size_of::<ConstIndex>()];
+                [instruction_pointer + 2..instruction_pointer + 2 + size_of::<ChunkIndex>()];
             let chunk_index = ConstIndex::from_be_bytes(const_index_bytes.try_into().unwrap());
             instr!("LOAD_CLOSURE");
             reg!();
@@ -89,7 +89,7 @@ pub(crate) fn print_instruction(
                 .expect("valid chunk index");
             println!("FUNCTION<{name}:{chunk_index:04}>", name = chunk_name);
 
-            2 + size_of::<ConstIndex>()
+            2 + size_of::<ChunkIndex>()
         }
         Instruction::LoadNil => {
             instr!("LOAD_NIL");

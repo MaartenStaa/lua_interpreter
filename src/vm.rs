@@ -33,6 +33,7 @@ pub(crate) const MAX_STACK_SIZE: usize = 256;
 
 pub type JumpAddr = u16;
 pub type ConstIndex = u16;
+pub type ChunkIndex = u16;
 
 impl LuaState {
     pub fn get_global_env(&self) -> Arc<RwLock<UpValue>> {
@@ -40,19 +41,19 @@ impl LuaState {
     }
 
     // Helper to read instruction bytes at an offset while holding the lock
-    fn read_instr_byte(&self, chunk_index: ConstIndex, offset: usize) -> u8 {
+    fn read_instr_byte(&self, chunk_index: ChunkIndex, offset: usize) -> u8 {
         let global = self.global.read().unwrap();
         global.chunks[chunk_index as usize].instructions[offset]
     }
 
     // Helper to read a slice of instruction bytes
-    fn read_instr_bytes(&self, chunk_index: ConstIndex, start: usize, len: usize) -> Vec<u8> {
+    fn read_instr_bytes(&self, chunk_index: ChunkIndex, start: usize, len: usize) -> Vec<u8> {
         let global = self.global.read().unwrap();
         global.chunks[chunk_index as usize].instructions[start..start + len].to_vec()
     }
 
     // Safe way to access chunk data - takes a callback that processes the chunk while lock is held
-    pub(crate) fn with_chunk<F, R>(&self, index: ConstIndex, f: F) -> Option<R>
+    pub(crate) fn with_chunk<F, R>(&self, index: ChunkIndex, f: F) -> Option<R>
     where
         F: FnOnce(&Chunk) -> R,
     {
@@ -67,7 +68,7 @@ impl LuaState {
         }
     }
 
-    pub fn get_chunk_name(&self, chunk: ConstIndex) -> Option<LuaString> {
+    pub fn get_chunk_name(&self, chunk: ChunkIndex) -> Option<LuaString> {
         self.with_chunk(chunk, |c| c.name.clone())
     }
 
@@ -580,6 +581,16 @@ impl LuaState {
                     const_index!(2)
                 };
             }
+            macro_rules! chunk_index {
+                ($offset:expr) => {{
+                    let bytes =
+                        self.read_instr_bytes(chunk_index, ip + $offset, size_of::<ChunkIndex>());
+                    ChunkIndex::from_be_bytes(bytes.try_into().unwrap())
+                }};
+                () => {
+                    const_index!(2)
+                };
+            }
             macro_rules! jump_addr {
                 ($offset:expr) => {{
                     let bytes =
@@ -781,7 +792,7 @@ impl LuaState {
                 }
                 Instruction::LoadClosure => {
                     let register = register!();
-                    let chunk_index = const_index!();
+                    let chunk_index = chunk_index!();
                     let closure = LuaClosure::new(chunk_index);
 
                     // NOTE: We MUST set the closure in the register before capturing upvalues,
@@ -812,7 +823,7 @@ impl LuaState {
                         }
                     });
 
-                    2 + size_of::<ConstIndex>()
+                    2 + size_of::<ChunkIndex>()
                 }
                 Instruction::LoadNil => {
                     let from_register = register!(1);
