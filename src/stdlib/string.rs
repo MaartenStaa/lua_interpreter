@@ -266,11 +266,11 @@ fn char(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
 fn find(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
     let s = state.arg_as_string(0)?;
     let pattern = state.arg_as_string(1)?;
-    let init = match state.try_arg(2) {
-        Some(v) if v.is_integer() => unsafe { v.as_integer() },
-        Some(v) if v.is_float() => unsafe { v.as_number() }.integer_repr()?,
-        Some(v) if v.is_nil() => 1,
-        Some(v) => {
+    let init = match state.arg(2) {
+        v if v.is_integer() => unsafe { v.as_integer() },
+        v if v.is_float() => unsafe { v.as_number() }.integer_repr()?,
+        v if v.is_nil() => 1,
+        v => {
             return state.arg_err(3, format!("number expected, got {}", v.type_name()));
         }
     };
