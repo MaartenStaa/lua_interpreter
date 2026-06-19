@@ -146,6 +146,12 @@ impl LuaState {
             Some(u) => u.clear(),
             None => self.call_stack[self.call_stack_index].upvalues = Some(HashMap::new()),
         }
+        self.call_stack[self.call_stack_index].max_registers = match kind {
+            CallFrameKind::Lua { chunk, .. } => {
+                self.with_chunk(chunk, |c| c.max_registers).unwrap_or(0)
+            }
+            CallFrameKind::Native { .. } => num_args as u8,
+        };
 
         if let Some(upvalues) = upvalues {
             let frame_upvalues = self.call_stack[self.call_stack_index]
@@ -175,28 +181,26 @@ impl LuaState {
         }
     }
 
-    /// Create extra space on the stack for the given values, returning the register where the
-    /// first value is located.
+    /// Create extra space on the stack for the given values if needed, and place the values there.
+    /// Returns the register (relative to the current frame pointer) where the first value is
+    /// located.
     pub(crate) fn extend_stack(
         &mut self,
-        values: impl IntoIterator<Item = LuaValue> + Debug,
+        values: impl IntoIterator<Item = LuaValue> + Debug + WithCount,
     ) -> u8 {
-        let register = self.stack.len();
-        let frame_pointer = self.call_stack[self.call_stack_index - 1].frame_pointer;
-        debug_assert!(
-            register >= frame_pointer,
-            "extended stack below current frame pointer!\nregister = {register}\nframe_pointer = {frame_pointer}"
-        );
+        let call_frame = &self.call_stack[self.call_stack_index - 1];
+        let frame_pointer = call_frame.frame_pointer;
+        let max_registers = call_frame.max_registers;
+        let register = max_registers;
 
-        let register = register - frame_pointer;
-        debug_assert!(
-            frame_pointer + register <= self.stack.len(),
-            "not enough stack space to extend for new values!\nregister = {register}\nframe_pointer = {frame_pointer}\nstack = {:?}",
-            &self.stack[frame_pointer..]
-        );
-        self.stack.extend(values);
+        self.ensure_stack_space(register + values.count() as u8);
 
-        register as u8
+        // Copy over the values into the right area of the stack.
+        for (i, value) in values.into_iter().enumerate() {
+            self.stack[frame_pointer + register as usize + i] = value;
+        }
+
+        register
     }
 
     fn pop_call_frame(&mut self) -> PoppedCallFrame {
@@ -1631,5 +1635,21 @@ impl LuaState {
             };
             self.call_stack[self.call_stack_index - 1].inc_ip(instruction_increment);
         }
+    }
+}
+
+pub(crate) trait WithCount {
+    fn count(&self) -> usize;
+}
+
+impl<T> WithCount for Vec<T> {
+    fn count(&self) -> usize {
+        self.len()
+    }
+}
+
+impl<T, const N: usize> WithCount for [T; N] {
+    fn count(&self) -> usize {
+        N
     }
 }

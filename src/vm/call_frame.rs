@@ -33,6 +33,7 @@ pub(crate) struct CallFrame {
     pub(crate) takes_varargs: bool,
     pub(crate) allow_multi_return_values: bool,
     pub(crate) to_close: Vec<u8>,
+    pub(crate) max_registers: u8,
 }
 
 impl CallFrame {
@@ -70,6 +71,7 @@ impl CallFrame {
             takes_varargs: false,
             allow_multi_return_values: true,
             to_close: vec![],
+            max_registers: 0,
         }
     }
 }
