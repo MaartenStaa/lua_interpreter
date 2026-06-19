@@ -35,7 +35,7 @@ Legend:
        Note that the Rust Lua VM does not use garbage collection, so this
        function is essentially a stub, while mimicking the behavior of the Lua
        standard library.
-    3. 🚫 dofile
+    3. ✅ dofile
     4. ⚠️ error
        The `level` argument is not yet implemented.
     5. ✅ `_G`

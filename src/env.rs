@@ -19,6 +19,10 @@ pub fn create_global_env() -> Arc<RwLock<UpValue>> {
         LuaObject::NativeFunction("collectgarbage", stdlib::globals::collectgarbage).into(),
     );
     env.insert(
+        "dofile".into(),
+        LuaObject::NativeFunction("dofile", stdlib::globals::dofile).into(),
+    );
+    env.insert(
         "error".into(),
         LuaObject::NativeFunction("error", stdlib::globals::error).into(),
     );

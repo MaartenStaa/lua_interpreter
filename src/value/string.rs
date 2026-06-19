@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     fmt::{Debug, Display},
     iter::Copied,
     ops::{Deref, DerefMut},
@@ -18,6 +19,10 @@ impl LuaString {
 
     pub fn from_bytes(bytes: Vec<u8>) -> Self {
         LuaString(bytes)
+    }
+
+    pub fn as_str(&self) -> Cow<'_, str> {
+        String::from_utf8_lossy(&self.0)
     }
 
     pub(crate) fn into_inner(self) -> Vec<u8> {
@@ -64,6 +69,18 @@ impl From<&[u8]> for LuaString {
 impl<const T: usize> From<&[u8; T]> for LuaString {
     fn from(value: &[u8; T]) -> Self {
         LuaString(value.to_vec())
+    }
+}
+
+impl From<Cow<'_, [u8]>> for LuaString {
+    fn from(value: Cow<'_, [u8]>) -> Self {
+        LuaString(value.into_owned())
+    }
+}
+
+impl From<Cow<'_, str>> for LuaString {
+    fn from(value: Cow<'_, str>) -> Self {
+        LuaString(value.into_owned().into_bytes())
     }
 }
 

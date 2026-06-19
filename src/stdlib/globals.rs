@@ -1,6 +1,7 @@
 use std::{
-    fs,
-    io::Write,
+    ffi::OsStr,
+    fs::{self, File},
+    io::{Read, Write},
     path::{Path, PathBuf},
     sync::{
         Arc, LazyLock, RwLock,
@@ -153,6 +154,47 @@ pub(crate) fn collectgarbage(state: &mut LuaState) -> crate::Result<Vec<LuaValue
             ));
         }
     };
+
+    Ok(result)
+}
+
+pub(crate) fn dofile(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+    let (name, path, source) = match state.try_arg_as_string(0)? {
+        Some(s) => {
+            // This is a file path. Read the file and execute it as a chunk.
+            let str = s.as_str();
+            let path = PathBuf::from(&*str);
+            let mut f = File::open(&path).map_err(|_| lua_error!("cannot open file '{s}'"))?;
+            let mut buffer = Vec::new();
+            f.read_to_end(&mut buffer).into_lua_error()?;
+            (
+                path.file_prefix()
+                    .map(OsStr::to_string_lossy)
+                    .map(LuaString::from)
+                    .unwrap_or(s),
+                Some(path),
+                buffer,
+            )
+        }
+        None => {
+            // Read the source code from stdin
+            let mut buffer = Vec::new();
+            std::io::stdin().read_to_end(&mut buffer).into_lua_error()?;
+            (b"[stdin]".into(), None, buffer)
+        }
+    };
+
+    let compiler = Compiler::new(
+        Arc::clone(&state.global),
+        name.clone(),
+        path,
+        None,
+        Arc::new(source),
+        vec![],
+        false,
+    );
+    let mut state = compiler.compile(None)?;
+    let result = state.run()?;
 
     Ok(result)
 }
