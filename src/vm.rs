@@ -1,6 +1,7 @@
 use std::{
     borrow::Cow,
     collections::HashMap,
+    fmt::Debug,
     mem::size_of,
     sync::{Arc, RwLock},
 };
@@ -176,11 +177,23 @@ impl LuaState {
 
     /// Create extra space on the stack for the given values, returning the register where the
     /// first value is located.
-    pub(crate) fn extend_stack(&mut self, values: impl IntoIterator<Item = LuaValue>) -> u8 {
+    pub(crate) fn extend_stack(
+        &mut self,
+        values: impl IntoIterator<Item = LuaValue> + Debug,
+    ) -> u8 {
         let register = self.stack.len();
         let frame_pointer = self.call_stack[self.call_stack_index - 1].frame_pointer;
+        debug_assert!(
+            register >= frame_pointer,
+            "extended stack below current frame pointer!\nregister = {register}\nframe_pointer = {frame_pointer}"
+        );
 
         let register = register - frame_pointer;
+        debug_assert!(
+            frame_pointer + register <= self.stack.len(),
+            "not enough stack space to extend for new values!\nregister = {register}\nframe_pointer = {frame_pointer}\nstack = {:?}",
+            &self.stack[frame_pointer..]
+        );
         self.stack.extend(values);
 
         register as u8
@@ -465,6 +478,17 @@ impl LuaState {
         } else {
             0
         };
+
+        debug_assert!(
+            (parent_frame_pointer + args_r as usize) <= self.stack.len(),
+            "not enough stack space for native function arguments!\nfn = {name}\nargs_r = {args_r}\nstack = {:?}",
+            &self.stack[parent_frame_pointer..]
+        );
+        debug_assert!(
+            (parent_frame_pointer + args_r as usize + num_args as usize) <= self.stack.len(),
+            "native function args run beyond the stack!\nfn = {name}\nargs_r = {args_r}, num_args = {num_args}\nstack = {:?}",
+            &self.stack[parent_frame_pointer + args_r as usize..]
+        );
 
         // NOTE: Some call frame values are irrelevant for native functions.
         self.push_call_frame(
