@@ -663,20 +663,18 @@ impl<'path, 'source> Lexer<'path, 'source> {
                         chars.next();
                     }
 
-                    if equals == expected_equals {
-                        if let Some(b']') = chars.peek() {
-                            self.position += 2 + equals as usize;
-                            self.rest =
-                                &self.rest[self.position - start - 2 - expected_equals as usize..];
+                    if equals == expected_equals && let Some(b']') = chars.peek() {
+                        self.position += 2 + equals as usize;
+                        self.rest =
+                            &self.rest[self.position - start - 2 - expected_equals as usize..];
 
-                            return Ok(Token {
-                                kind: TokenKind::String(string.into()),
-                                span: Span {
-                                    start,
-                                    end: self.position,
-                                },
-                            });
-                        }
+                        return Ok(Token {
+                            kind: TokenKind::String(string.into()),
+                            span: Span {
+                                start,
+                                end: self.position,
+                            },
+                        });
                     } else {
                         string.push(*c);
                         string.extend(std::iter::repeat_n(b'=', equals as usize));
@@ -943,6 +941,26 @@ mod tests {
             let mut lexer = Lexer::new(b"test.lua", input.as_bytes());
             let token = lexer.next().unwrap().unwrap();
             assert_eq!(token.kind, TokenKind::Integer(3));
+        }
+    }
+
+    #[test]
+    fn longform_strings_closing_brackets() {
+        for (input, expected) in [
+            ("[[a]b]]", b"a]b" as &[u8]),
+            ("[[a]b]c]]", b"a]b]c"),
+            ("[[]]", b""),
+            ("[=[a]b]=]", b"a]b"),
+            ("[=[a]=b]=]", b"a]=b"),
+            ("[=[a]]=]", b"a]"),
+        ] {
+            let mut lexer = Lexer::new(b"test.lua", input.as_bytes());
+            let token = lexer.next().unwrap().unwrap();
+            assert_eq!(
+                token.kind,
+                TokenKind::String(expected.into()),
+                "when parsing '{input}'"
+            );
         }
     }
 
