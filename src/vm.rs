@@ -177,9 +177,13 @@ impl LuaState {
     /// Create extra space on the stack for the given values, returning the register where the
     /// first value is located.
     pub(crate) fn extend_stack(&mut self, values: impl IntoIterator<Item = LuaValue>) -> u8 {
-        let register = self.stack.len() as u8;
+        let register = self.stack.len();
+        let frame_pointer = self.call_stack[self.call_stack_index - 1].frame_pointer;
+
+        let register = register - frame_pointer;
         self.stack.extend(values);
-        register
+
+        register as u8
     }
 
     fn pop_call_frame(&mut self) -> PoppedCallFrame {
