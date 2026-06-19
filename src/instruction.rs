@@ -5,6 +5,8 @@ pub enum Instruction {
     LoadConst,
     LoadClosure,
     LoadNil,
+    LoadShort,
+    LoadShortFloat,
 
     // Binary operations
     // Arithmetic

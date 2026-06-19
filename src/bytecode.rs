@@ -21,6 +21,18 @@ pub(crate) enum Bytecode {
         from_register: u8,
         to_register: u8,
     },
+    /// Load an integer (16 bytes) into a register.
+    LoadShort {
+        register: u8,
+        value: i16,
+    },
+    /// Load an integral float (16 bytes) into a register. Any floating point number that has an
+    /// integer representation that fits in 16 bits can be loaded with this instruction, which is
+    /// more compact than loading it as a constant.
+    LoadShortFloat {
+        register: u8,
+        value: i16,
+    },
 
     // Binary operations
     Add {
@@ -341,6 +353,12 @@ impl Bytecode {
                 to_register,
             } => {
                 bytes!(LoadNil, from_register, to_register)
+            }
+            Bytecode::LoadShort { register, value } => {
+                bytes!(LoadShort, register, bytes = value)
+            }
+            Bytecode::LoadShortFloat { register, value } => {
+                bytes!(LoadShortFloat, register, bytes = value)
             }
 
             // Binary operations

@@ -17,7 +17,7 @@ use callable::{Callable, Method};
 pub use closure::LuaClosure;
 pub use constant::LuaConst;
 pub use function::NativeLuaFunction;
-pub use number::LuaNumber;
+pub use number::{IntegerRepr, LuaNumber};
 pub use object::LuaObject;
 pub use string::LuaString;
 pub use table::LuaTable;

@@ -4,7 +4,7 @@ use crate::{
     error::lua_error,
     macros::require_table,
     state::LuaState,
-    value::{LuaObject, LuaTable, LuaValue},
+    value::{IntegerRepr, LuaObject, LuaTable, LuaValue},
 };
 
 pub static TABLE: LazyLock<LuaValue> = LazyLock::new(|| {

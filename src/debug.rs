@@ -98,6 +98,25 @@ pub(crate) fn print_instruction(
             println!();
             3
         }
+        Instruction::LoadShort => {
+            instr!("LOAD_SHORT");
+            reg!();
+            let value_bytes =
+                &instructions[instruction_pointer + 2..instruction_pointer + 2 + size_of::<i16>()];
+            let value = i16::from_be_bytes(value_bytes.try_into().unwrap());
+            eprintln!("SHORT {value}");
+            4
+        }
+        Instruction::LoadShortFloat => {
+            instr!("LOAD_SHORT_FLOAT");
+            reg!();
+            let value_bytes =
+                &instructions[instruction_pointer + 2..instruction_pointer + 2 + size_of::<i16>()];
+            let value = i16::from_be_bytes(value_bytes.try_into().unwrap());
+            let value = value as f32;
+            eprintln!("SHORT_FLOAT {value}");
+            4
+        }
 
         // Binary operations
         // Arithmetic

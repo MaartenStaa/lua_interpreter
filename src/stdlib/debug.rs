@@ -5,7 +5,7 @@ use crate::{
     macros::require_closure,
     state::LuaState,
     value::{
-        LuaObject, LuaTable, LuaValue,
+        IntegerRepr, LuaObject, LuaTable, LuaValue,
         callable::{Callable, Method},
     },
 };

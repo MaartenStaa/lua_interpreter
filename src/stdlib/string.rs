@@ -9,7 +9,7 @@ use crate::{
     stdlib::utils::pack::{
         PackOption, PackOptionItem, copy_bytes_fix_endian, get_pack_option, pack_int, unpack_int,
     },
-    value::{LuaNumber, LuaObject, LuaString, LuaTable, LuaValue, UserData},
+    value::{IntegerRepr, LuaNumber, LuaObject, LuaString, LuaTable, LuaValue, UserData},
 };
 
 pub static STRING: LazyLock<LuaValue> = LazyLock::new(|| {

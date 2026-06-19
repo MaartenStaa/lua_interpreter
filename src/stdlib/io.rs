@@ -9,7 +9,7 @@ use crate::{
     error::{IntoLuaError, lua_error},
     macros::{require_userdata, require_userdata_type},
     state::LuaState,
-    value::{LuaObject, LuaTable, LuaValue, UserData, metatables},
+    value::{IntegerRepr, LuaObject, LuaTable, LuaValue, UserData, metatables},
 };
 
 static FILE_METATABLE: LazyLock<LuaTable> = LazyLock::new(|| {

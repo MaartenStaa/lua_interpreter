@@ -4,6 +4,8 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
+use crate::value::IntegerRepr;
+
 use super::{LuaObject, LuaValue};
 
 #[derive(Clone, PartialEq)]
@@ -55,7 +57,7 @@ impl LuaTable {
 
     pub fn get(&self, key: &LuaValue) -> Option<&LuaValue> {
         if key.is_float()
-            && let Ok(i) = unsafe { key.as_number() }.integer_repr()
+            && let Ok(i) = unsafe { key.as_float() }.integer_repr()
         {
             return self.fields.get(&LuaValue::from_integer(i));
         }
@@ -69,7 +71,7 @@ impl LuaTable {
 
     pub fn insert(&mut self, mut key: LuaValue, value: LuaValue) {
         if key.is_float()
-            && let Ok(i) = unsafe { key.as_number() }.integer_repr()
+            && let Ok(i) = unsafe { key.as_float() }.integer_repr()
         {
             key = LuaValue::from_integer(i);
         }
@@ -96,7 +98,7 @@ impl LuaTable {
 
     pub fn remove(&mut self, key: &LuaValue) {
         if key.is_float()
-            && let Ok(i) = unsafe { key.as_number() }.integer_repr()
+            && let Ok(i) = unsafe { key.as_float() }.integer_repr()
         {
             if i == self.last_number_key {
                 self.last_number_key -= 1;

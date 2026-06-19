@@ -25,7 +25,7 @@ use crate::{
     error::{RuntimeError, lua_error},
     parser::Parser,
     token::Span,
-    value::{LuaConst, LuaNumber, LuaString, LuaTable, LuaVariableAttribute},
+    value::{IntegerRepr, LuaConst, LuaNumber, LuaString, LuaTable, LuaVariableAttribute},
     vm::{ChunkIndex, ConstIndex, JumpAddr},
 };
 
@@ -2131,7 +2131,35 @@ impl Compiler {
             Literal::Nil => self.get_const_index(LuaConst::Nil),
             Literal::Boolean(b) => self.get_const_index(LuaConst::Boolean(b)),
             Literal::Number(Number::Float(f)) => {
+                if let Ok(i) = f.integer_repr()
+                    && i >= i16::MIN as _
+                    && i <= i16::MAX as _
+                {
+                    let short = i as i16;
+                    self.push_bytecode(
+                        Bytecode::LoadShortFloat {
+                            register,
+                            value: short,
+                        },
+                        span,
+                    );
+
+                    return register;
+                }
+
                 self.get_const_index(LuaConst::Number(LuaNumber::Float(f)))
+            }
+            Literal::Number(Number::Integer(i)) if i >= i16::MIN as _ && i <= i16::MAX as _ => {
+                let short = i as i16;
+                self.push_bytecode(
+                    Bytecode::LoadShort {
+                        register,
+                        value: short,
+                    },
+                    span,
+                );
+
+                return register;
             }
             Literal::Number(Number::Integer(i)) => {
                 self.get_const_index(LuaConst::Number(LuaNumber::Integer(i)))

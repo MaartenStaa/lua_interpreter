@@ -15,7 +15,7 @@ use crate::{
     macros::{assert_string, assert_table, require_table},
     stdlib::package,
     value::{
-        LuaClosure, LuaObject, LuaValue,
+        IntegerRepr, LuaClosure, LuaObject, LuaString, LuaValue,
         callable::{Callable, Method},
         metatables,
     },

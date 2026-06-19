@@ -6,7 +6,7 @@ use std::{
 use crate::{
     LuaState,
     error::lua_error,
-    value::{LuaNumber, LuaObject, LuaString, LuaValue, UpValue, callable::Callable},
+    value::{IntegerRepr, LuaNumber, LuaObject, LuaString, LuaValue, UpValue, callable::Callable},
     vm::CallFrameKind,
 };
 

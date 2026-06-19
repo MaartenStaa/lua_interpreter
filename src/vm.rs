@@ -831,6 +831,20 @@ impl LuaState {
                     self.clear_registers_between(from_register, to_register);
                     3
                 }
+                Instruction::LoadShort => {
+                    let register = register!();
+                    let int_value = self.read_instr_bytes(chunk_index, ip + 2, size_of::<i16>());
+                    let int_value = i16::from_be_bytes(int_value.try_into().unwrap());
+                    self.set(register, LuaValue::from_integer(int_value as _));
+                    2 + size_of::<i16>()
+                }
+                Instruction::LoadShortFloat => {
+                    let register = register!();
+                    let int_value = self.read_instr_bytes(chunk_index, ip + 2, size_of::<i16>());
+                    let int_value = i16::from_be_bytes(int_value.try_into().unwrap());
+                    self.set(register, LuaValue::from_float(int_value as _));
+                    2 + size_of::<i16>()
+                }
 
                 // Binary operations
                 // Arithmetic

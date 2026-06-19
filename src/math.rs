@@ -6,7 +6,7 @@ use std::{
 use crate::{
     ast,
     error::{Context, LuaError, lua_error},
-    value::{LuaNumber, LuaObject, LuaValue},
+    value::{IntegerRepr, LuaNumber, LuaObject, LuaValue},
 };
 
 macro_rules! impl_number_ops {
