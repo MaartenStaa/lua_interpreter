@@ -98,7 +98,6 @@ do
 	local function make_closer(name)
 		return setmetatable({ name = name }, {
 			__close = function()
-        print("closing", name)
 				table.insert(log, name)
 			end,
 		})

@@ -3,6 +3,7 @@ pub(crate) mod callable;
 mod closure;
 mod constant;
 mod conversions;
+mod function;
 pub(crate) mod metatables;
 mod number;
 mod object;
@@ -12,8 +13,10 @@ mod upvalue;
 mod userdata;
 
 pub use attribute::LuaVariableAttribute;
+use callable::{Callable, Method};
 pub use closure::LuaClosure;
 pub use constant::LuaConst;
+pub use function::NativeLuaFunction;
 pub use number::LuaNumber;
 pub use object::LuaObject;
 pub use string::LuaString;
@@ -26,6 +29,8 @@ use std::{
     hash::Hash,
     sync::{Arc, RwLock},
 };
+
+use crate::{LuaState, error::lua_error};
 
 /// Is it a bird? Is it a plane? No, it's a LuaValue! But maybe it's a string in
 /// a trench coat, or a boolean.
@@ -432,19 +437,19 @@ impl LuaValue {
     }
 
     /// # Safety
-    /// Value must be an upvalue.
-    pub unsafe fn as_upvalue(&self) -> &RwLock<UpValue> {
-        debug_assert!(self.is_upvalue(), "not an upvalue");
-        unsafe { &*(self.get_value_bits() as *const RwLock<UpValue>) }
-    }
-
-    /// # Safety
     /// Value must be an object.
     pub unsafe fn into_object(&self) -> Arc<RwLock<LuaObject>> {
         debug_assert!(self.is_object(), "not an object");
         let ptr = self.get_value_bits() as *const RwLock<LuaObject>;
         unsafe { Arc::increment_strong_count(ptr) };
         unsafe { Arc::from_raw(ptr) }
+    }
+
+    /// # Safety
+    /// Value must be an upvalue.
+    pub unsafe fn as_upvalue(&self) -> &RwLock<UpValue> {
+        debug_assert!(self.is_upvalue(), "not an upvalue");
+        unsafe { &*(self.get_value_bits() as *const RwLock<UpValue>) }
     }
 
     /// # Safety
@@ -478,6 +483,44 @@ impl Drop for LuaValue {
             }
             _ => {}
         }
+    }
+}
+
+impl LuaValue {
+    /// Turn the value into a string, using the `__tostring` metamethod if it exists.
+    /// Falls back on this type's `Display` implementation if the metamethod does not exist.
+    pub fn cast_to_string(&self, state: &mut LuaState) -> crate::Result<LuaString> {
+        let __tostring = self.get_metavalue(&metatables::TOSTRING_KEY);
+        if let Some(__tostring) = __tostring {
+            let __tostring: Callable = (&__tostring).try_into().map_err(|_| {
+                lua_error!(
+                    "invalid value for __tostring metamethod in {}, expected function, got {}",
+                    self.type_name(),
+                    __tostring.type_name()
+                )
+            })?;
+
+            let mut result = match __tostring.method {
+                Method::Closure(closure) => state
+                    .run_closure(closure, vec![self.clone()])?
+                    .unwrap_completed(),
+                Method::NativeFunction(name, f) => {
+                    let args_r = state.extend_stack(vec![self.clone()]);
+                    state.run_native_function(name, f, args_r, 1)?
+                }
+            };
+            result.resize(1, LuaValue::NIL);
+
+            return match result.swap_remove(0) {
+                v if v.is_string() => Ok(unsafe { v.into_string() }),
+                v => Err(lua_error!(
+                    "__tostring metamethod must return a string, got {}",
+                    v.type_name()
+                )),
+            };
+        }
+
+        Ok(format!("{}", self).into_bytes().into())
     }
 }
 

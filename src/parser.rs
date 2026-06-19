@@ -24,11 +24,11 @@ impl<'name, 'source> Parser<'name, 'source> {
         let result = self
             // NOTE: Don't start a new scope right away at the top-level
             .parse_block_inner(0, true)
-            .map_err(|r| self.with_source_code(r))?;
+            .map_err(|r| self.with_source_code(*r))?;
 
         // Ensure we've consumed all tokens
         if let Some(token) = self.lexer.next().transpose()? {
-            return Err(self.with_source_code(lua_error!(
+            return Err(self.with_source_code(*lua_error!(
                 labels = vec![LabeledSpan::at(
                     token.span.start..token.span.end,
                     "unexpected token"
@@ -40,13 +40,15 @@ impl<'name, 'source> Parser<'name, 'source> {
         Ok(result)
     }
 
-    fn with_source_code(&self, report: LuaError) -> LuaError {
-        report.with_source_code(
-            miette::NamedSource::new(
-                String::from_utf8_lossy(self.chunk_name),
-                self.source.to_vec(),
-            )
-            .with_language("lua"),
+    fn with_source_code(&self, report: LuaError) -> Box<LuaError> {
+        Box::new(
+            report.with_source_code(
+                miette::NamedSource::new(
+                    String::from_utf8_lossy(self.chunk_name),
+                    self.source.to_vec(),
+                )
+                .with_language("lua"),
+            ),
         )
     }
 
@@ -482,8 +484,8 @@ impl<'name, 'source> Parser<'name, 'source> {
                                         labels = vec![
                                             attr_token.span.labeled("expected 'const' or 'close'")
                                         ],
-                                        "unknown attribute '{}'",
-                                        String::from_utf8_lossy(attr_str)
+                                        "unknown attribute '{attr_str}'",
+                                        attr_str = String::from_utf8_lossy(attr_str)
                                     ));
                                 }
                             },

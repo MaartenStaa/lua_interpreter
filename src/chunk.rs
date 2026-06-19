@@ -1,6 +1,6 @@
 use std::{
-    borrow::Cow,
     collections::HashMap,
+    fmt::Debug,
     mem::size_of,
     path::{Path, PathBuf},
     sync::Arc,
@@ -23,12 +23,12 @@ pub(crate) struct ChunkUpValue {
     pub(crate) name: Option<LuaString>,
 }
 
-#[derive(Debug, Clone)]
-pub struct Chunk<'source> {
+#[derive(Clone)]
+pub struct Chunk {
     pub(crate) name: LuaString,
     // TODO: Maybe this can be a Cow<'source, Path>?
     pub(crate) filename: Option<PathBuf>,
-    pub(crate) source: Arc<Cow<'source, [u8]>>,
+    pub(crate) source: Arc<Vec<u8>>,
     pub(crate) instructions: Vec<u8>,
     pub(crate) instruction_spans: HashMap<usize, Span>,
     pub(crate) max_registers: u8,
@@ -37,11 +37,11 @@ pub struct Chunk<'source> {
     pub(crate) upvalues: Vec<ChunkUpValue>,
 }
 
-impl<'source> Chunk<'source> {
+impl Chunk {
     pub(crate) fn new(
         name: LuaString,
         filename: Option<PathBuf>,
-        source: Arc<Cow<'source, [u8]>>,
+        source: Arc<Vec<u8>>,
         num_params: u8,
         has_varargs: bool,
         upvalues: Vec<ChunkUpValue>,
@@ -63,7 +63,7 @@ impl<'source> Chunk<'source> {
         self.filename.as_deref()
     }
 
-    pub fn get_name(&self) -> &[u8] {
+    pub fn get_name(&self) -> &LuaString {
         &self.name
     }
 
@@ -180,5 +180,20 @@ impl<'source> Chunk<'source> {
     pub fn named_source(&self) -> NamedSource<Vec<u8>> {
         NamedSource::new(String::from_utf8_lossy(&self.name), self.source.to_vec())
             .with_language("lua")
+    }
+}
+
+impl Debug for Chunk {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Chunk")
+            .field("name", &self.name)
+            .field("filename", &self.filename)
+            .field("source_length", &self.source.len())
+            .field("instructions_length", &self.instructions.len())
+            .field("max_registers", &self.max_registers)
+            .field("num_params", &self.num_params)
+            .field("has_varargs", &self.has_varargs)
+            .field("upvalues", &self.upvalues)
+            .finish()
     }
 }

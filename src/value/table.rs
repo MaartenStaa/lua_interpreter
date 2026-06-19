@@ -1,11 +1,12 @@
 use std::{
     collections::HashMap,
+    fmt::Debug,
     ops::{Deref, DerefMut},
 };
 
-use super::LuaValue;
+use super::{LuaObject, LuaValue};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct LuaTable {
     fields: HashMap<LuaValue, LuaValue>,
     metatable: Option<LuaValue>,
@@ -86,6 +87,8 @@ impl LuaTable {
 
         if value.is_nil() {
             self.is_sequence = false;
+            self.fields.remove(&key);
+            return;
         }
 
         self.fields.insert(key, value);
@@ -139,6 +142,39 @@ impl LuaTable {
                 .as_ref()
                 .map(|mt| mt.size_bytes())
                 .unwrap_or_default()
+    }
+}
+
+impl Debug for LuaTable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(metatable) = &self.metatable
+            && metatable.is_object()
+            && let o = unsafe { metatable.as_object() }
+            && let LuaObject::Table(t) = &*o.read().unwrap()
+            && let Some(debug_repr) = t.get(&"__debug_repr".into())
+        {
+            return f.debug_tuple("LuaTable").field(debug_repr).finish();
+        }
+
+        if self.metatable.is_none() {
+            if self.is_sequence {
+                f.debug_list()
+                    .entries(
+                        (1..=self.last_number_key)
+                            .filter_map(|i| self.fields.get(&LuaValue::from_integer(i))),
+                    )
+                    .finish()
+            } else {
+                f.debug_map().entries(self.fields.iter()).finish()
+            }
+        } else {
+            f.debug_struct("LuaTable")
+                .field("fields", &self.fields)
+                .field("metatable", &self.metatable)
+                .field("last_number_key", &self.last_number_key)
+                .field("is_sequence", &self.is_sequence)
+                .finish()
+        }
     }
 }
 

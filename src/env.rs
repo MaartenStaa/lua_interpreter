@@ -3,10 +3,10 @@ use std::sync::{Arc, RwLock};
 use crate::{
     macros::assert_table,
     stdlib,
-    value::{LuaObject, LuaTable, LuaValue},
+    value::{LuaObject, LuaTable, LuaValue, UpValue},
 };
 
-pub fn create_global_env() -> LuaValue {
+pub fn create_global_env() -> Arc<RwLock<UpValue>> {
     let mut env = LuaTable::new();
 
     // Global functions
@@ -103,6 +103,7 @@ pub fn create_global_env() -> LuaValue {
     env.insert("_VERSION".into(), stdlib::globals::_VERSION.into());
 
     // Namespaced modules
+    env.insert("coroutine".into(), stdlib::coroutine::COROUTINE.clone());
     env.insert("debug".into(), stdlib::debug::DEBUG.clone());
     env.insert("io".into(), stdlib::io::IO.clone());
     env.insert("math".into(), stdlib::math::MATH.clone());
@@ -111,6 +112,12 @@ pub fn create_global_env() -> LuaValue {
     env.insert("string".into(), stdlib::string::STRING.clone());
     env.insert("table".into(), stdlib::table::TABLE.clone());
     env.insert("utf8".into(), stdlib::utf8::UTF8.clone());
+
+    // Stubs
+    env.insert(
+        "collectgarbage".into(),
+        LuaObject::NativeFunction("collectgarbage", stdlib::stubs::collectgarbage).into(),
+    );
 
     let mut metatable = LuaTable::new();
     metatable.insert("__debug_repr".into(), "<global object _G>".into());
@@ -124,5 +131,5 @@ pub fn create_global_env() -> LuaValue {
         t.insert("_G".into(), g);
     });
 
-    object
+    Arc::new(RwLock::new(UpValue(object)))
 }

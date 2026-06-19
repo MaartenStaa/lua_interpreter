@@ -84,14 +84,14 @@ Legend:
     7. 🚫 package.preload
     8. 🚫 package.searchers
     9. 🚫 package.searchpath
-4. String manipulation \[11/17]
+4. String manipulation \[12/17]
     1. ✅ string.byte
     2. ✅ string.char
     3. 🚫 string.dump
     4. ✅ string.find
     5. ⚠️ string.format
        Only the `s` and `d` format specifiers are supported.
-    6. 🚫 string.gmatch
+    6. ✅ string.gmatch
     7. 🚫 string.gsub
     8. ✅ string.len
     9. ⚠️ string.lower
@@ -148,13 +148,13 @@ Legend:
     25. ✅ math.tointeger
     26. ✅ math.type
     27. ⚠️ math.ult
-8. Input and output \[4/21]
-    1. 🚫 io.close
+8. Input and output \[7/21]
+    1. ✅ io.close
     2. 🚫 io.flush
     3. 🚫 io.input
     4. 🚫 io.lines
     5. 🚫 io.open
-    6. 🚫 io.output
+    6. ✅ io.output
     7. 🚫 io.popen
     8. 🚫 io.read
     9. ✅ io.stdin
@@ -162,8 +162,8 @@ Legend:
     11. ✅ io.stdout
     12. 🚫 io.tmpfile
     13. 🚫 io.type
-    14. 🚫 io.write
-    15. 🚫 file:close
+    14. ✅ io.write
+    15. ✅ file:close
     16. 🚫 file:flush
     17. 🚫 file:lines
     18. 🚫 file:read
@@ -181,7 +181,10 @@ Legend:
     8. 🚫 os.rename
     9. 🚫 os.setlocale
     10. ✅ os.time
-    11. 🚫 os.tmpname
+    11. ⚠️ os.tmpname
+        Unlike what the manual specifies, this implementation does not create
+        the temporary file on Unix systems. Instead, it only returns a unique
+        filename.
 10. Debug library \[2/15]
     1. 🚫 debug.debug
     2. 🚫 debug.gethook

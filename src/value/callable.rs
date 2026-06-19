@@ -1,9 +1,9 @@
-use crate::vm::VM;
+use crate::value::NativeLuaFunction;
 
 use super::{LuaClosure, LuaObject, LuaValue, metatables};
 
 #[derive(Debug)]
-pub(crate) struct Callable {
+pub struct Callable {
     pub(crate) method: Method,
     pub(crate) is_metamethod: bool,
 }
@@ -11,10 +11,7 @@ pub(crate) struct Callable {
 #[derive(Debug)]
 pub(crate) enum Method {
     Closure(LuaClosure),
-    NativeFunction(
-        #[allow(unused)] String,
-        fn(&mut VM, Vec<LuaValue>) -> crate::Result<Vec<LuaValue>>,
-    ),
+    NativeFunction(&'static str, NativeLuaFunction),
 }
 
 impl TryFrom<LuaValue> for Callable {
@@ -62,7 +59,7 @@ impl TryFrom<&LuaObject> for Callable {
                 is_metamethod: false,
             }),
             LuaObject::NativeFunction(name, f) => Ok(Callable {
-                method: Method::NativeFunction(name.to_string(), *f),
+                method: Method::NativeFunction(name, *f),
                 is_metamethod: false,
             }),
             _ => Err("expected closure or native function"),

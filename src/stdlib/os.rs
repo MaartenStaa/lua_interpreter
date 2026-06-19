@@ -1,11 +1,11 @@
 use cpu_time::ProcessTime;
+use rand::{Rng, distr};
 use std::{ffi::OsString, sync::LazyLock};
 
 use crate::{
     error::lua_error,
-    macros::require_string,
+    state::LuaState,
     value::{LuaObject, LuaTable, LuaValue},
-    vm::VM,
 };
 
 pub static OS: LazyLock<LuaValue> = LazyLock::new(|| {
@@ -13,15 +13,27 @@ pub static OS: LazyLock<LuaValue> = LazyLock::new(|| {
 
     os.insert(
         "clock".into(),
-        LuaObject::NativeFunction("clock", clock).into(),
+        LuaObject::NativeFunction("os.clock", clock).into(),
     );
     os.insert(
         "getenv".into(),
-        LuaObject::NativeFunction("getenv", getenv).into(),
+        LuaObject::NativeFunction("os.getenv", getenv).into(),
+    );
+    os.insert(
+        "setlocale".into(),
+        LuaObject::NativeFunction("setlocale", setlocale).into(),
     );
     os.insert(
         "time".into(),
-        LuaObject::NativeFunction("time", time).into(),
+        LuaObject::NativeFunction("os.time", time).into(),
+    );
+    os.insert(
+        "tmpname".into(),
+        LuaObject::NativeFunction("tmpname", tmpname).into(),
+    );
+    os.insert(
+        "tmpname".into(),
+        LuaObject::NativeFunction("tmpname", tmpname).into(),
     );
 
     os.into()
@@ -29,12 +41,12 @@ pub static OS: LazyLock<LuaValue> = LazyLock::new(|| {
 
 pub static CLOCK_START: LazyLock<ProcessTime> = LazyLock::new(ProcessTime::now);
 
-fn clock(_: &mut VM, _: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
+fn clock(_: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
     Ok(vec![CLOCK_START.elapsed().as_secs_f64().into()])
 }
 
-fn getenv(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
-    let name = require_string!(input, "os.getenv");
+fn getenv(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+    let name = state.arg_as_string(0)?;
     let name_os_str = OsString::from(String::from_utf8_lossy(name.as_slice()).to_string());
 
     match std::env::var(name_os_str) {
@@ -43,8 +55,12 @@ fn getenv(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     }
 }
 
-fn time(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
-    if !input.is_empty() {
+fn setlocale(_: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+    Ok(vec![LuaValue::NIL])
+}
+
+fn time(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+    if state.num_args() > 0 {
         return Err(lua_error!(
             "passing arguments to 'os.time' is not yet supported"
         ));
@@ -54,4 +70,18 @@ fn time(_: &mut VM, input: Vec<LuaValue>) -> crate::Result<Vec<LuaValue>> {
     let now = chrono::Utc::now();
 
     Ok(vec![(now - epoch).num_seconds().into()])
+}
+
+fn tmpname(_: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+    let rng = rand::rng();
+    let random_string: String = rng
+        .sample_iter(distr::Alphanumeric)
+        .map(char::from)
+        .take(8)
+        .collect();
+
+    let tmpdir = std::env::temp_dir();
+    let tmpname = tmpdir.join(format!("lua-{}", random_string));
+
+    Ok(vec![tmpname.to_string_lossy().to_string().into()])
 }

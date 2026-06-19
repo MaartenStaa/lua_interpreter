@@ -1,5 +1,4 @@
 use std::{
-    borrow::Cow,
     os::unix::ffi::OsStrExt,
     path::{Path, PathBuf},
     sync::Arc,
@@ -7,8 +6,8 @@ use std::{
 
 use clap::Parser;
 use lua_interpreter::{
-    compiler::Compiler, env, lexer::Lexer, optimizer::optimize as optimize_ast, parser,
-    token::TokenKind, value::LuaString, vm::VM,
+    GlobalState, compiler::Compiler, lexer::Lexer, optimizer::optimize as optimize_ast, parser,
+    token::TokenKind, value::LuaString,
 };
 use miette::{LabeledSpan, NamedSource};
 
@@ -33,6 +32,10 @@ struct Input {
     /// Print the bytecode instructions before executing them.
     #[clap(long, default_value = "false")]
     print_bytecode: bool,
+
+    /// Print the execution steps of the VM.
+    #[clap(long, default_value = "false")]
+    trace_vm: bool,
 }
 
 fn main() {
@@ -42,6 +45,7 @@ fn main() {
         debug_parser,
         disable_optimizer,
         print_bytecode,
+        trace_vm,
     } = Input::parse();
 
     let Ok(filename) = filename.canonicalize() else {
@@ -80,30 +84,34 @@ fn main() {
         optimize_ast(ast)
     };
 
-    let mut vm = VM::new(env::create_global_env(), print_bytecode);
-    let chunk = match Compiler::new(
-        &mut vm,
+    let source = Arc::new(source);
+    if match Compiler::new(
+        GlobalState::get(),
         chunk_name.clone(),
         Some(filename),
         None,
-        Arc::new(Cow::Borrowed(&source)),
+        Arc::clone(&source),
         vec![],
         true,
     )
-    .compile_chunk(Some(ast))
+    .compile(Some(ast))
     {
         Ok(c) => c,
         Err(e) => {
             let e = e.with_source_code(NamedSource::new(
                 String::from_utf8_lossy(&chunk_name),
-                source,
+                (*source).clone(),
             ));
             eprintln!("compilation failed: {e:?}");
             std::process::exit(1);
         }
+    }
+    .with_tracer(trace_vm)
+    .run()
+    .is_err()
+    {
+        std::process::exit(1);
     };
-
-    vm.run(chunk);
 }
 
 fn run_debug_lexer(lexer: Lexer, filename: &Path, source: &[u8]) {

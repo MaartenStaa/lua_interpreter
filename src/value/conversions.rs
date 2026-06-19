@@ -1,6 +1,9 @@
-use std::sync::{Arc, RwLock};
+use std::{
+    borrow::Cow,
+    sync::{Arc, RwLock},
+};
 
-use crate::{ast, value::LuaString};
+use crate::{LuaState, ast, value::LuaString};
 
 use super::{
     LuaValue, UserData, closure::LuaClosure, constant::LuaConst, number::LuaNumber,
@@ -32,7 +35,13 @@ impl From<&str> for LuaValue {
 
 impl From<String> for LuaValue {
     fn from(s: String) -> Self {
-        LuaValue::from_string(s.as_bytes().to_vec().into())
+        LuaValue::from_string(s.into_bytes().into())
+    }
+}
+
+impl From<Cow<'_, str>> for LuaValue {
+    fn from(s: Cow<'_, str>) -> Self {
+        LuaValue::from_string(s.into_owned().into_bytes().into())
     }
 }
 
@@ -75,6 +84,14 @@ impl From<LuaTable> for LuaValue {
 impl From<LuaClosure> for LuaValue {
     fn from(closure: LuaClosure) -> Self {
         LuaValue::from_object(Arc::new(RwLock::new(LuaObject::Closure(closure))))
+    }
+}
+
+impl From<LuaState> for LuaValue {
+    fn from(state: LuaState) -> Self {
+        LuaValue::from_object(Arc::new(RwLock::new(LuaObject::Thread(Arc::new(
+            RwLock::new(state),
+        )))))
     }
 }
 

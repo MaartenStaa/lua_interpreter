@@ -4,6 +4,7 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
+#[derive(PartialEq)]
 pub struct UpValue(pub(crate) LuaValue);
 
 impl Deref for UpValue {

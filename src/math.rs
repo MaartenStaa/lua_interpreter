@@ -322,7 +322,7 @@ impl LuaValue {
                 let right_type = other.type_name();
 
                 Err(Box::new((
-                    lua_error!(
+                    *lua_error!(
                         "cannot concatenate a '{}' with a '{}'",
                         left_type,
                         right_type
