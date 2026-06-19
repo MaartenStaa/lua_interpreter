@@ -234,8 +234,8 @@ impl LuaValue {
         }
     }
 
-    pub fn from_string(s: LuaString) -> Self {
-        let ptr = Box::into_raw(Box::new(s));
+    pub fn from_string(s: impl Into<LuaString>) -> Self {
+        let ptr = Box::into_raw(Box::new(s.into()));
         debug_assert!(
             ptr as u64 & !Self::VALUE_MASK == 0,
             "Box<LuaString> pointer doesn't fit in 49 bits"

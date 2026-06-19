@@ -297,26 +297,20 @@ impl LuaValue {
                 a.extend(b.to_string().as_bytes());
                 Ok(LuaValue::from_string(a))
             }
-            (a, b) if a.is_number() && b.is_string() => Ok(LuaValue::from_string(
-                Vec::from_iter(
-                    unsafe { a.as_number() }
-                        .to_string()
-                        .into_bytes()
-                        .into_iter()
-                        .chain(unsafe { b.as_string() }),
-                )
-                .into(),
-            )),
-            (a, b) if a.is_number() && b.is_number() => Ok(LuaValue::from_string(
-                Vec::from_iter(
-                    unsafe { a.as_number() }
-                        .to_string()
-                        .into_bytes()
-                        .into_iter()
-                        .chain(unsafe { b.as_number() }.to_string().into_bytes()),
-                )
-                .into(),
-            )),
+            (a, b) if a.is_number() && b.is_string() => Ok(LuaValue::from_string(Vec::from_iter(
+                unsafe { a.as_number() }
+                    .to_string()
+                    .into_bytes()
+                    .into_iter()
+                    .chain(unsafe { b.as_string() }),
+            ))),
+            (a, b) if a.is_number() && b.is_number() => Ok(LuaValue::from_string(Vec::from_iter(
+                unsafe { a.as_number() }
+                    .to_string()
+                    .into_bytes()
+                    .into_iter()
+                    .chain(unsafe { b.as_number() }.to_string().into_bytes()),
+            ))),
             (self_, other) => {
                 let left_type = self_.type_name();
                 let right_type = other.type_name();

@@ -15,6 +15,14 @@ impl LuaString {
     pub const fn new() -> Self {
         LuaString(Vec::new())
     }
+
+    pub fn from_bytes(bytes: Vec<u8>) -> Self {
+        LuaString(bytes)
+    }
+
+    pub(crate) fn into_inner(self) -> Vec<u8> {
+        self.0
+    }
 }
 
 impl Debug for LuaString {

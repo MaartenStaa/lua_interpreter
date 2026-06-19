@@ -82,7 +82,7 @@ fn concat(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
         }
     });
 
-    Ok(vec![LuaValue::from_string(result.into())])
+    Ok(vec![LuaValue::from_string(result)])
 }
 
 fn insert(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {

@@ -38,13 +38,13 @@ pub(crate) fn collectgarbage(state: &mut LuaState) -> crate::Result<Vec<LuaValue
         b"incremental" => {
             let mut mode = GC_MODE.lock().unwrap();
             let previous_mode = mode.clone();
-            *mode = LuaValue::from_string(opt.to_vec().into());
+            *mode = LuaValue::from_string(opt.to_vec());
             vec![previous_mode]
         }
         b"generational" => {
             let mut mode = GC_MODE.lock().unwrap();
             let previous_mode = mode.clone();
-            *mode = LuaValue::from_string(opt.to_vec().into());
+            *mode = LuaValue::from_string(opt.to_vec());
             vec![previous_mode]
         }
         b"param" => {

@@ -29,25 +29,25 @@ impl From<bool> for LuaValue {
 
 impl From<&str> for LuaValue {
     fn from(s: &str) -> Self {
-        LuaValue::from_string(s.as_bytes().to_vec().into())
+        LuaValue::from_string(s.as_bytes().to_vec())
     }
 }
 
 impl From<String> for LuaValue {
     fn from(s: String) -> Self {
-        LuaValue::from_string(s.into_bytes().into())
+        LuaValue::from_string(s.into_bytes())
     }
 }
 
 impl From<Cow<'_, str>> for LuaValue {
     fn from(s: Cow<'_, str>) -> Self {
-        LuaValue::from_string(s.into_owned().into_bytes().into())
+        LuaValue::from_string(s.into_owned().into_bytes())
     }
 }
 
 impl From<Vec<u8>> for LuaValue {
     fn from(s: Vec<u8>) -> Self {
-        LuaValue::from_string(s.into())
+        LuaValue::from_string(LuaString::from_bytes(s))
     }
 }
 

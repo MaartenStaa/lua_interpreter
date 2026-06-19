@@ -260,7 +260,7 @@ fn char(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
         str.push(i as u8);
     }
 
-    Ok(vec![LuaValue::from_string(str.into())])
+    Ok(vec![LuaValue::from_string(str)])
 }
 
 fn find(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
@@ -406,7 +406,7 @@ fn gmatch_iter(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
                             state.last_match_empty = false;
                         }
                         state.pos = abs_end;
-                        return Ok(vec![LuaValue::from_string(state.s[abs_start..abs_end].into())]);
+                        return Ok(vec![LuaValue::from_string(&state.s[abs_start..abs_end])]);
                     }
                     None => return Ok(vec![LuaValue::NIL]),
                 },
@@ -437,14 +437,14 @@ fn gmatch_iter(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
                                 for i in 1..regex.captures_len() {
                                     match captures.get(i) {
                                         Some(m) => {
-                                            results.push(LuaValue::from_string(m.as_bytes().into()))
+                                            results.push(LuaValue::from_string(m.as_bytes()))
                                         }
                                         None => results.push(LuaValue::NIL),
                                     }
                                 }
                                 return Ok(results);
                             } else {
-                                return Ok(vec![LuaValue::from_string(full_match.as_bytes().into())]);
+                                return Ok(vec![LuaValue::from_string(full_match.as_bytes())]);
                             }
                         }
                         None => return Ok(vec![LuaValue::NIL]),
@@ -515,7 +515,7 @@ fn lower(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
     let string = String::from_utf8_lossy(&input);
     let lower = string.to_lowercase();
 
-    Ok(vec![LuaValue::from_string(lower.into_bytes().into())])
+    Ok(vec![LuaValue::from_string(lower.into_bytes())])
 }
 
 fn r#match(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
@@ -527,7 +527,7 @@ fn r#match(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
     match pattern {
         LuaPattern::Plain(pattern) => match s.find(&pattern) {
             Some(start) => Ok(vec![LuaValue::from_string(
-                s[start..start + pattern.len()].into(),
+                &s[start..start + pattern.len()],
             )]),
             None => Ok(vec![LuaValue::NIL]),
         },
@@ -537,7 +537,7 @@ fn r#match(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
             match captures {
                 Some(captures) => {
                     if let Some(capture) = captures.get(0) {
-                        Ok(vec![LuaValue::from_string(capture.as_bytes().into())])
+                        Ok(vec![LuaValue::from_string(capture.as_bytes())])
                     } else {
                         Ok(vec![s.into()])
                     }
@@ -796,7 +796,7 @@ fn sub(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
     }
 
     Ok(vec![LuaValue::from_string(
-        s[(i - 1) as usize..=(j - 1) as usize].into(),
+        &s[(i - 1) as usize..=(j - 1) as usize],
     )])
 }
 
@@ -915,7 +915,7 @@ fn unpack(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
                     ));
                 }
 
-                result.push(LuaValue::from_string(s[pos..pos + size].into()));
+                result.push(LuaValue::from_string(&s[pos..pos + size]));
                 pos += size;
             }
             PackOption::String => {
@@ -935,7 +935,7 @@ fn unpack(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
                 }
 
                 let string = Vec::from(&s[pos..pos + len]);
-                result.push(LuaValue::from_string(string.into()));
+                result.push(LuaValue::from_string(string));
                 pos += len;
             }
             PackOption::Zstr => {
@@ -947,7 +947,7 @@ fn unpack(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
                 };
 
                 let string = Vec::from(&s[pos..pos + len]);
-                result.push(LuaValue::from_string(string.into()));
+                result.push(LuaValue::from_string(string));
                 // skip past string and the null terminator
                 pos += len + 1;
             }
@@ -980,5 +980,5 @@ fn upper(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
     let string = String::from_utf8_lossy(&input);
     let upper = string.to_uppercase();
 
-    Ok(vec![LuaValue::from_string(upper.into_bytes().into())])
+    Ok(vec![LuaValue::from_string(upper.into_bytes())])
 }

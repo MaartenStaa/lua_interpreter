@@ -12,59 +12,39 @@ pub(crate) static GLOBAL_STRING_METATABLE: LazyLock<LuaValue> =
     LazyLock::new(|| super::string::get_string_metatable().into());
 
 pub(crate) static METATABLE_KEY: LazyLock<LuaValue> =
-    LazyLock::new(|| LuaValue::from_string(b"__metatable".into()));
-pub(crate) static ADD_KEY: LazyLock<LuaValue> =
-    LazyLock::new(|| LuaValue::from_string(b"__add".into()));
-pub(crate) static SUB_KEY: LazyLock<LuaValue> =
-    LazyLock::new(|| LuaValue::from_string(b"__sub".into()));
-pub(crate) static MUL_KEY: LazyLock<LuaValue> =
-    LazyLock::new(|| LuaValue::from_string(b"__mul".into()));
-pub(crate) static DIV_KEY: LazyLock<LuaValue> =
-    LazyLock::new(|| LuaValue::from_string(b"__div".into()));
-pub(crate) static MOD_KEY: LazyLock<LuaValue> =
-    LazyLock::new(|| LuaValue::from_string(b"__mod".into()));
-pub(crate) static POW_KEY: LazyLock<LuaValue> =
-    LazyLock::new(|| LuaValue::from_string(b"__pow".into()));
-pub(crate) static UNM_KEY: LazyLock<LuaValue> =
-    LazyLock::new(|| LuaValue::from_string(b"__unm".into()));
-pub(crate) static IDIV_KEY: LazyLock<LuaValue> =
-    LazyLock::new(|| LuaValue::from_string(b"__idiv".into()));
-pub(crate) static BAND_KEY: LazyLock<LuaValue> =
-    LazyLock::new(|| LuaValue::from_string(b"__band".into()));
-pub(crate) static BOR_KEY: LazyLock<LuaValue> =
-    LazyLock::new(|| LuaValue::from_string(b"__bor".into()));
-pub(crate) static BXOR_KEY: LazyLock<LuaValue> =
-    LazyLock::new(|| LuaValue::from_string(b"__bxor".into()));
-pub(crate) static BNOT_KEY: LazyLock<LuaValue> =
-    LazyLock::new(|| LuaValue::from_string(b"__bnot".into()));
-pub(crate) static SHL_KEY: LazyLock<LuaValue> =
-    LazyLock::new(|| LuaValue::from_string(b"__shl".into()));
-pub(crate) static SHR_KEY: LazyLock<LuaValue> =
-    LazyLock::new(|| LuaValue::from_string(b"__shr".into()));
+    LazyLock::new(|| LuaValue::from_string(b"__metatable"));
+pub(crate) static ADD_KEY: LazyLock<LuaValue> = LazyLock::new(|| LuaValue::from_string(b"__add"));
+pub(crate) static SUB_KEY: LazyLock<LuaValue> = LazyLock::new(|| LuaValue::from_string(b"__sub"));
+pub(crate) static MUL_KEY: LazyLock<LuaValue> = LazyLock::new(|| LuaValue::from_string(b"__mul"));
+pub(crate) static DIV_KEY: LazyLock<LuaValue> = LazyLock::new(|| LuaValue::from_string(b"__div"));
+pub(crate) static MOD_KEY: LazyLock<LuaValue> = LazyLock::new(|| LuaValue::from_string(b"__mod"));
+pub(crate) static POW_KEY: LazyLock<LuaValue> = LazyLock::new(|| LuaValue::from_string(b"__pow"));
+pub(crate) static UNM_KEY: LazyLock<LuaValue> = LazyLock::new(|| LuaValue::from_string(b"__unm"));
+pub(crate) static IDIV_KEY: LazyLock<LuaValue> = LazyLock::new(|| LuaValue::from_string(b"__idiv"));
+pub(crate) static BAND_KEY: LazyLock<LuaValue> = LazyLock::new(|| LuaValue::from_string(b"__band"));
+pub(crate) static BOR_KEY: LazyLock<LuaValue> = LazyLock::new(|| LuaValue::from_string(b"__bor"));
+pub(crate) static BXOR_KEY: LazyLock<LuaValue> = LazyLock::new(|| LuaValue::from_string(b"__bxor"));
+pub(crate) static BNOT_KEY: LazyLock<LuaValue> = LazyLock::new(|| LuaValue::from_string(b"__bnot"));
+pub(crate) static SHL_KEY: LazyLock<LuaValue> = LazyLock::new(|| LuaValue::from_string(b"__shl"));
+pub(crate) static SHR_KEY: LazyLock<LuaValue> = LazyLock::new(|| LuaValue::from_string(b"__shr"));
 pub(crate) static CONCAT_KEY: LazyLock<LuaValue> =
-    LazyLock::new(|| LuaValue::from_string(b"__concat".into()));
-pub(crate) static LEN_KEY: LazyLock<LuaValue> =
-    LazyLock::new(|| LuaValue::from_string(b"__len".into()));
-pub(crate) static EQ_KEY: LazyLock<LuaValue> =
-    LazyLock::new(|| LuaValue::from_string(b"__eq".into()));
-pub(crate) static LT_KEY: LazyLock<LuaValue> =
-    LazyLock::new(|| LuaValue::from_string(b"__lt".into()));
-pub(crate) static LE_KEY: LazyLock<LuaValue> =
-    LazyLock::new(|| LuaValue::from_string(b"__le".into()));
+    LazyLock::new(|| LuaValue::from_string(b"__concat"));
+pub(crate) static LEN_KEY: LazyLock<LuaValue> = LazyLock::new(|| LuaValue::from_string(b"__len"));
+pub(crate) static EQ_KEY: LazyLock<LuaValue> = LazyLock::new(|| LuaValue::from_string(b"__eq"));
+pub(crate) static LT_KEY: LazyLock<LuaValue> = LazyLock::new(|| LuaValue::from_string(b"__lt"));
+pub(crate) static LE_KEY: LazyLock<LuaValue> = LazyLock::new(|| LuaValue::from_string(b"__le"));
 pub(crate) static INDEX_KEY: LazyLock<LuaValue> =
-    LazyLock::new(|| LuaValue::from_string(b"__index".into()));
+    LazyLock::new(|| LuaValue::from_string(b"__index"));
 pub(crate) static NEWINDEX_KEY: LazyLock<LuaValue> =
-    LazyLock::new(|| LuaValue::from_string(b"__newindex".into()));
-pub(crate) static CALL_KEY: LazyLock<LuaValue> =
-    LazyLock::new(|| LuaValue::from_string(b"__call".into()));
+    LazyLock::new(|| LuaValue::from_string(b"__newindex"));
+pub(crate) static CALL_KEY: LazyLock<LuaValue> = LazyLock::new(|| LuaValue::from_string(b"__call"));
 pub(crate) static CLOSE_KEY: LazyLock<LuaValue> =
-    LazyLock::new(|| LuaValue::from_string(b"__close".into()));
+    LazyLock::new(|| LuaValue::from_string(b"__close"));
 pub(crate) static PAIRS_KEY: LazyLock<LuaValue> =
-    LazyLock::new(|| LuaValue::from_string(b"__pairs".into()));
-pub(crate) static NAME_KEY: LazyLock<LuaValue> =
-    LazyLock::new(|| LuaValue::from_string(b"__name".into()));
+    LazyLock::new(|| LuaValue::from_string(b"__pairs"));
+pub(crate) static NAME_KEY: LazyLock<LuaValue> = LazyLock::new(|| LuaValue::from_string(b"__name"));
 pub(crate) static TOSTRING_KEY: LazyLock<LuaValue> =
-    LazyLock::new(|| LuaValue::from_string(b"__tostring".into()));
+    LazyLock::new(|| LuaValue::from_string(b"__tostring"));
 
 impl LuaValue {
     pub fn get_metatable(&self) -> Option<LuaValue> {

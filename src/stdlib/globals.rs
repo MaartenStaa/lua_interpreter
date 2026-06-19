@@ -115,13 +115,13 @@ pub(crate) fn collectgarbage(state: &mut LuaState) -> crate::Result<Vec<LuaValue
             let mut mode = GC_MODE.write().unwrap();
             let previous_mode = *mode;
             *mode = "incremental";
-            vec![LuaValue::from_string(previous_mode.as_bytes().into())]
+            vec![LuaValue::from_string(previous_mode.as_bytes())]
         }
         b"generational" => {
             let mut mode = GC_MODE.write().unwrap();
             let previous_mode = *mode;
             *mode = "generational";
-            vec![LuaValue::from_string(previous_mode.as_bytes().into())]
+            vec![LuaValue::from_string(previous_mode.as_bytes())]
         }
         b"setpause" => {
             let val = get_number!(input, "collectgarbage", 1)
@@ -318,7 +318,7 @@ pub(crate) fn load(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
         Err(e) => {
             return Ok(vec![
                 LuaValue::NIL,
-                LuaValue::from_string(format!("{}", e).into_bytes().into()),
+                LuaValue::from_string(format!("{}", e).into_bytes()),
             ]);
         }
     };
@@ -435,7 +435,7 @@ pub(crate) fn pcall(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
         }
         Err(e) => vec![
             LuaValue::from_bool(false),
-            LuaValue::from_string(e.to_string().into_bytes().into()),
+            LuaValue::from_string(e.to_string().into_bytes()),
         ],
     })
 }
@@ -622,7 +622,7 @@ pub(crate) fn require(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
         }
 
         // Check if it's already loaded
-        let path_value = LuaValue::from_string(path_str.as_bytes().into());
+        let path_value = LuaValue::from_string(path_str.as_bytes());
         assert_table!(&package, package_table, {
             let loaded = package_table
                 .get(&"loaded".into())
@@ -789,7 +789,7 @@ pub(crate) fn r#type(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
     let value = state.ensure_arg(0)?;
 
     Ok(vec![LuaValue::from_string(
-        value.type_name().bytes().collect::<Vec<_>>().into(),
+        value.type_name().bytes().collect::<Vec<_>>(),
     )])
 }
 
@@ -889,13 +889,12 @@ pub(crate) fn xpcall(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
                     Method::Closure(closure) => state
                         .run_closure(
                             closure.clone(),
-                            vec![LuaValue::from_string(e.to_string().into_bytes().into())],
+                            vec![LuaValue::from_string(e.to_string().into_bytes())],
                         )
                         .map(ExecutionResult::unwrap_completed),
                     Method::NativeFunction(name, f) => {
-                        let args_r = state.extend_stack([LuaValue::from_string(
-                            e.to_string().into_bytes().into(),
-                        )]);
+                        let args_r =
+                            state.extend_stack([LuaValue::from_string(e.to_string().into_bytes())]);
                         state.run_native_function(name, *f, args_r, 1)
                     }
                 };
@@ -910,7 +909,7 @@ pub(crate) fn xpcall(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
         }
         Err(e) => vec![
             LuaValue::from_bool(false),
-            LuaValue::from_string(e.to_string().into_bytes().into()),
+            LuaValue::from_string(e.to_string().into_bytes()),
         ],
     })
 }

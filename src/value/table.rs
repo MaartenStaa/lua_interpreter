@@ -250,16 +250,13 @@ mod tests {
     #[test]
     fn test_string_keys() {
         let mut table = LuaTable::new();
-        table.insert(
-            LuaValue::from_string(b"foo".into()),
-            LuaValue::from_integer(42),
-        );
+        table.insert(LuaValue::from_string(b"foo"), LuaValue::from_integer(42));
         assert_eq!(
-            table.get(&LuaValue::from_string(b"foo".into())),
+            table.get(&LuaValue::from_string(b"foo")),
             Some(&LuaValue::from_integer(42))
         );
 
-        table.remove(&LuaValue::from_string(b"foo".into()));
-        assert_eq!(table.get(&LuaValue::from_string(b"foo".into())), None);
+        table.remove(&LuaValue::from_string(b"foo"));
+        assert_eq!(table.get(&LuaValue::from_string(b"foo")), None);
     }
 }
