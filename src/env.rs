@@ -113,12 +113,6 @@ pub fn create_global_env() -> Arc<RwLock<UpValue>> {
     env.insert("table".into(), stdlib::table::TABLE.clone());
     env.insert("utf8".into(), stdlib::utf8::UTF8.clone());
 
-    // Stubs
-    env.insert(
-        "collectgarbage".into(),
-        LuaObject::NativeFunction("collectgarbage", stdlib::stubs::collectgarbage).into(),
-    );
-
     let mut metatable = LuaTable::new();
     metatable.insert("__debug_repr".into(), "<global object _G>".into());
     env.set_metatable(Some(LuaValue::from_object(Arc::new(RwLock::new(
