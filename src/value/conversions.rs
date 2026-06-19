@@ -119,11 +119,23 @@ impl From<LuaObject> for LuaValue {
     }
 }
 
+impl From<Arc<RwLock<LuaObject>>> for LuaValue {
+    fn from(object: Arc<RwLock<LuaObject>>) -> Self {
+        LuaValue::from_object(object)
+    }
+}
+
 impl From<ast::Number> for LuaNumber {
     fn from(number: ast::Number) -> Self {
         match number {
             ast::Number::Integer(i) => LuaNumber::Integer(i),
             ast::Number::Float(f) => LuaNumber::Float(f),
         }
+    }
+}
+
+impl From<UserData> for LuaObject {
+    fn from(user_data: UserData) -> Self {
+        LuaObject::UserData(user_data)
     }
 }
