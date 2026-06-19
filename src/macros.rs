@@ -194,29 +194,26 @@ macro_rules! require_userdata {
                 }
                 o => {
                     return Err($crate::error::lua_error!(
-                        "bad argument #{n} to '{name}' ({type_name} expected, got {actual_type})",
+                        "bad argument #{n} to '{name}' (userdata expected, got {actual_type})",
                         n = $index + 1,
                         name = $name,
-                        type_name = stringify!($type),
                         actual_type = o.type_name()
                     ));
                 }
             },
             Some(v) => {
                 return Err($crate::error::lua_error!(
-                    "bad argument #{n} to '{name}' ({type_name} expected, got {actual_type})",
+                    "bad argument #{n} to '{name}' (userdata expected, got {actual_type})",
                     n = $index + 1,
                     name = $name,
-                    type_name = stringify!($type),
                     actual_type = v.type_name()
                 ));
             }
             None => {
                 return Err($crate::error::lua_error!(
-                    "bad argument #{n} to '{name}' ({type_name} expected, got no value)",
+                    "bad argument #{n} to '{name}' (userdata expected, got no value)",
                     n = $index + 1,
                     name = $name,
-                    type_name = stringify!($type)
                 ));
             }
         }
@@ -229,29 +226,26 @@ macro_rules! require_userdata {
                 },
                 o => {
                     return Err($crate::error::lua_error!(
-                        "bad argument #{n} to '{name}' ({type_name} expected, got {actual_type})",
+                        "bad argument #{n} to '{name}' (userdata expected, got {actual_type})",
                         n = $index + 1,
                         name = $name,
-                        type_name = stringify!($type),
                         actual_type = o.type_name()
                     ));
                 }
             },
             Some(v) => {
                 return Err($crate::error::lua_error!(
-                    "bad argument #{n} to '{name}' ({type_name} expected, got {actual_type})",
+                    "bad argument #{n} to '{name}' (userdata expected, got {actual_type})",
                     n = $index + 1,
                     name = $name,
-                    type_name = stringify!($type),
                     actual_type = v.type_name()
                 ));
             }
             None => {
                 return Err($crate::error::lua_error!(
-                    "bad argument #{n} to '{name}' ({type_name} expected, got no value)",
+                    "bad argument #{n} to '{name}' (userdata expected, got no value)",
                     n = $index + 1,
                     name = $name,
-                    type_name = stringify!($type)
                 ));
             }
         }
