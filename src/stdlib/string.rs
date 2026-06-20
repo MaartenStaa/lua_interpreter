@@ -355,9 +355,9 @@ fn gmatch(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
     let pattern = pattern_to_regex(pattern_str)?;
 
     let state = GmatchState {
-        s: s.clone(),
-        pattern,
         pos: (init - 1).min(s.len()),
+        s,
+        pattern,
         last_match_empty: false,
     };
 
