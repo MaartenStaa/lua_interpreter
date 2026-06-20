@@ -780,7 +780,7 @@ mod tests {
             &nil, &b_true, &b_false, &small_int, &large_int, &string, &object, &upvalue,
         ];
         for value in all_except_float {
-            let as_float = unsafe { std::mem::transmute::<LuaValue, f64>(value.clone()) };
+            let as_float = f64::from_bits(value.0);
             assert!(
                 as_float.is_nan(),
                 "expected NaN for non-float value, got {}",
