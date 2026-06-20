@@ -192,6 +192,7 @@ pub(crate) fn dofile(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
         Arc::new(source),
         vec![],
         false,
+        false,
     );
     let mut state = compiler.compile(None)?;
     let result = state.run()?;
@@ -356,6 +357,7 @@ pub(crate) fn load(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
         Arc::new(source),
         vec![],
         true,
+        false,
     );
     let compiled_chunk = match compiler.compile_chunk(None) {
         Ok(compiled_chunk) => compiled_chunk,
@@ -687,6 +689,7 @@ pub(crate) fn require(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
             None,
             Arc::new(source),
             vec![],
+            false,
             false,
         );
         let mut state = compiler.compile(None)?;

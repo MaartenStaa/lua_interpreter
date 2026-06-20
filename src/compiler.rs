@@ -22,6 +22,7 @@ use crate::{
         goto::{Goto, Label},
         variable::{Local, Upvalue},
     },
+    debug,
     error::{RuntimeError, lua_error},
     parser::Parser,
     token::Span,
@@ -100,6 +101,7 @@ pub struct Compiler {
     scope_starting_registers: Vec<u8>,
     register_index: u8,
     max_registers: u8,
+    print_bytecode: bool,
 }
 
 #[derive(Debug)]
@@ -116,6 +118,7 @@ impl Compiler {
         source: Arc<Vec<u8>>,
         parameters: Vec<TokenTree<Name>>,
         has_varargs: bool,
+        print_bytecode: bool,
     ) -> Self {
         let mut result = Self {
             global_state,
@@ -138,6 +141,7 @@ impl Compiler {
             scope_starting_registers: vec![0],
             register_index: 0,
             max_registers: 0,
+            print_bytecode,
         };
 
         // Every main chunk has an `_ENV` upvalue.
@@ -166,6 +170,7 @@ impl Compiler {
         parameters: Vec<TokenTree<Name>>,
         has_varargs: bool,
         parent_frame: std::ptr::NonNull<Frame>,
+        print_bytecode: bool,
     ) -> Self {
         let mut result = Self {
             global_state,
@@ -188,6 +193,7 @@ impl Compiler {
             scope_starting_registers: vec![0],
             register_index: 0,
             max_registers: 0,
+            print_bytecode,
         };
 
         for param in parameters {
@@ -276,6 +282,10 @@ impl Compiler {
                 .map(|u| u.assume_init())
                 .collect()
         };
+
+        if self.print_bytecode {
+            debug::print_instructions(&self.global_state.read().unwrap().consts, &self.chunk);
+        }
 
         Ok(CompiledChunk {
             chunk_index: self.global_state.write().unwrap().add_chunk(self.chunk)?,
@@ -1568,6 +1578,7 @@ impl Compiler {
             function_def.node.parameters,
             function_def.node.varargs.is_some(),
             NonNull::from_mut(&mut self.frame),
+            self.print_bytecode,
         )
         .compile_chunk(Some(function_def.node.block))?;
 

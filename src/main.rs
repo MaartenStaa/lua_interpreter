@@ -93,6 +93,7 @@ fn main() {
         Arc::clone(&source),
         vec![],
         true,
+        print_bytecode,
     )
     .compile(Some(ast))
     {
