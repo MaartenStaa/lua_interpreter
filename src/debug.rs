@@ -1,7 +1,6 @@
 use std::mem::size_of;
 
 use crate::{
-    LuaState,
     chunk::Chunk,
     error::RuntimeError,
     instruction::Instruction,
@@ -20,10 +19,8 @@ macro_rules! instr {
     };
 }
 
-pub fn print_instructions(state: &LuaState, chunk: &Chunk) {
+pub fn print_instructions(consts: &[LuaConst], chunk: &Chunk) {
     let instructions = chunk.get_instructions();
-    let global_state = state.global.read().unwrap();
-    let consts = global_state.get_consts();
     let mut instruction_pointer = 0;
 
     loop {
@@ -34,7 +31,7 @@ pub fn print_instructions(state: &LuaState, chunk: &Chunk) {
         let instruction = instructions[instruction_pointer];
 
         let instruction_increment = print_instruction(
-            state,
+            chunk,
             instructions,
             consts,
             instruction_pointer,
@@ -45,7 +42,7 @@ pub fn print_instructions(state: &LuaState, chunk: &Chunk) {
 }
 
 pub(crate) fn print_instruction(
-    state: &LuaState,
+    chunk: &Chunk,
     instructions: &[u8],
     consts: &[LuaConst],
     instruction_pointer: usize,
@@ -75,7 +72,7 @@ pub(crate) fn print_instruction(
             instr!("LOAD_CONST");
             reg!();
             print_const(&consts[const_index as usize]);
-            println!();
+            eprintln!();
             2 + size_of::<ConstIndex>()
         }
         Instruction::LoadClosure => {
@@ -84,10 +81,7 @@ pub(crate) fn print_instruction(
             let chunk_index = ConstIndex::from_be_bytes(const_index_bytes.try_into().unwrap());
             instr!("LOAD_CLOSURE");
             reg!();
-            let chunk_name = state
-                .with_chunk(chunk_index, |c| c.name.to_string())
-                .expect("valid chunk index");
-            println!("FUNCTION<{name}:{chunk_index:04}>", name = chunk_name);
+            eprintln!("FUNCTION<{name}:{chunk_index:04}>", name = chunk.name);
 
             2 + size_of::<ChunkIndex>()
         }
@@ -95,7 +89,7 @@ pub(crate) fn print_instruction(
             instr!("LOAD_NIL");
             reg!(1);
             reg!(2);
-            println!();
+            eprintln!();
             3
         }
         Instruction::LoadShort => {
@@ -125,7 +119,7 @@ pub(crate) fn print_instruction(
             reg!(1);
             reg!(2);
             reg!(3);
-            println!();
+            eprintln!();
             4
         }
         Instruction::Sub => {
@@ -133,7 +127,7 @@ pub(crate) fn print_instruction(
             reg!(1);
             reg!(2);
             reg!(3);
-            println!();
+            eprintln!();
             4
         }
         Instruction::Mul => {
@@ -141,7 +135,7 @@ pub(crate) fn print_instruction(
             reg!(1);
             reg!(2);
             reg!(3);
-            println!();
+            eprintln!();
             4
         }
         Instruction::Div => {
@@ -149,7 +143,7 @@ pub(crate) fn print_instruction(
             reg!(1);
             reg!(2);
             reg!(3);
-            println!();
+            eprintln!();
             4
         }
         Instruction::Mod => {
@@ -157,7 +151,7 @@ pub(crate) fn print_instruction(
             reg!(1);
             reg!(2);
             reg!(3);
-            println!();
+            eprintln!();
             4
         }
         Instruction::Pow => {
@@ -165,7 +159,7 @@ pub(crate) fn print_instruction(
             reg!(1);
             reg!(2);
             reg!(3);
-            println!();
+            eprintln!();
             4
         }
         Instruction::IDiv => {
@@ -173,7 +167,7 @@ pub(crate) fn print_instruction(
             reg!(1);
             reg!(2);
             reg!(3);
-            println!();
+            eprintln!();
             4
         }
         Instruction::Band => {
@@ -181,7 +175,7 @@ pub(crate) fn print_instruction(
             reg!(1);
             reg!(2);
             reg!(3);
-            println!();
+            eprintln!();
             4
         }
         Instruction::Bor => {
@@ -189,7 +183,7 @@ pub(crate) fn print_instruction(
             reg!(1);
             reg!(2);
             reg!(3);
-            println!();
+            eprintln!();
             4
         }
         Instruction::Bxor => {
@@ -197,7 +191,7 @@ pub(crate) fn print_instruction(
             reg!(1);
             reg!(2);
             reg!(3);
-            println!();
+            eprintln!();
             4
         }
         Instruction::Shl => {
@@ -205,7 +199,7 @@ pub(crate) fn print_instruction(
             reg!(1);
             reg!(2);
             reg!(3);
-            println!();
+            eprintln!();
             4
         }
         Instruction::Shr => {
@@ -213,7 +207,7 @@ pub(crate) fn print_instruction(
             reg!(1);
             reg!(2);
             reg!(3);
-            println!();
+            eprintln!();
             4
         }
 
@@ -223,7 +217,7 @@ pub(crate) fn print_instruction(
             reg!(1);
             reg!(2);
             reg!(3);
-            println!();
+            eprintln!();
             4
         }
         Instruction::Ne => {
@@ -231,7 +225,7 @@ pub(crate) fn print_instruction(
             reg!(1);
             reg!(2);
             reg!(3);
-            println!();
+            eprintln!();
             4
         }
         Instruction::Lt => {
@@ -239,7 +233,7 @@ pub(crate) fn print_instruction(
             reg!(1);
             reg!(2);
             reg!(3);
-            println!();
+            eprintln!();
             4
         }
         Instruction::Le => {
@@ -247,7 +241,7 @@ pub(crate) fn print_instruction(
             reg!(1);
             reg!(2);
             reg!(3);
-            println!();
+            eprintln!();
             4
         }
 
@@ -257,7 +251,7 @@ pub(crate) fn print_instruction(
             reg!(1);
             reg!(2);
             reg!(3);
-            println!();
+            eprintln!();
             4
         }
 
@@ -266,28 +260,28 @@ pub(crate) fn print_instruction(
             instr!("NEG");
             reg!(1);
             reg!(2);
-            println!();
+            eprintln!();
             3
         }
         Instruction::Not => {
             instr!("NOT");
             reg!(1);
             reg!(2);
-            println!();
+            eprintln!();
             3
         }
         Instruction::Len => {
             instr!("LEN");
             reg!(1);
             reg!(2);
-            println!();
+            eprintln!();
             3
         }
         Instruction::BNot => {
             instr!("BNOT");
             reg!(1);
             reg!(2);
-            println!();
+            eprintln!();
             3
         }
 
@@ -296,41 +290,41 @@ pub(crate) fn print_instruction(
             instr!("MOV");
             reg!(1);
             reg!(2);
-            println!();
+            eprintln!();
             3
         }
         Instruction::SetUpval => {
             let upval_index = instructions[instruction_pointer + 1];
             instr!("SET_UPVAL");
-            print!("{upval_index}");
+            eprint!("{upval_index}");
             reg!();
-            println!();
+            eprintln!();
             3
         }
         Instruction::GetUpval => {
             let upval_index = instructions[instruction_pointer + 2];
             instr!("GET_UPVAL");
             reg!();
-            println!("{upval_index}");
+            eprintln!("{upval_index}");
             3
         }
         Instruction::LoadVararg => {
             let is_single_value = instructions[instruction_pointer + 2] == 1;
             instr!("LOAD_VARARG");
             reg!();
-            println!("{}", if is_single_value { "single" } else { "multi" });
+            eprintln!("{}", if is_single_value { "single" } else { "multi" });
             3
         }
         Instruction::ToClose => {
             instr!("TO_CLOSE");
             reg!();
-            println!();
+            eprintln!();
             2
         }
         Instruction::Close => {
             instr!("CLOSE");
             reg!();
-            println!();
+            eprintln!();
             2
         }
 
@@ -338,7 +332,7 @@ pub(crate) fn print_instruction(
         Instruction::NewTable => {
             instr!("NEW_TABLE");
             reg!();
-            println!();
+            eprintln!();
             2
         }
         Instruction::SetTable => {
@@ -346,7 +340,7 @@ pub(crate) fn print_instruction(
             reg!(1);
             reg!(2);
             reg!(3);
-            println!();
+            eprintln!();
             4
         }
         Instruction::SetTableConstKey => {
@@ -357,16 +351,16 @@ pub(crate) fn print_instruction(
             reg!(1);
             print_const(&consts[const_index as usize]);
             reg!(2 + size_of::<ConstIndex>());
-            println!();
+            eprintln!();
             3 + size_of::<ConstIndex>()
         }
         Instruction::SetTableUpval => {
             let upval_index = instructions[instruction_pointer + 2];
             instr!("SET_TABLE_UP");
             reg!(1);
-            print!("{upval_index}");
+            eprint!("{upval_index}");
             reg!(3);
-            println!();
+            eprintln!();
             4
         }
         Instruction::SetTableUpvalConstKey => {
@@ -375,10 +369,10 @@ pub(crate) fn print_instruction(
             let const_index = ConstIndex::from_be_bytes(const_index_bytes.try_into().unwrap());
             instr!("SET_TABLE_UP_CK");
             let upval_index = instructions[instruction_pointer + 1];
-            print!("{upval_index} ");
+            eprint!("{upval_index} ");
             print_const(&consts[const_index as usize]);
             reg!(2 + size_of::<ConstIndex>());
-            println!();
+            eprintln!();
             3 + size_of::<ConstIndex>()
         }
         Instruction::GetTable => {
@@ -386,7 +380,7 @@ pub(crate) fn print_instruction(
             reg!(1);
             reg!(2);
             reg!(3);
-            println!();
+            eprintln!();
             4
         }
         Instruction::GetTableConstKey => {
@@ -397,16 +391,16 @@ pub(crate) fn print_instruction(
             reg!(1);
             reg!(2);
             print_const(&consts[const_index as usize]);
-            println!();
+            eprintln!();
             3 + size_of::<ConstIndex>()
         }
         Instruction::GetTableUpval => {
             let upval_index = instructions[instruction_pointer + 3];
             instr!("GET_TABLE_UP");
             reg!(1);
-            print!("{upval_index}");
+            eprint!("{upval_index}");
             reg!(3);
-            println!();
+            eprintln!();
             4
         }
         Instruction::GetTableUpvalConstKey => {
@@ -416,23 +410,23 @@ pub(crate) fn print_instruction(
             instr!("GET_TABLE_UP_CK");
             reg!(1);
             let upval_index = instructions[instruction_pointer + 2];
-            print!("{upval_index} ");
+            eprint!("{upval_index} ");
             print_const(&consts[const_index as usize]);
-            println!();
+            eprintln!();
             3 + size_of::<ConstIndex>()
         }
         Instruction::AppendToTable => {
             instr!("APPEND_TO_TABLE");
             reg!();
             let num_values = instructions[instruction_pointer + 2];
-            println!("{num_values}");
+            eprintln!("{num_values}");
             3
         }
         Instruction::AppendToTableM => {
             instr!("APPEND_TO_TABLE_M");
             reg!();
             let num_values = instructions[instruction_pointer + 2];
-            println!("{num_values}");
+            eprintln!("{num_values}");
             3
         }
 
@@ -451,7 +445,7 @@ pub(crate) fn print_instruction(
                 _ => unreachable!(),
             });
             reg!();
-            println!(
+            eprintln!(
                 "{:9} {num_params}",
                 if is_single_return { "single" } else { "multi" },
             );
@@ -461,24 +455,25 @@ pub(crate) fn print_instruction(
             instr!("RETURN");
             reg!();
             let n = instructions[instruction_pointer + 2];
-            println!("{n}");
+            eprintln!("{n}");
             3
         }
         Instruction::Return0 => {
-            println!("RETURN0");
+            instr!("RETURN0");
+            eprintln!();
             1
         }
         Instruction::Return1 => {
             instr!("RETURN1");
             reg!();
-            println!();
+            eprintln!();
             2
         }
         Instruction::ReturnM => {
             instr!("RETURN_M");
             reg!();
             let n = instructions[instruction_pointer + 2];
-            println!("{n}");
+            eprintln!("{n}");
             3
         }
 
@@ -488,7 +483,7 @@ pub(crate) fn print_instruction(
                 [instruction_pointer + 1..instruction_pointer + 1 + size_of::<JumpAddr>()];
             let offset = JumpAddr::from_be_bytes(offset_bytes.try_into().unwrap());
             instr!("JMP");
-            println!("{offset:04}");
+            eprintln!("{offset:04}");
             1 + size_of::<JumpAddr>()
         }
         Instruction::JmpTrue => {
@@ -497,7 +492,7 @@ pub(crate) fn print_instruction(
             let offset = JumpAddr::from_be_bytes(offset_bytes.try_into().unwrap());
             instr!("JMP_TRUE");
             reg!();
-            println!("{offset:04}");
+            eprintln!("{offset:04}");
             2 + size_of::<JumpAddr>()
         }
         Instruction::JmpFalse => {
@@ -506,7 +501,7 @@ pub(crate) fn print_instruction(
             let offset = JumpAddr::from_be_bytes(offset_bytes.try_into().unwrap());
             instr!("JMP_FALSE");
             reg!();
-            println!("{offset:04}");
+            eprintln!("{offset:04}");
             2 + size_of::<JumpAddr>()
         }
         Instruction::JmpClose => {
@@ -515,7 +510,7 @@ pub(crate) fn print_instruction(
             let offset = JumpAddr::from_be_bytes(offset_bytes.try_into().unwrap());
             instr!("JMP_CLOSE");
             reg!();
-            println!("{offset:04}");
+            eprintln!("{offset:04}");
             2 + size_of::<JumpAddr>()
         }
 
@@ -524,7 +519,7 @@ pub(crate) fn print_instruction(
             let error_code = instructions[instruction_pointer + 1];
             let error = RuntimeError::try_from(error_code).expect("valid error code");
             instr!("ERROR");
-            println!("{:?}", error);
+            eprintln!("{:?}", error);
             2
         }
     }
