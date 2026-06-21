@@ -89,9 +89,7 @@ impl From<LuaClosure> for LuaValue {
 
 impl From<LuaState> for LuaValue {
     fn from(state: LuaState) -> Self {
-        LuaValue::from_object(Arc::new(RwLock::new(LuaObject::Thread(Arc::new(
-            RwLock::new(state),
-        )))))
+        LuaValue::from_object(Arc::new(RwLock::new(LuaObject::Thread(Box::new(state)))))
     }
 }
 

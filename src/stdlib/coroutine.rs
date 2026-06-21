@@ -45,18 +45,17 @@ fn create(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
 }
 
 fn resume(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
-    let co = state.arg_as_thread(0)?;
     let mut args = state.args();
     args.remove(0); // remove the thread argument
 
-    Ok(match co.write().unwrap().resume(args) {
+    state.with_arg_as_mut_thread(0, |co| match co.resume(args) {
         Ok(mut result) => {
             result.insert(0, LuaValue::from_bool(true));
-            result
+            Ok(result)
         }
         Err(e) => {
             let msg = e.message.into_bytes();
-            vec![LuaValue::from_bool(false), msg.into()]
+            Ok(vec![LuaValue::from_bool(false), msg.into()])
         }
     })
 }

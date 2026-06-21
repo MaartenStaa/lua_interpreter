@@ -6,7 +6,10 @@ use std::{
 use crate::{
     LuaState,
     error::lua_error,
-    value::{IntegerRepr, LuaNumber, LuaObject, LuaString, LuaValue, UpValue, callable::Callable},
+    value::{
+        IntegerRepr, LuaClosure, LuaNumber, LuaObject, LuaString, LuaTable, LuaValue, UpValue,
+        UserData, callable::Callable,
+    },
     vm::CallFrameKind,
 };
 
@@ -82,24 +85,6 @@ impl LuaState {
                     self.arg_err::<()>(index, format!("function expected, got {}", o.type_name()))
                         .unwrap_err()
                 })?)
-            }
-            Some(value) => self.arg_err(
-                index,
-                format!("function expected, got {}", value.type_name()),
-            ),
-            None => self.arg_err(index, "function expected, got no value"),
-        }
-    }
-
-    pub fn arg_as_thread(&self, index: usize) -> crate::Result<Arc<RwLock<LuaState>>> {
-        match self.try_arg(0) {
-            Some(v) if v.is_object() => {
-                let o = &*unsafe { v.as_object() }.write().unwrap();
-                let LuaObject::Thread(thread) = o else {
-                    return self.arg_err(index, format!("thread expected, got {}", o.type_name()));
-                };
-
-                Ok(Arc::clone(thread))
             }
             Some(value) => self.arg_err(
                 index,
@@ -210,3 +195,55 @@ arg_primary_type!(number, LuaNumber);
 arg_primary_type!(string, LuaString, into);
 arg_primary_type!(object, Arc<RwLock<LuaObject>>, into);
 arg_primary_type!(upvalue, Arc<RwLock<UpValue>>, into);
+
+macro_rules! impl_arg_object_type {
+    ($name:ident, $variant:ident, $owned_result:ty) => {
+        paste::paste! {
+            impl LuaState {
+                /// Get the argument at the given index for the current function call, and convert
+                /// it to the given type. Returns an error if the argument is not of the expected
+                /// type.
+                pub fn [<with_arg_as_ $name>]<F, R>(&self, index: usize, callback: F) -> crate::Result<R>
+                where
+                    F: FnOnce(&$owned_result) -> crate::Result<R>
+                {
+                    match self.try_arg(index) {
+                        Some(v) if v.is_object() => match &*unsafe { v.as_object() }.read().unwrap() {
+                            LuaObject::$variant(item) => callback(item),
+                            _ => self.arg_err(index, format!("{} expected, got {}", stringify!($name), v.type_name())),
+                        },
+                        Some(value) => {
+                            self.arg_err(index, format!("{} expected, got {}", stringify!($name), value.type_name()))
+                        }
+                        None => self.arg_err(index, format!("{} expected, got no value", stringify!($name))),
+                    }
+                }
+
+                /// Get the argument at the given index for the current function call, and convert
+                /// it to the given type. Returns an error if the argument is not of the expected
+                /// type.
+                pub fn [<with_arg_as_mut_ $name>]<F, R>(&self, index: usize, callback: F) -> crate::Result<R>
+                where
+                    F: FnOnce(&mut $owned_result) -> crate::Result<R>
+                {
+                    match self.try_arg(index) {
+                        Some(v) if v.is_object() => match &mut *unsafe { v.as_object() }.write().unwrap() {
+                            LuaObject::$variant(item) => callback(item),
+                            _ => self.arg_err(index, format!("{} expected, got {}", stringify!($name), v.type_name())),
+                        },
+                        Some(value) => {
+                            self.arg_err(index, format!("{} expected, got {}", stringify!($name), value.type_name()))
+                        }
+                        None => self.arg_err(index, format!("{} expected, got no value", stringify!($name))),
+                    }
+                }
+            }
+        }
+    };
+}
+
+
+impl_arg_object_type!(table, Table, LuaTable);
+impl_arg_object_type!(closure, Closure, LuaClosure);
+impl_arg_object_type!(user_data, UserData, UserData);
+impl_arg_object_type!(thread, Thread, LuaState);

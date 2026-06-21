@@ -1,9 +1,5 @@
 use crate::{LuaState, value::NativeLuaFunction};
-use std::{
-    fmt::Display,
-    hash::Hash,
-    sync::{Arc, RwLock},
-};
+use std::{fmt::Display, hash::Hash};
 
 use super::{UserData, closure::LuaClosure, table::LuaTable};
 
@@ -13,7 +9,7 @@ pub enum LuaObject {
     Closure(LuaClosure),
     NativeFunction(&'static str, NativeLuaFunction),
     UserData(UserData),
-    Thread(Arc<RwLock<LuaState>>),
+    Thread(Box<LuaState>),
 }
 
 impl PartialEq for LuaObject {
