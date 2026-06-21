@@ -36,10 +36,14 @@ impl LuaState {
             origin_kind
         } else {
             // In this case, the error originated from the current top call frame.
-            self.call_stack[self.call_stack_index - 1].kind
+            self.call_frame().kind
         };
 
-        if let CallFrameKind::Lua { chunk: chunk_idx, ip } = origin_kind {
+        if let CallFrameKind::Lua {
+            chunk: chunk_idx,
+            ip,
+        } = origin_kind
+        {
             self.with_chunk(chunk_idx, |chunk| {
                 if let Some(span) = chunk.instruction_spans.get(&ip) {
                     let source = chunk.named_source();
@@ -102,10 +106,19 @@ impl LuaState {
 
     fn error_for_frame(&self, kind: CallFrameKind, index: usize) -> LuaError {
         match kind {
-            CallFrameKind::Lua { chunk: chunk_idx, ip } => {
-                let (chunk_name, span, source) = self.with_chunk(chunk_idx, |chunk| {
-                    (chunk.name.clone(), chunk.instruction_spans.get(&ip).copied(), chunk.named_source())
-                }).unwrap();
+            CallFrameKind::Lua {
+                chunk: chunk_idx,
+                ip,
+            } => {
+                let (chunk_name, span, source) = self
+                    .with_chunk(chunk_idx, |chunk| {
+                        (
+                            chunk.name.clone(),
+                            chunk.instruction_spans.get(&ip).copied(),
+                            chunk.named_source(),
+                        )
+                    })
+                    .unwrap();
                 let mut err =
                     LuaError::new(format!("#{index} {}", String::from_utf8_lossy(&chunk_name)));
 

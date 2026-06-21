@@ -62,7 +62,7 @@ impl LuaState {
     }
 
     pub fn get_current_chunk_name(&self) -> Option<LuaString> {
-        match self.call_stack[self.call_stack_index - 1].kind {
+        match self.call_frame().kind {
             CallFrameKind::Lua { chunk, .. } => self.with_chunk(chunk, |c| c.name.clone()),
             CallFrameKind::Native { .. } => None,
         }
@@ -78,7 +78,7 @@ impl LuaState {
 
     #[inline]
     fn get(&self, register: impl Into<usize>) -> LuaValue {
-        let frame_pointer = self.call_stack[self.call_stack_index - 1].frame_pointer;
+        let frame_pointer = self.call_frame().frame_pointer;
         let value = &self.stack[frame_pointer + register.into()];
         if value.is_upvalue() {
             unsafe { value.as_upvalue() }.read().unwrap().0.clone()
@@ -90,7 +90,7 @@ impl LuaState {
     #[inline]
     fn get_upvalue(&self, index: impl Into<usize>) -> LuaValue {
         let upval_index = index.into();
-        let frame = &self.call_stack[self.call_stack_index - 1];
+        let frame = self.call_frame();
         let upvalues = frame.upvalues.as_ref().expect("frame has no upvalues");
         let upvalue = upvalues
             .get(&upval_index)
@@ -100,7 +100,7 @@ impl LuaState {
 
     #[inline]
     fn get_ref(&self, register: impl Into<usize>) -> Cow<'_, LuaValue> {
-        let frame_pointer = self.call_stack[self.call_stack_index - 1].frame_pointer;
+        let frame_pointer = self.call_frame().frame_pointer;
         let value = &self.stack[frame_pointer + register.into()];
         if value.is_upvalue() {
             Cow::Owned(unsafe { value.as_upvalue().read().unwrap().0.clone() })
@@ -111,8 +111,22 @@ impl LuaState {
 
     #[inline]
     fn set(&mut self, register: impl Into<usize>, value: LuaValue) {
-        let frame_pointer = self.call_stack[self.call_stack_index - 1].frame_pointer;
+        let frame_pointer = self.call_frame().frame_pointer;
         self.stack[frame_pointer + register.into()] = value;
+    }
+
+    #[inline(always)]
+    pub(crate) fn call_frame(&self) -> &CallFrame {
+        debug_assert!(self.call_stack_index > 0, "no call frame available");
+
+        &self.call_stack[self.call_stack_index - 1]
+    }
+
+    #[inline(always)]
+    pub(crate) fn call_frame_mut(&mut self) -> &mut CallFrame {
+        debug_assert!(self.call_stack_index > 0, "no call frame available");
+
+        &mut self.call_stack[self.call_stack_index - 1]
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -173,7 +187,7 @@ impl LuaState {
     }
 
     fn ensure_stack_space(&mut self, max_registers: impl Into<usize>) {
-        let frame_pointer = self.call_stack[self.call_stack_index - 1].frame_pointer;
+        let frame_pointer = self.call_frame().frame_pointer;
         let max_registers = max_registers.into();
         let required_stack_size = frame_pointer + max_registers;
         if required_stack_size >= self.stack.len() {
@@ -189,7 +203,7 @@ impl LuaState {
         &mut self,
         values: impl IntoIterator<Item = LuaValue> + Debug + WithCount,
     ) -> u8 {
-        let call_frame = &self.call_stack[self.call_stack_index - 1];
+        let call_frame = self.call_frame();
         let frame_pointer = call_frame.frame_pointer;
         let max_registers = call_frame.max_registers;
         let register = max_registers;
@@ -216,6 +230,11 @@ impl LuaState {
             allow_multi_return_values: frame.allow_multi_return_values,
         };
 
+        debug_assert!(
+            self.call_stack_index > 0 || popped_frame.border_frame,
+            "popped the last call frame without a border frame"
+        );
+
         frame.upvalues.as_mut().unwrap().clear();
         frame.varargs.clear();
         frame.to_close.clear();
@@ -224,7 +243,7 @@ impl LuaState {
     }
 
     pub(crate) fn capture_upvalue(&mut self, register: u8) -> Arc<RwLock<UpValue>> {
-        let frame_pointer = self.call_stack[self.call_stack_index - 1].frame_pointer;
+        let frame_pointer = self.call_frame().frame_pointer;
         let value = &self.stack[frame_pointer + register as usize];
         if value.is_upvalue() {
             return unsafe { value.into_upvalue() };
@@ -278,15 +297,14 @@ impl LuaState {
                 // Note: Native functions are not supported as coroutines - coroutine.create() rejects them
                 // If this is ever extended to support native functions, we would need to store the function
                 // pointer in the call frame and handle it specially here
-                let (chunk_num_args, has_varargs) =
-                    match self.call_stack[self.call_stack_index - 1].kind {
-                        CallFrameKind::Lua { chunk, .. } => self
-                            .with_chunk(chunk, |c| (c.num_params, c.has_varargs))
-                            .unwrap(),
-                        CallFrameKind::Native { .. } => {
-                            unreachable!("native functions cannot be used as coroutines")
-                        }
-                    };
+                let (chunk_num_args, has_varargs) = match self.call_frame().kind {
+                    CallFrameKind::Lua { chunk, .. } => self
+                        .with_chunk(chunk, |c| (c.num_params, c.has_varargs))
+                        .unwrap(),
+                    CallFrameKind::Native { .. } => {
+                        unreachable!("native functions cannot be used as coroutines")
+                    }
+                };
                 self.align_closure_args(chunk_num_args, num_args, has_varargs);
             }
             ThreadStatus::Suspended {
@@ -450,7 +468,7 @@ impl LuaState {
             let num_varargs = num_passed_params - num_params;
             for i in 0..num_varargs {
                 let arg = self.get(num_params + i);
-                self.call_stack[self.call_stack_index - 1].varargs.push(arg);
+                self.call_frame_mut().varargs.push(arg);
             }
         }
 
@@ -460,12 +478,12 @@ impl LuaState {
     }
 
     fn clear_registers_from(&mut self, from_register: impl Into<usize>) {
-        let frame_pointer = self.call_stack[self.call_stack_index - 1].frame_pointer;
+        let frame_pointer = self.call_frame().frame_pointer;
         self.stack[frame_pointer + from_register.into()..].fill(LuaValue::NIL);
     }
 
     fn clear_registers_between(&mut self, from_register: u8, to_register: u8) {
-        let frame_pointer = self.call_stack[self.call_stack_index - 1].frame_pointer;
+        let frame_pointer = self.call_frame().frame_pointer;
         self.stack[frame_pointer + from_register as usize..=frame_pointer + to_register as usize]
             .fill(LuaValue::NIL);
     }
@@ -479,7 +497,7 @@ impl LuaState {
     ) -> crate::Result<Vec<LuaValue>> {
         let original_call_stack_index = self.call_stack_index;
         let parent_frame_pointer = if self.call_stack_index > 0 {
-            self.call_stack[self.call_stack_index - 1].frame_pointer
+            self.call_frame().frame_pointer
         } else {
             0
         };
@@ -528,7 +546,7 @@ impl LuaState {
             let CallFrameKind::Lua {
                 chunk: chunk_index,
                 ip,
-            } = self.call_stack[self.call_stack_index - 1].kind
+            } = self.call_frame().kind
             else {
                 unreachable!("native function call frame in run_inner");
             };
@@ -754,7 +772,7 @@ impl LuaState {
                             self.status = ThreadStatus::Suspended {
                                 resume_args_register: Some($dest_r),
                             };
-                            self.call_stack[self.call_stack_index - 1].inc_ip(3);
+                            self.call_frame_mut().inc_ip(3);
                             return Ok(result);
                         }
                     }
@@ -774,7 +792,7 @@ impl LuaState {
                             self.status = ThreadStatus::Suspended {
                                 resume_args_register: Some($dest_r),
                             };
-                            self.call_stack[self.call_stack_index - 1].inc_ip($ip_inc);
+                            self.call_frame_mut().inc_ip($ip_inc);
                             return Ok(result);
                         }
                     }
@@ -811,7 +829,7 @@ impl LuaState {
                             } else {
                                 closure.upvalues.insert(
                                     i,
-                                    self.call_stack[self.call_stack_index - 1]
+                                    self.call_frame()
                                         .upvalues
                                         .as_ref()
                                         .unwrap()
@@ -1029,7 +1047,7 @@ impl LuaState {
                     let dest = register!(1);
                     let src = register!(2);
 
-                    let frame_pointer = self.call_stack[self.call_stack_index - 1].frame_pointer;
+                    let frame_pointer = self.call_frame().frame_pointer;
                     let value = self.get(src);
                     if self.stack[frame_pointer + dest as usize].is_upvalue() {
                         let mut upval =
@@ -1047,7 +1065,8 @@ impl LuaState {
                     let upval_index = instr_param!();
                     let register = register!(2);
                     let value = self.get(register);
-                    let mut upval = self.call_stack[self.call_stack_index - 1]
+                    let mut upval = self
+                        .call_frame()
                         .upvalues
                         .as_ref()
                         .unwrap()
@@ -1072,7 +1091,8 @@ impl LuaState {
                     let register = register!();
                     let is_single_vararg = instr_param!(2) == 1;
                     if is_single_vararg {
-                        let value = self.call_stack[self.call_stack_index - 1]
+                        let value = self
+                            .call_frame()
                             .varargs
                             .first()
                             .cloned()
@@ -1080,7 +1100,7 @@ impl LuaState {
                         self.set(register, value);
                     } else {
                         // Ensure we'll have enough space on the stack.
-                        let varargs = self.call_stack[self.call_stack_index - 1].varargs.clone();
+                        let varargs = self.call_frame().varargs.clone();
                         self.multres = varargs.len();
                         self.ensure_stack_space(register as usize + varargs.len());
 
@@ -1095,9 +1115,7 @@ impl LuaState {
                 }
                 Instruction::ToClose => {
                     let register = register!();
-                    self.call_stack[self.call_stack_index - 1]
-                        .to_close
-                        .push(register);
+                    self.call_frame_mut().to_close.push(register);
                     2
                 }
                 Instruction::Close => {
@@ -1329,9 +1347,7 @@ impl LuaState {
                                             }
                                             _ => unreachable!(),
                                         };
-                                        let parent_frame_pointer = self.call_stack
-                                            [self.call_stack_index - 1]
-                                            .frame_pointer;
+                                        let parent_frame_pointer = self.call_frame().frame_pointer;
                                         self.set_up_closure_call_frame(
                                             parent_frame_pointer + table_r as usize,
                                             ip + increment,
@@ -1441,8 +1457,7 @@ impl LuaState {
                     let callable = callable.map(|c| c.method);
                     match callable {
                         Some(Method::Closure(closure)) => {
-                            let parent_frame_pointer =
-                                self.call_stack[self.call_stack_index - 1].frame_pointer;
+                            let parent_frame_pointer = self.call_frame().frame_pointer;
                             let (max_regs, num_params, has_varargs) = self
                                 .with_chunk(closure.chunk, |c| {
                                     (c.max_registers, c.num_params, c.has_varargs)
@@ -1475,7 +1490,7 @@ impl LuaState {
                                     resume_args_register: Some(func_r),
                                 };
                                 // Increment IP past the Call instruction so we don't re-execute it on resume
-                                self.call_stack[self.call_stack_index - 1].inc_ip(4);
+                                self.call_frame_mut().inc_ip(4);
                                 return Ok(ExecutionResult::Yielded(yield_values));
                             }
 
@@ -1527,7 +1542,9 @@ impl LuaState {
                         num_args,
                         takes_varargs,
                         ..
-                    } = self.call_stack[self.call_stack_index - 1];
+                    } = self.call_frame();
+                    let num_args = *num_args;
+                    let takes_varargs = *takes_varargs;
 
                     // Copy over the args to the start of the frame pointer
                     for i in 0..num_passed_args {
@@ -1538,7 +1555,7 @@ impl LuaState {
                     self.align_closure_args(num_args, num_passed_args, takes_varargs);
 
                     // Then just jump back to the start of this closure.
-                    self.call_stack[self.call_stack_index - 1].set_ip(0);
+                    self.call_frame_mut().set_ip(0);
                     continue;
                 }
                 instr @ Instruction::Return
@@ -1579,7 +1596,7 @@ impl LuaState {
                         return Ok(ExecutionResult::Completed(return_values));
                     }
 
-                    self.call_stack[self.call_stack_index - 1].set_ip(frame.return_addr);
+                    self.call_frame_mut().set_ip(frame.return_addr);
 
                     self.ensure_stack_space(
                         frame.return_value_register as usize + return_values.len(),
@@ -1613,7 +1630,7 @@ impl LuaState {
                         // label?
                         return Err(lua_error!("attempt to jump to an invalid address"));
                     }
-                    self.call_stack[self.call_stack_index - 1].set_ip(addr as usize);
+                    self.call_frame_mut().set_ip(addr as usize);
                     continue;
                 }
                 Instruction::JmpTrue => {
@@ -1621,7 +1638,7 @@ impl LuaState {
                     let value = self.get_ref(register);
                     if value.cast_to_bool() {
                         let addr = jump_addr!(2);
-                        self.call_stack[self.call_stack_index - 1].set_ip(addr as usize);
+                        self.call_frame_mut().set_ip(addr as usize);
                         continue;
                     }
                     2 + size_of::<JumpAddr>()
@@ -1631,7 +1648,7 @@ impl LuaState {
                     let value = self.get_ref(register);
                     if !value.cast_to_bool() {
                         let addr = jump_addr!(2);
-                        self.call_stack[self.call_stack_index - 1].set_ip(addr as usize);
+                        self.call_frame_mut().set_ip(addr as usize);
                         continue;
                     }
                     2 + size_of::<JumpAddr>()
@@ -1647,7 +1664,7 @@ impl LuaState {
                     }
 
                     self.close(from_register, None)?;
-                    self.call_stack[self.call_stack_index - 1].set_ip(addr as usize);
+                    self.call_frame_mut().set_ip(addr as usize);
 
                     continue;
                 }
@@ -1658,7 +1675,7 @@ impl LuaState {
                     return Err(RuntimeError::try_from(error_type)?).into_lua_error();
                 }
             };
-            self.call_stack[self.call_stack_index - 1].inc_ip(instruction_increment);
+            self.call_frame_mut().inc_ip(instruction_increment);
         }
     }
 }

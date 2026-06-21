@@ -608,7 +608,7 @@ pub(crate) fn require(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
 
     // Loop through each package path option
     let package_config = &package::CONFIG;
-    let called_from = match state.call_stack[state.call_stack_index - 1].kind {
+    let called_from = match state.call_frame().kind {
         crate::vm::CallFrameKind::Lua { chunk, .. } => state
             .with_chunk(chunk, |c| c.get_filename().map(|p| p.to_path_buf()))
             .expect("valid chunk"),

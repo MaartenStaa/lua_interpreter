@@ -14,25 +14,25 @@ use crate::{
 impl LuaState {
     /// Get the number of arguments passed to the current function call.
     pub fn num_args(&self) -> usize {
-        self.call_stack[self.call_stack_index - 1].num_args as usize
+        self.call_frame().num_args as usize
     }
 
     /// Get all arguments for the current function call.
     pub fn args(&self) -> Vec<LuaValue> {
-        let num_args = self.call_stack[self.call_stack_index - 1].num_args as usize;
+        let num_args = self.call_frame().num_args as usize;
         (0..num_args).map(|i| self.get(i)).collect()
     }
 
     /// Get references to all arguments for the current function call.
     pub fn args_ref(&self) -> Vec<Cow<'_, LuaValue>> {
-        let num_args = self.call_stack[self.call_stack_index - 1].num_args as usize;
+        let num_args = self.call_frame().num_args as usize;
         (0..num_args).map(|i| self.get_ref(i)).collect()
     }
 
     /// Get the argument at the given index for the current function call. Returns
     /// [`LuaValue::NIL`] if the index is out of bounds (>= the number of passed arguments).
     pub fn arg(&self, index: usize) -> LuaValue {
-        let num_args = self.call_stack[self.call_stack_index - 1].num_args as usize;
+        let num_args = self.call_frame().num_args as usize;
         if index >= num_args {
             return LuaValue::NIL;
         }
@@ -43,7 +43,7 @@ impl LuaState {
     /// Try to get the argument at the given index for the current function call. Returns
     /// [`Option::None`] if the index is out of bounds (>= the number of passed arguments).
     pub fn try_arg(&self, index: usize) -> Option<LuaValue> {
-        let num_args = self.call_stack[self.call_stack_index - 1].num_args as usize;
+        let num_args = self.call_frame().num_args as usize;
         if index >= num_args {
             return None;
         }
@@ -54,7 +54,7 @@ impl LuaState {
     /// Ensure that the argument at the given index for the current function call exists. Like
     /// [`Self::arg`], but returns an error if the index is out of bounds.
     pub fn ensure_arg(&self, index: usize) -> crate::Result<LuaValue> {
-        let num_args = self.call_stack[self.call_stack_index - 1].num_args as usize;
+        let num_args = self.call_frame().num_args as usize;
         if index >= num_args {
             return self.arg_err(index, "value expected");
         }
@@ -65,7 +65,7 @@ impl LuaState {
     /// Get a reference to the argument at the given index for the current function call. Like
     /// [`Self::arg`], returns [`LuaValue::NIL`] if the index is out of bounds.
     pub fn arg_ref(&self, index: usize) -> Cow<'_, LuaValue> {
-        let num_args = self.call_stack[self.call_stack_index - 1].num_args as usize;
+        let num_args = self.call_frame().num_args as usize;
         if index >= num_args {
             return std::borrow::Cow::Owned(LuaValue::NIL);
         }
@@ -110,7 +110,7 @@ impl LuaState {
     }
 
     pub(crate) fn arg_err<T>(&self, index: usize, message: impl AsRef<str>) -> crate::Result<T> {
-        let frame = &self.call_stack[self.call_stack_index - 1];
+        let frame = self.call_frame();
         let name: Cow<'_, str> = match frame.kind {
             CallFrameKind::Lua { chunk, .. } => {
                 Cow::Owned(self.with_chunk(chunk, |c| c.name.to_string()).unwrap())

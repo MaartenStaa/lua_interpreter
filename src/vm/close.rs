@@ -16,7 +16,7 @@ impl LuaState {
     ) -> crate::Result<()> {
         // This clone is unfortunate, but otherwise the borrow-checker won't be happy
         // with us calling `run_closure` or `run_native_function` below.
-        let to_close = self.call_stack[self.call_stack_index - 1].to_close.clone();
+        let to_close = self.call_frame().to_close.clone();
 
         // Iterate in reverse order (LIFO)
         let mut stopped_at = 0;
@@ -63,9 +63,7 @@ impl LuaState {
         }
 
         // Remove closed registers from to_close list
-        self.call_stack[self.call_stack_index - 1]
-            .to_close
-            .truncate(stopped_at);
+        self.call_frame_mut().to_close.truncate(stopped_at);
         self.clear_registers_from(from_register);
 
         Ok(())
