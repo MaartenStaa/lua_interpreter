@@ -1376,7 +1376,6 @@ impl LuaState {
                                         } else {
                                             self.set(dest_r, LuaValue::NIL);
                                         }
-                                        self.pop_call_frame();
                                     }
                                 }
                                 handled = true;
