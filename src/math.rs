@@ -216,10 +216,8 @@ impl ops::Not for &LuaValue {
     fn not(self) -> bool {
         if self.is_bool() {
             !unsafe { self.as_bool() }
-        } else if self.is_nil() {
-            true
         } else {
-            false
+            self.is_nil()
         }
     }
 }
