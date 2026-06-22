@@ -1208,20 +1208,10 @@ impl LuaState {
                                         // - args_r + 1 points to the key
                                         // - args_r + 2 points to the value
                                         let args_r = match instr {
-                                            Instruction::SetTable => {
-                                                // Arguments are already correctly placed
-                                                register!(1)
-                                            }
-                                            Instruction::SetTableConstKey => {
-                                                let table_r = register!(1);
-                                                self.set(table_r + 1, key);
-                                                self.set(table_r + 2, value);
-                                                table_r
-                                            }
-                                            Instruction::SetTableUpval
+                                            Instruction::SetTable
+                                            | Instruction::SetTableConstKey
+                                            | Instruction::SetTableUpval
                                             | Instruction::SetTableUpvalConstKey => {
-                                                // The table here was an upvalue, so we need to
-                                                // push the table, key, and value onto the stack
                                                 self.extend_stack([target, key, value])
                                             }
                                             _ => unreachable!(),
@@ -1331,10 +1321,14 @@ impl LuaState {
                         if let Some(__index) = target.get_metavalue(&INDEX_KEY) {
                             let __index_callable: Result<Callable, _> = (&__index).try_into();
                             if let Ok(__index) = __index_callable {
-                                let table_r = match instr {
+                                let args_r = match instr {
                                     Instruction::GetTable => register!(2),
-                                    Instruction::GetTableConstKey
-                                    | Instruction::GetTableUpval
+                                    Instruction::GetTableConstKey => {
+                                        let table_r = register!(2);
+                                        self.set(table_r + 1, key);
+                                        table_r
+                                    }
+                                    Instruction::GetTableUpval
                                     | Instruction::GetTableUpvalConstKey => {
                                         // In these cases, the table and/or key are not yet
                                         // loaded into registers, which it needs to be for
@@ -1347,17 +1341,17 @@ impl LuaState {
                                     Method::Closure(closure) => {
                                         let parent_frame_pointer = self.call_frame().frame_pointer;
                                         self.set_up_closure_call_frame(
-                                            parent_frame_pointer + table_r as usize,
+                                            parent_frame_pointer + args_r as usize,
                                             ip + increment,
                                             dest_r,
                                             closure,
-                                            1usize,
+                                            2usize,
                                         )?;
                                         continue 'main;
                                     }
                                     Method::NativeFunction(name, f) => {
                                         let result =
-                                            self.run_native_function(name, f, table_r, 2)?;
+                                            self.run_native_function(name, f, args_r, 2)?;
 
                                         // Check if the native function yielded
                                         if let Some(yield_values) = self.pending_yield.take() {
