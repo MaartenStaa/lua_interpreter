@@ -414,7 +414,7 @@ impl LuaState {
         result
     }
 
-    pub(crate) fn set_up_closure_call_frame(
+    fn set_up_closure_call_frame(
         &mut self,
         frame_pointer: usize,
         return_addr: usize,
@@ -434,7 +434,7 @@ impl LuaState {
 
         self.push_call_frame(
             CallFrameKind::for_chunk(closure.chunk),
-            true,
+            false,
             frame_pointer,
             max_registers,
             return_addr,
@@ -1229,7 +1229,8 @@ impl LuaState {
                                         self.set_up_closure_call_frame(
                                             self.call_frame().frame_pointer + args_r as usize,
                                             ip + increment,
-                                            args_r,
+                                            // Dismiss return values, place them _after_ the table
+                                            args_r + 1,
                                             closure,
                                             3usize,
                                         )?;
