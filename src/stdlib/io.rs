@@ -285,42 +285,30 @@ fn file_write(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
 }
 
 fn close(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
-    match state.arg(0) {
-        value if !value.is_nil() => {
-            require_userdata!(write, Some(value), "io.close", 0, userdata, {
-                require_userdata_type!(write, userdata, "io.close", 0, File, file, _metatable, {
-                    file.handle.close()?;
-                    Ok(vec![LuaValue::from_bool(true)])
-                })
+    if let Some(result) = state.try_with_arg_as_mut_user_data(0, |userdata| {
+        require_userdata_type!(write, userdata, "io.close", 0, File, file, _metatable, {
+            file.handle.close()?;
+            Ok(vec![LuaValue::from_bool(true)])
+        })
+    })? {
+        return Ok(result);
+    }
+
+    let default = (*DEFAULT_OUTPUT.write().unwrap()).clone();
+    // FIXME: We shouldn't have to construct the `LuaValue` here.
+    require_userdata!(
+        write,
+        Some(LuaValue::from_object(default)),
+        "io.close",
+        0,
+        userdata,
+        {
+            require_userdata_type!(write, userdata, "io.close", 0, File, file, _metatable, {
+                file.handle.close()?;
+                Ok(vec![LuaValue::from_bool(true)])
             })
         }
-        _ => {
-            let default = (*DEFAULT_OUTPUT.write().unwrap()).clone();
-            // FIXME: We shouldn't have to construct the `LuaValue` here.
-            require_userdata!(
-                write,
-                Some(LuaValue::from_object(default)),
-                "io.close",
-                0,
-                userdata,
-                {
-                    require_userdata_type!(
-                        write,
-                        userdata,
-                        "io.close",
-                        0,
-                        File,
-                        file,
-                        _metatable,
-                        {
-                            file.handle.close()?;
-                            Ok(vec![LuaValue::from_bool(true)])
-                        }
-                    )
-                }
-            )
-        }
-    }
+    )
 }
 
 fn input(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
@@ -455,25 +443,21 @@ fn read(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
 }
 
 fn r#type(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
-    Ok(vec![match state.arg(0) {
-        v if v.is_object() => {
-            let o = unsafe { v.into_object() };
-            match &*o.read().unwrap() {
-                LuaObject::UserData(UserData::Full { data, .. }) => {
-                    if let Some(file) = data.read().unwrap().downcast_ref::<FileHandle>() {
-                        match file {
-                            FileHandle::Closed => LuaValue::from_string(b"closed file"),
-                            _ => LuaValue::from_string(b"file"),
-                        }
-                    } else {
-                        LuaValue::NIL
+    Ok(vec![state.with_arg_as_user_data(0, |u| {
+        Ok(match u {
+            UserData::Full { data, .. } => {
+                if let Some(file) = data.read().unwrap().downcast_ref::<FileHandle>() {
+                    match file {
+                        FileHandle::Closed => LuaValue::from_string(b"closed file"),
+                        _ => LuaValue::from_string(b"file"),
                     }
+                } else {
+                    LuaValue::NIL
                 }
-                _ => LuaValue::NIL,
             }
-        }
-        _ => LuaValue::NIL,
-    }])
+            _ => LuaValue::NIL,
+        })
+    })?])
 }
 
 fn write(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {

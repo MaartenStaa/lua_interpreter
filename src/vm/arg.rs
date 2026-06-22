@@ -237,11 +237,50 @@ macro_rules! impl_arg_object_type {
                         None => self.arg_err(index, format!("{} expected, got no value", stringify!($name))),
                     }
                 }
+
+                /// Get the argument at the given index for the current function call, and convert
+                /// it to the given type. Returns an error if the argument is not of the expected
+                /// type.
+                pub fn [<try_with_arg_as_ $name>]<F, R>(&self, index: usize, callback: F) -> crate::Result<Option<R>>
+                where
+                    F: FnOnce(&$owned_result) -> crate::Result<R>
+                {
+                    match self.try_arg(index) {
+                        Some(v) if v.is_object() => match &*unsafe { v.as_object() }.read().unwrap() {
+                            LuaObject::$variant(item) => callback(item).map(Some),
+                            _ => self.arg_err(index, format!("{} expected, got {}", stringify!($name), v.type_name())),
+                        },
+                        Some(v) if v.is_nil() => Ok(None),
+                        None => Ok(None),
+                        Some(value) => {
+                            self.arg_err(index, format!("{} expected, got {}", stringify!($name), value.type_name()))
+                        }
+                    }
+                }
+
+                /// Get the argument at the given index for the current function call, and convert
+                /// it to the given type. Returns an error if the argument is not of the expected
+                /// type.
+                pub fn [<try_with_arg_as_mut_ $name>]<F, R>(&self, index: usize, callback: F) -> crate::Result<Option<R>>
+                where
+                    F: FnOnce(&mut $owned_result) -> crate::Result<R>
+                {
+                    match self.try_arg(index) {
+                        Some(v) if v.is_object() => match &mut *unsafe { v.as_object() }.write().unwrap() {
+                            LuaObject::$variant(item) => callback(item).map(Some),
+                            _ => self.arg_err(index, format!("{} expected, got {}", stringify!($name), v.type_name())),
+                        },
+                        Some(v) if v.is_nil() => Ok(None),
+                        None => Ok(None),
+                        Some(value) => {
+                            self.arg_err(index, format!("{} expected, got {}", stringify!($name), value.type_name()))
+                        }
+                    }
+                }
             }
         }
     };
 }
-
 
 impl_arg_object_type!(table, Table, LuaTable);
 impl_arg_object_type!(closure, Closure, LuaClosure);
