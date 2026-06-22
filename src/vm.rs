@@ -1203,36 +1203,33 @@ impl LuaState {
                             if let Ok(__newindex) = __newindex_callable {
                                 match __newindex.method {
                                     Method::Closure(closure) => {
-                                        let frame_pointer = match instr {
+                                        // Ensure that we have an `args_r` value, such that:
+                                        // - args_r points to the target table
+                                        // - args_r + 1 points to the key
+                                        // - args_r + 2 points to the value
+                                        let args_r = match instr {
                                             Instruction::SetTable => {
                                                 // Arguments are already correctly placed
                                                 register!(1)
                                             }
                                             Instruction::SetTableConstKey => {
                                                 let table_r = register!(1);
+                                                self.set(table_r + 1, key);
                                                 self.set(table_r + 2, value);
                                                 table_r
                                             }
-                                            Instruction::SetTableUpval => {
-                                                let frame_pointer = register!(1);
-                                                self.set(frame_pointer, target);
-                                                self.set(frame_pointer + 1, key);
-                                                self.set(frame_pointer + 2, value);
-                                                frame_pointer
-                                            }
-                                            Instruction::SetTableUpvalConstKey => {
-                                                let frame_pointer = register!(1);
-                                                self.set(frame_pointer, target);
-                                                self.set(frame_pointer + 1, key);
-                                                self.set(frame_pointer + 2, value);
-                                                frame_pointer
+                                            Instruction::SetTableUpval
+                                            | Instruction::SetTableUpvalConstKey => {
+                                                // The table here was an upvalue, so we need to
+                                                // push the table, key, and value onto the stack
+                                                self.extend_stack([target, key, value])
                                             }
                                             _ => unreachable!(),
                                         };
                                         self.set_up_closure_call_frame(
-                                            frame_pointer as usize,
+                                            self.call_frame().frame_pointer + args_r as usize,
                                             ip + increment,
-                                            frame_pointer,
+                                            args_r,
                                             closure,
                                             3usize,
                                         )?;
