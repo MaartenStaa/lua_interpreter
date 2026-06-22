@@ -460,7 +460,7 @@ fn format(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
 
     let mut format_from = 0;
     for i in 1..state.num_args() {
-        let v = state.arg(1);
+        let v = state.arg(i);
         let Some((index, format)) =
             format_string
                 .iter()

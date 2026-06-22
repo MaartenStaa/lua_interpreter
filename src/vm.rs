@@ -1333,20 +1333,20 @@ impl LuaState {
                         if let Some(__index) = target.get_metavalue(&INDEX_KEY) {
                             let __index_callable: Result<Callable, _> = (&__index).try_into();
                             if let Ok(__index) = __index_callable {
+                                let table_r = match instr {
+                                    Instruction::GetTable => register!(2),
+                                    Instruction::GetTableConstKey
+                                    | Instruction::GetTableUpval
+                                    | Instruction::GetTableUpvalConstKey => {
+                                        // In these cases, the table and/or key are not yet
+                                        // loaded into registers, which it needs to be for
+                                        // the __index call.
+                                        self.extend_stack([table, key])
+                                    }
+                                    _ => unreachable!(),
+                                };
                                 match __index.method {
                                     Method::Closure(closure) => {
-                                        let table_r = match instr {
-                                            Instruction::GetTable => register!(2),
-                                            Instruction::GetTableConstKey
-                                            | Instruction::GetTableUpval
-                                            | Instruction::GetTableUpvalConstKey => {
-                                                // In these cases, the table and/or key are not yet
-                                                // loaded into registers, which it needs to be for
-                                                // the __index call.
-                                                self.extend_stack([table, key])
-                                            }
-                                            _ => unreachable!(),
-                                        };
                                         let parent_frame_pointer = self.call_frame().frame_pointer;
                                         self.set_up_closure_call_frame(
                                             parent_frame_pointer + table_r as usize,
@@ -1358,9 +1358,8 @@ impl LuaState {
                                         continue 'main;
                                     }
                                     Method::NativeFunction(name, f) => {
-                                        let args_r = self.extend_stack([table, key]);
                                         let result =
-                                            self.run_native_function(name, f, args_r, 2)?;
+                                            self.run_native_function(name, f, table_r, 2)?;
 
                                         // Check if the native function yielded
                                         if let Some(yield_values) = self.pending_yield.take() {
