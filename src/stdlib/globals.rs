@@ -384,31 +384,25 @@ pub(crate) fn load(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
 
 pub(crate) fn next(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
     require_table!(read, state.try_arg(0), "next", 0, table, {
-        let kv = match state.try_arg(1) {
-            None => table.iter().next(),
-            Some(v) if v.is_nil() => table.iter().next(),
-            Some(key) => {
-                // Find the key-value _after_ the given key
-                let iter = table.iter();
-                let mut key_found = false;
-                let mut kv = None;
-                for (k, v) in iter {
-                    if key_found {
-                        kv = Some((k, v));
-                        break;
-                    }
-                    if k == &key {
-                        key_found = true;
-                    }
+        let start_index = match state.arg(1) {
+            v if v.is_nil() => 0,
+            key => match table.get_index_of(&key) {
+                Some(i) => i + 1,
+                None => {
+                    return Err(lua_error!("invalid key to 'next'"));
                 }
-
-                kv
-            }
+            },
         };
 
-        match kv {
-            Some((k, v)) => Ok(vec![k.clone(), v.clone()]),
-            None => Ok(vec![LuaValue::NIL]),
+        let mut i = start_index;
+        loop {
+            match table.get_index(i) {
+                Some((k, v)) if !v.is_nil() => {
+                    return Ok(vec![k.clone(), v.clone()]);
+                }
+                Some(_) => i += 1,
+                None => return Ok(vec![LuaValue::NIL]),
+            }
         }
     })
 }
@@ -698,7 +692,7 @@ pub(crate) fn require(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
 
         assert_table!(write, package, package_table, {
             let loaded = package_table
-                .get_mut(&"loaded".into())
+                .get_mut(&LuaValue::from_string(b"loaded"))
                 .expect("package.loaded exists");
             assert_table!(write, loaded, loaded_table, {
                 loaded_table.insert(path_value.clone(), result.clone());

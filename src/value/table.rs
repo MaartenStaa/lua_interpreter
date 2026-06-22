@@ -1,8 +1,9 @@
 use std::{
-    collections::HashMap,
     fmt::Debug,
     ops::{Deref, DerefMut},
 };
+
+use indexmap::IndexMap;
 
 use crate::value::IntegerRepr;
 
@@ -10,7 +11,7 @@ use super::{LuaObject, LuaValue};
 
 #[derive(Clone, PartialEq)]
 pub struct LuaTable {
-    fields: HashMap<LuaValue, LuaValue>,
+    fields: IndexMap<LuaValue, LuaValue>,
     metatable: Option<LuaValue>,
     last_number_key: i64,
     is_sequence: bool,
@@ -19,7 +20,7 @@ pub struct LuaTable {
 impl LuaTable {
     pub fn new() -> Self {
         Self {
-            fields: HashMap::new(),
+            fields: IndexMap::new(),
             metatable: None,
             last_number_key: 0,
             is_sequence: true,
@@ -59,10 +60,13 @@ impl LuaTable {
         if key.is_float()
             && let Ok(i) = unsafe { key.as_float() }.integer_repr()
         {
-            return self.fields.get(&LuaValue::from_integer(i));
+            return self
+                .fields
+                .get(&LuaValue::from_integer(i))
+                .filter(|v| !v.is_nil());
         }
 
-        self.fields.get(key)
+        self.fields.get(key).filter(|v| !v.is_nil())
     }
 
     pub fn is_empty(&self) -> bool {
@@ -89,8 +93,6 @@ impl LuaTable {
 
         if value.is_nil() {
             self.is_sequence = false;
-            self.fields.remove(&key);
-            return;
         }
 
         self.fields.insert(key, value);
@@ -112,7 +114,7 @@ impl LuaTable {
             self.last_number_key -= 1;
         }
 
-        self.fields.remove(key);
+        self.fields.shift_remove(key);
     }
 
     pub fn append(&mut self, value: LuaValue) {
@@ -181,7 +183,7 @@ impl Debug for LuaTable {
 }
 
 impl Deref for LuaTable {
-    type Target = HashMap<LuaValue, LuaValue>;
+    type Target = IndexMap<LuaValue, LuaValue>;
 
     fn deref(&self) -> &Self::Target {
         &self.fields

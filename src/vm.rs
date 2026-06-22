@@ -1189,7 +1189,7 @@ impl LuaState {
                             && let o = unsafe { target.as_object() }
                             && let LuaObject::Table(t) = &mut *o.write().unwrap()
                         {
-                            if t.contains_key(&key) {
+                            if t.get(&key).is_some() {
                                 t.insert(key, value);
                                 handled = true;
                                 break;
