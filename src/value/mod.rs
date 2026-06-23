@@ -538,13 +538,13 @@ impl Debug for LuaValue {
                     write!(f, "{:?}", o)
                 }
                 Err(e) => {
-                    write!(f, "object<0x{:x}>: <locked: {e}>", &o as *const _ as usize)
+                    write!(f, "object<{o:012p}>: <locked: {e}>")
                 }
             },
             OldLuaValue::UpValue(u) => match u.try_write() {
                 Ok(inner) => write!(f, "{:?}", inner),
                 Err(e) => {
-                    write!(f, "upvalue<0x{:x}>: <locked: {e}>", &u as *const _ as usize)
+                    write!(f, "upvalue<{u:012p}>: <locked: {e}>")
                 }
             },
         }

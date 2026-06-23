@@ -55,21 +55,17 @@ impl LuaObject {
 impl Display for LuaObject {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            LuaObject::Table(_) => write!(f, "table: 0x{:x}", self as *const _ as usize),
+            LuaObject::Table(_) => write!(f, "table: {self:012p}"),
             LuaObject::Closure(LuaClosure { chunk, .. }) => {
-                write!(
-                    f,
-                    "function: 0x{:x} ({chunk:04})",
-                    self as *const _ as usize
-                )
+                write!(f, "function: {self:012p} ({chunk:04})")
             }
             LuaObject::NativeFunction(name, func) => {
-                write!(f, "function: 0x{:x} ({name})", func as *const _ as usize)
+                write!(f, "function: {func:012p} ({name})")
             }
             LuaObject::UserData(u) => {
                 write!(f, "{}", u)
             }
-            _ => todo!("formatting a {self:?}"),
+            LuaObject::Thread(_) => write!(f, "thread: {self:012p}"),
         }
     }
 }

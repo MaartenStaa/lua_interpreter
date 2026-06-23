@@ -63,7 +63,7 @@ impl Display for UserData {
             UserData::Full {
                 data, type_name, ..
             } => {
-                write!(f, "{} (0x{:x})", type_name, Arc::as_ptr(data) as usize)
+                write!(f, "{} ({data:010p})", type_name)
             }
         }
     }

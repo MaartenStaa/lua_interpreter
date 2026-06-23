@@ -29,11 +29,7 @@ impl From<LuaValue> for UpValue {
 
 impl Debug for UpValue {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "upvalue<0x{:x}>: {:?}",
-            self as *const _ as usize, self.0
-        )
+        write!(f, "upvalue<{self:010p}>: {:?}", self.0)
     }
 }
 
