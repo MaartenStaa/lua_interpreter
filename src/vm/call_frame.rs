@@ -48,9 +48,9 @@ impl CallFrame {
     }
 
     #[inline]
-    pub(crate) fn inc_ip(&mut self, by: usize) {
+    pub(crate) fn inc_ip(&mut self) {
         if let CallFrameKind::Lua { ref mut ip, .. } = self.kind {
-            *ip += by;
+            *ip += 1;
         } else {
             panic!("attempted to increment IP on non-Lua call frame");
         }

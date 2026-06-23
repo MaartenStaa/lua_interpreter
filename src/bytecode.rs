@@ -296,32 +296,45 @@ pub(crate) enum Bytecode {
 }
 
 macro_rules! bytes {
-    ($instruction:ident $(,$($rest:tt)*)?) => {{
-        #[allow(unused_mut)]
-        let mut result = vec![Instruction::$instruction as u8];
-        bytes!(@append result; $($($rest)*)?);
-        result
+    ($instruction:ident) => {{ $crate::instruction::Instruction::create($crate::instruction::OpCode::$instruction, 0, 0, 0) }};
+    ($instruction:ident, bytes = $bc:expr) => {{
+        $crate::instruction::Instruction::create_bc(
+            $crate::instruction::OpCode::$instruction,
+            0,
+            $bc,
+        )
+    }};
+    ($instruction:ident, $a:expr, bytes = $bc:expr) => {{
+        $crate::instruction::Instruction::create_bc(
+            $crate::instruction::OpCode::$instruction,
+            $a,
+            $bc,
+        )
     }};
 
-    // Termination
-    (@append $result:ident;) => {};
-
-    // Typed element: `bytes = expr`
-    (@append $result:ident; bytes = $item:expr) => {{
-        $result.extend_from_slice(&$item.to_be_bytes());
+    ($instruction:ident, $a:expr) => {{
+        $crate::instruction::Instruction::create(
+            $crate::instruction::OpCode::$instruction,
+            $a,
+            0,
+            0,
+        )
     }};
-    (@append $result:ident; bytes = $item:expr, $($rest:tt)*) => {{
-        $result.extend_from_slice(&$item.to_be_bytes());
-        bytes!(@append $result; $($rest)*);
+    ($instruction:ident, $a:expr, $b:expr) => {{
+        $crate::instruction::Instruction::create(
+            $crate::instruction::OpCode::$instruction,
+            $a,
+            $b,
+            0,
+        )
     }};
-
-    // Untyped element: anything else
-    (@append $result:ident; $item:expr) => {{
-        $result.push($item);
-    }};
-    (@append $result:ident; $item:expr, $($rest:tt)*) => {{
-        $result.push($item);
-        bytes!(@append $result; $($rest)*);
+    ($instruction:ident, $a:expr, $b:expr, $c:expr) => {{
+        $crate::instruction::Instruction::create(
+            $crate::instruction::OpCode::$instruction,
+            $a,
+            $b,
+            $c,
+        )
     }};
 }
 
@@ -333,14 +346,14 @@ impl Bytecode {
         }
     }
 
-    pub fn into_bytes(self) -> Vec<u8> {
+    pub fn into_bytes(self) -> Instruction {
         match self {
             // Loading values
             Bytecode::LoadConst {
                 register,
                 const_index,
             } => {
-                bytes!(LoadConst, register, bytes = const_index)
+                bytes!(LoadConst, register, const_index)
             }
             Bytecode::LoadClosure {
                 register,
@@ -355,10 +368,10 @@ impl Bytecode {
                 bytes!(LoadNil, from_register, to_register)
             }
             Bytecode::LoadShort { register, value } => {
-                bytes!(LoadShort, register, bytes = value)
+                bytes!(LoadShort, register, bytes = i16::cast_unsigned(value))
             }
             Bytecode::LoadShortFloat { register, value } => {
-                bytes!(LoadShortFloat, register, bytes = value)
+                bytes!(LoadShortFloat, register, bytes = i16::cast_unsigned(value))
             }
 
             // Binary operations
@@ -563,7 +576,7 @@ impl Bytecode {
                 bytes!(
                     SetTableConstKey,
                     table_register,
-                    bytes = key_const_index,
+                    key_const_index,
                     value_register
                 )
             }
@@ -587,7 +600,7 @@ impl Bytecode {
                 bytes!(
                     SetTableUpvalConstKey,
                     table_upval_index,
-                    bytes = key_const_index,
+                    key_const_index,
                     value_register
                 )
             }
@@ -607,7 +620,7 @@ impl Bytecode {
                     GetTableConstKey,
                     dest_register,
                     table_register,
-                    bytes = key_const_index
+                    key_const_index
                 )
             }
             Self::GetTableUpval {
@@ -631,7 +644,7 @@ impl Bytecode {
                     GetTableUpvalConstKey,
                     dest_register,
                     table_upval_index,
-                    bytes = key_const_index
+                    key_const_index
                 )
             }
             Self::AppendToTable {
@@ -755,15 +768,6 @@ pub(crate) enum JumpToUndecidedAddress {
 }
 
 impl JumpToUndecidedAddress {
-    pub(crate) fn instruction_size_without_address(&self) -> usize {
-        match self {
-            JumpToUndecidedAddress::Jmp => 1,
-            JumpToUndecidedAddress::JmpTrue { .. }
-            | JumpToUndecidedAddress::JmpFalse { .. }
-            | JumpToUndecidedAddress::JmpClose { .. } => 2,
-        }
-    }
-
     pub(crate) fn into_bytecode(self, address: JumpAddr) -> Bytecode {
         match self {
             JumpToUndecidedAddress::Jmp => Bytecode::Jmp { address },

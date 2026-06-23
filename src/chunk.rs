@@ -1,7 +1,6 @@
 use std::{
     collections::HashMap,
     fmt::Debug,
-    mem::size_of,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -10,7 +9,7 @@ use miette::NamedSource;
 
 use crate::{
     bytecode::{Bytecode, JumpToUndecidedAddress},
-    instruction::Instruction,
+    instruction::{Instruction, OpCode},
     token::Span,
     value::{LuaConst, LuaString},
     vm::{ConstIndex, JumpAddr},
@@ -44,7 +43,7 @@ pub struct Chunk {
     // TODO: Maybe this can be a Cow<'source, Path>?
     pub(crate) filename: Option<PathBuf>,
     pub(crate) source: Arc<Vec<u8>>,
-    pub(crate) instructions: Vec<u8>,
+    pub(crate) instructions: Vec<Instruction>,
     pub(crate) instruction_spans: HashMap<usize, Span>,
     pub(crate) max_registers: u8,
     pub(crate) num_params: u8,
@@ -118,7 +117,7 @@ impl Chunk {
 
     pub(crate) fn push_bytecode(&mut self, bytecode: Bytecode, span: Option<Span>) {
         let instruction_index = self.instructions.len();
-        self.instructions.extend_from_slice(&bytecode.into_bytes());
+        self.instructions.push(bytecode.into_bytes());
         if let Some(span) = span {
             self.instruction_spans.insert(instruction_index, span);
         }
@@ -131,10 +130,9 @@ impl Chunk {
         span: Option<Span>,
     ) -> JumpAddr {
         let instruction_index = self.instructions.len();
-        let jump_addr_ip =
-            (instruction_index + jump.instruction_size_without_address()) as JumpAddr;
+        let jump_addr_ip = instruction_index as JumpAddr;
 
-        self.push_bytecode(jump.into_bytecode(jump_addr_ip), span);
+        self.push_bytecode(jump.into_bytecode(JumpAddr::MAX), span);
 
         jump_addr_ip
     }
@@ -145,12 +143,14 @@ impl Chunk {
     }
 
     pub fn patch_addr_placeholder_with(&mut self, index: JumpAddr, addr: JumpAddr) {
-        let addr_bytes = addr.to_be_bytes();
-        self.instructions[index as usize..index as usize + size_of::<JumpAddr>()]
-            .copy_from_slice(&addr_bytes);
+        let instr = self
+            .instructions
+            .get_mut(index as usize)
+            .expect("invalid jump address index");
+        instr.set_bc(addr);
     }
 
-    pub fn get_instructions(&self) -> &[u8] {
+    pub fn get_instructions(&self) -> &[Instruction] {
         &self.instructions
     }
 
@@ -188,11 +188,12 @@ impl Chunk {
         }
 
         let setter_ip = self.find_register_setter(register, ip)?;
-        let opcode = self.instructions[setter_ip];
+        let instruction = self.instructions[setter_ip];
+        let opcode = instruction.opcode();
 
-        if opcode == Instruction::GetUpval as u8 {
+        if opcode == OpCode::GetUpval {
             // GetUpval: [opcode, dest_register, upval_index]
-            let upval_index = self.instructions[setter_ip + 2] as usize;
+            let upval_index = instruction.bc() as usize;
             if let Some(name) = self
                 .upvalues
                 .get(upval_index)
@@ -200,16 +201,14 @@ impl Chunk {
             {
                 return Some(RegisterName::Upvalue(name));
             }
-        } else if opcode == Instruction::Mov as u8 {
+        } else if opcode == OpCode::Mov {
             // Mov: [opcode, dest_register, src_register]
-            let src_register = self.instructions[setter_ip + 2];
+            let src_register = instruction.b();
             return self.get_register_name_inner(src_register, setter_ip, depth - 1);
-        } else if opcode == Instruction::GetTableUpvalConstKey as u8 {
-            // GetTableUpvalConstKey: [opcode, dest_register, upval_index, const_index(2)]
-            let upval_index = self.instructions[setter_ip + 2] as usize;
-            let const_index_bytes =
-                &self.instructions[setter_ip + 3..setter_ip + 3 + size_of::<ConstIndex>()];
-            let key_const_index = ConstIndex::from_be_bytes(const_index_bytes.try_into().unwrap());
+        } else if opcode == OpCode::GetTableUpvalConstKey {
+            // GetTableUpvalConstKey: [opcode, dest_register, upval_index, const_index]
+            let upval_index = instruction.b() as usize;
+            let key_const_index = instruction.c() as ConstIndex;
             if self
                 .upvalues
                 .get(upval_index)
@@ -220,11 +219,9 @@ impl Chunk {
             }
 
             return Some(RegisterName::Field { key_const_index });
-        } else if opcode == Instruction::GetTableConstKey as u8 {
-            // GetTableConstKey: [opcode, dest_register, table_register, const_index(2)]
-            let const_index_bytes =
-                &self.instructions[setter_ip + 3..setter_ip + 3 + size_of::<ConstIndex>()];
-            let key_const_index = ConstIndex::from_be_bytes(const_index_bytes.try_into().unwrap());
+        } else if opcode == OpCode::GetTableConstKey {
+            // GetTableConstKey: [opcode, dest_register, table_register, const_index]
+            let key_const_index = instruction.c() as ConstIndex;
 
             return Some(RegisterName::Field { key_const_index });
         }
@@ -234,29 +231,26 @@ impl Chunk {
 
     fn find_register_setter(&self, register: u8, before_ip: usize) -> Option<usize> {
         let mut result = None;
-        let mut ip = 0;
-        while ip < before_ip {
-            let instr = Instruction::from(self.instructions[ip]);
-            if self.instructions.get(ip + 1).copied() == Some(register) {
-                match instr {
-                    Instruction::Mov
-                    | Instruction::GetUpval
-                    | Instruction::LoadConst
-                    | Instruction::LoadClosure
-                    | Instruction::LoadNil
-                    | Instruction::LoadShort
-                    | Instruction::LoadShortFloat
-                    | Instruction::GetTable
-                    | Instruction::GetTableConstKey
-                    | Instruction::GetTableUpval
-                    | Instruction::GetTableUpvalConstKey
-                    | Instruction::LoadVararg => {
+        for (ip, instr) in self.instructions[..before_ip].iter().enumerate() {
+            if instr.a() == register {
+                match instr.opcode() {
+                    OpCode::Mov
+                    | OpCode::GetUpval
+                    | OpCode::LoadConst
+                    | OpCode::LoadClosure
+                    | OpCode::LoadNil
+                    | OpCode::LoadShort
+                    | OpCode::LoadShortFloat
+                    | OpCode::GetTable
+                    | OpCode::GetTableConstKey
+                    | OpCode::GetTableUpval
+                    | OpCode::GetTableUpvalConstKey
+                    | OpCode::LoadVararg => {
                         result = Some(ip);
                     }
                     _ => {}
                 }
             }
-            ip += instr.size();
         }
         result
     }

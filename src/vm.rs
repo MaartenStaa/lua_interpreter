@@ -2,7 +2,6 @@ use std::{
     borrow::Cow,
     collections::HashMap,
     fmt::Debug,
-    mem::size_of,
     sync::{Arc, RwLock},
 };
 
@@ -10,7 +9,7 @@ use crate::{
     ExecutionResult, ThreadStatus,
     chunk::{Chunk, RegisterName},
     error::{IntoLuaError, RuntimeError, lua_error},
-    instruction::Instruction,
+    instruction::OpCode,
     macros::{assert_closure, assert_table},
     state::LuaState,
     value::{
@@ -38,18 +37,6 @@ pub type ChunkIndex = u16;
 impl LuaState {
     pub fn get_global_env(&self) -> Arc<RwLock<UpValue>> {
         self.global.read().unwrap().get_global_env()
-    }
-
-    // Helper to read instruction bytes at an offset while holding the lock
-    fn read_instr_byte(&self, chunk_index: ChunkIndex, offset: usize) -> u8 {
-        let global = self.global.read().unwrap();
-        global.chunks[chunk_index as usize].instructions[offset]
-    }
-
-    // Helper to read a slice of instruction bytes
-    fn read_instr_bytes(&self, chunk_index: ChunkIndex, start: usize, len: usize) -> Vec<u8> {
-        let global = self.global.read().unwrap();
-        global.chunks[chunk_index as usize].instructions[start..start + len].to_vec()
     }
 
     // Safe way to access chunk data - takes a callback that processes the chunk while lock is held
@@ -606,50 +593,6 @@ impl LuaState {
                 instr
             };
 
-            // Macros to safely read instruction parameters while holding the lock
-            macro_rules! instr_param {
-                ($offset:expr) => {
-                    self.read_instr_byte(chunk_index, ip + $offset)
-                };
-                () => {
-                    instr_param!(1)
-                };
-            }
-            macro_rules! register {
-                ($offset:expr) => {
-                    self.read_instr_byte(chunk_index, ip + $offset)
-                };
-                () => {
-                    register!(1)
-                };
-            }
-            macro_rules! const_index {
-                ($offset:expr) => {{
-                    let bytes =
-                        self.read_instr_bytes(chunk_index, ip + $offset, size_of::<ConstIndex>());
-                    ConstIndex::from_be_bytes(bytes.try_into().unwrap())
-                }};
-                () => {
-                    const_index!(2)
-                };
-            }
-            macro_rules! chunk_index {
-                ($offset:expr) => {{
-                    let bytes =
-                        self.read_instr_bytes(chunk_index, ip + $offset, size_of::<ChunkIndex>());
-                    ChunkIndex::from_be_bytes(bytes.try_into().unwrap())
-                }};
-                () => {
-                    chunk_index!(2)
-                };
-            }
-            macro_rules! jump_addr {
-                ($offset:expr) => {{
-                    let bytes =
-                        self.read_instr_bytes(chunk_index, ip + $offset, size_of::<JumpAddr>());
-                    JumpAddr::from_be_bytes(bytes.try_into().unwrap())
-                }};
-            }
             macro_rules! binary_op_num {
                 (method = $name:ident, $metamethod:ident, $op_name:expr) => {
                     binary_op_num!(_handle $metamethod, $op_name, method, $name)
@@ -664,9 +607,9 @@ impl LuaState {
                     binary_op_num!(_handle $metamethod, $op_name, fallible_op, $tt)
                 };
                 (_handle $metamethod:ident, $op_name:expr, $($param:tt),*) => {{
-                    let dest_r = register!(1);
-                    let lhs_r = register!(2);
-                    let rhs_r = register!(3);
+                    let dest_r = instruction.a();
+                    let lhs_r = instruction.b();
+                    let rhs_r = instruction.c();
                     let a = self.get_ref(lhs_r);
                     let b = self.get_ref(rhs_r);
                     let result = if a.is_number() && b.is_number() {
@@ -691,7 +634,6 @@ impl LuaState {
                         }
                     };
                     self.set(dest_r, result);
-                    4
                 }};
                 (_internal $a:ident, $b:ident, method, $name:ident) => {{
                     $a.$name(&$b)
@@ -759,8 +701,8 @@ impl LuaState {
                     unary_op_num!(_handle $metamethod, $op_name, fallible_op, $tt)
                 };
                 (_handle $metamethod:ident, $op_name:expr, $($param:tt),*) => {{
-                    let dest_r = register!(1);
-                    let value_r = register!(2);
+                    let dest_r = instruction.a();
+                    let value_r = instruction.b();
                     let value = self.get_ref(value_r);
                     let result: LuaValue = if value.is_number() {
                         // Safety: We've verified that num is a number.
@@ -774,7 +716,7 @@ impl LuaState {
                             vec![value],
                         ) {
                             Some(result) => {
-                                handle_execution_result!({ result? }, dest_r, 3)
+                                handle_execution_result!({ result? }, dest_r)
                             },
                             None => {
                                 return Err(self.op_err($op_name, self.get_ref(value_r).as_ref(), None));
@@ -782,7 +724,6 @@ impl LuaState {
                         }
                     };
                     self.set(dest_r, result);
-                    3
                 }};
                 (_internal $dest_r:ident $value:ident, method, $name:ident) => {{
                     $value.$name()
@@ -806,14 +747,14 @@ impl LuaState {
                             self.status = ThreadStatus::Suspended {
                                 resume_args_register: Some($dest_r),
                             };
-                            self.call_frame_mut().inc_ip(3);
+                            self.call_frame_mut().inc_ip();
                             return Ok(result);
                         }
                     }
                 };
             }
             macro_rules! handle_execution_result {
-                ($result:expr, $dest_r:expr, $ip_inc:expr) => {
+                ($result:expr, $dest_r:expr) => {
                     match $result {
                         ExecutionResult::Completed(mut values) => {
                             if values.is_empty() {
@@ -826,25 +767,24 @@ impl LuaState {
                             self.status = ThreadStatus::Suspended {
                                 resume_args_register: Some($dest_r),
                             };
-                            self.call_frame_mut().inc_ip($ip_inc);
+                            self.call_frame_mut().inc_ip();
                             return Ok(result);
                         }
                     }
                 };
             }
 
-            let instruction_increment = match Instruction::from(instruction) {
+            match instruction.opcode() {
                 // Stack manipulation
-                Instruction::LoadConst => {
-                    let register = register!();
-                    let const_index = const_index!();
+                OpCode::LoadConst => {
+                    let register = instruction.a();
+                    let const_index = instruction.b();
                     let constant = self.get_const(chunk_index, const_index);
                     self.set(register, constant.into());
-                    2 + size_of::<ConstIndex>()
                 }
-                Instruction::LoadClosure => {
-                    let register = register!();
-                    let chunk_index = chunk_index!();
+                OpCode::LoadClosure => {
+                    let register = instruction.a();
+                    let chunk_index: ChunkIndex = instruction.bc();
                     let closure = LuaClosure::new(chunk_index);
 
                     // NOTE: We MUST set the closure in the register before capturing upvalues,
@@ -874,74 +814,69 @@ impl LuaState {
                             }
                         }
                     });
-
-                    2 + size_of::<ChunkIndex>()
                 }
-                Instruction::LoadNil => {
-                    let from_register = register!(1);
-                    let to_register = register!(2);
+                OpCode::LoadNil => {
+                    let from_register = instruction.a();
+                    let to_register = instruction.b();
                     self.clear_registers_between(from_register, to_register);
-                    3
                 }
-                Instruction::LoadShort => {
-                    let register = register!();
-                    let int_value = self.read_instr_bytes(chunk_index, ip + 2, size_of::<i16>());
-                    let int_value = i16::from_be_bytes(int_value.try_into().unwrap());
+                OpCode::LoadShort => {
+                    let register = instruction.a();
+                    let int_value = instruction.bc();
+                    let int_value = u16::cast_signed(int_value);
                     self.set(register, LuaValue::from_integer(int_value as _));
-                    2 + size_of::<i16>()
                 }
-                Instruction::LoadShortFloat => {
-                    let register = register!();
-                    let int_value = self.read_instr_bytes(chunk_index, ip + 2, size_of::<i16>());
-                    let int_value = i16::from_be_bytes(int_value.try_into().unwrap());
+                OpCode::LoadShortFloat => {
+                    let register = instruction.a();
+                    let int_value = instruction.bc();
+                    let int_value = u16::cast_signed(int_value);
                     self.set(register, LuaValue::from_float(int_value as _));
-                    2 + size_of::<i16>()
                 }
 
                 // Binary operations
                 // Arithmetic
-                Instruction::Add => {
+                OpCode::Add => {
                     binary_op_num!(op = +, ADD_KEY, "add")
                 }
-                Instruction::Sub => {
+                OpCode::Sub => {
                     binary_op_num!(op = -, SUB_KEY, "subtract")
                 }
-                Instruction::Mul => {
+                OpCode::Mul => {
                     binary_op_num!(op = *, MUL_KEY, "multiply")
                 }
-                Instruction::Div => {
+                OpCode::Div => {
                     binary_op_num!(op = /, DIV_KEY, "divide")
                 }
-                Instruction::Mod => {
+                OpCode::Mod => {
                     binary_op_num!(op = %, MOD_KEY, "modulo")
                 }
-                Instruction::Pow => {
+                OpCode::Pow => {
                     binary_op_num!(method = pow, POW_KEY, "power")
                 }
-                Instruction::IDiv => {
+                OpCode::IDiv => {
                     binary_op_num!(method = idiv, IDIV_KEY, "integer divide")
                 }
-                Instruction::Band => {
+                OpCode::Band => {
                     binary_op_num!(fallible_op = &, BAND_KEY, "bitwise and")
                 }
-                Instruction::Bor => {
+                OpCode::Bor => {
                     binary_op_num!(fallible_op = |, BOR_KEY, "bitwise or")
                 }
-                Instruction::Bxor => {
+                OpCode::Bxor => {
                     binary_op_num!(fallible_op = ^, BXOR_KEY, "bitwise xor")
                 }
-                Instruction::Shl => {
+                OpCode::Shl => {
                     binary_op_num!(fallible_op = <<, SHL_KEY, "shift left")
                 }
-                Instruction::Shr => {
+                OpCode::Shr => {
                     binary_op_num!(fallible_op = >>, SHR_KEY, "shift left")
                 }
 
                 // Comparison
-                Instruction::Eq => {
-                    let dest_r = register!(1);
-                    let lhs_r = register!(2);
-                    let rhs_r = register!(3);
+                OpCode::Eq => {
+                    let dest_r = instruction.a();
+                    let lhs_r = instruction.b();
+                    let rhs_r = instruction.c();
                     let a = self.get_ref(lhs_r);
                     let b = self.get_ref(rhs_r);
 
@@ -956,7 +891,7 @@ impl LuaState {
                             &metatables::EQ_KEY,
                             vec![a.into_owned(), b.into_owned()],
                         ) {
-                            handle_execution_result!(result?, dest_r, 4).cast_to_bool()
+                            handle_execution_result!(result?, dest_r).cast_to_bool()
                         } else {
                             is_equal
                         }
@@ -964,13 +899,11 @@ impl LuaState {
                         is_equal
                     };
                     self.set(dest_r, value.into());
-
-                    4
                 }
-                Instruction::Ne => {
-                    let dest_r = register!(1);
-                    let lhs_r = register!(2);
-                    let rhs_r = register!(3);
+                OpCode::Ne => {
+                    let dest_r = instruction.a();
+                    let lhs_r = instruction.b();
+                    let rhs_r = instruction.c();
                     let a = self.get_ref(lhs_r);
                     let b = self.get_ref(rhs_r);
 
@@ -982,7 +915,7 @@ impl LuaState {
                             &metatables::EQ_KEY,
                             vec![a.into_owned(), b.into_owned()],
                         ) {
-                            handle_execution_result!(result?, dest_r, 4).cast_to_bool()
+                            handle_execution_result!(result?, dest_r).cast_to_bool()
                         } else {
                             is_equal
                         }
@@ -990,21 +923,19 @@ impl LuaState {
                         is_equal
                     };
                     self.set(dest_r, (!value).into());
-
-                    4
                 }
-                Instruction::Lt => {
+                OpCode::Lt => {
                     binary_op_num!(op_bool_result = <, LT_KEY, "compare")
                 }
-                Instruction::Le => {
+                OpCode::Le => {
                     binary_op_num!(op_bool_result = <=, LE_KEY, "compare")
                 }
 
                 // Concatenation
-                Instruction::Concat => {
-                    let dest_r = register!(1);
-                    let lhs_r = register!(2);
-                    let rhs_r = register!(3);
+                OpCode::Concat => {
+                    let dest_r = instruction.a();
+                    let lhs_r = instruction.b();
+                    let rhs_r = instruction.c();
                     let a = self.get(lhs_r);
                     let b = self.get(rhs_r);
                     match a.concat(b) {
@@ -1017,7 +948,7 @@ impl LuaState {
                                 vec![a.clone(), b.clone()],
                             ) {
                                 Some(value) => {
-                                    let value = handle_execution_result!(value?, dest_r, 4);
+                                    let value = handle_execution_result!(value?, dest_r);
                                     self.set(dest_r, value);
                                 }
                                 None => {
@@ -1026,25 +957,23 @@ impl LuaState {
                             }
                         }
                     }
-                    4
                 }
 
                 // Unary operations
-                Instruction::Neg => {
+                OpCode::Neg => {
                     unary_op_num!(op = -, UNM_KEY, "negate")
                 }
-                Instruction::Not => {
+                OpCode::Not => {
                     // NOTE: There is no metamethod for `not` in Lua
-                    let dest_r = register!(1);
-                    let val_r = register!(2);
+                    let dest_r = instruction.a();
+                    let val_r = instruction.b();
                     let value = self.get_ref(val_r);
                     self.set(dest_r, (!&*value).into());
-                    3
                 }
-                Instruction::Len => {
+                OpCode::Len => {
                     // NOTE: The `__len` metamethod is only called when the value is not a string.
-                    let dest_r = register!(1);
-                    let val_r = register!(2);
+                    let dest_r = instruction.a();
+                    let val_r = instruction.b();
                     let value = self.get_ref(val_r);
 
                     let result: LuaValue = if value.is_string() {
@@ -1052,7 +981,7 @@ impl LuaState {
                     } else {
                         let value = value.into_owned();
                         match metatables::handle(self, &metatables::LEN_KEY, vec![value]) {
-                            Some(result) => handle_execution_result!(result?, dest_r, 3),
+                            Some(result) => handle_execution_result!(result?, dest_r),
                             None => {
                                 // If the value is a table (but it didn't have a __len
                                 // metamethod), return the length of the array part
@@ -1070,16 +999,15 @@ impl LuaState {
                         }
                     };
                     self.set(dest_r, result);
-                    3
                 }
-                Instruction::BNot => {
+                OpCode::BNot => {
                     unary_op_num!(fallible_op = !, BNOT_KEY, "bitwise not")
                 }
 
                 // Variables
-                Instruction::Mov => {
-                    let dest = register!(1);
-                    let src = register!(2);
+                OpCode::Mov => {
+                    let dest = instruction.a();
+                    let src = instruction.b();
 
                     let frame_pointer = self.call_frame().frame_pointer;
                     let value = self.get(src);
@@ -1092,12 +1020,10 @@ impl LuaState {
                     } else {
                         self.set(dest, value);
                     }
-
-                    3
                 }
-                Instruction::SetUpval => {
-                    let upval_index = instr_param!();
-                    let register = register!(2);
+                OpCode::SetUpval => {
+                    let upval_index = instruction.a();
+                    let register = instruction.b();
                     let value = self.get(register);
                     let mut upval = self
                         .call_frame()
@@ -1110,20 +1036,16 @@ impl LuaState {
                         .write()
                         .unwrap();
                     *upval = value.into();
-
-                    3
                 }
-                Instruction::GetUpval => {
-                    let register = register!();
-                    let upval_index = instr_param!(2);
+                OpCode::GetUpval => {
+                    let register = instruction.a();
+                    let upval_index = instruction.b();
                     let value = self.get_upvalue(upval_index);
                     self.set(register, value);
-
-                    3
                 }
-                Instruction::LoadVararg => {
-                    let register = register!();
-                    let is_single_vararg = instr_param!(2) == 1;
+                OpCode::LoadVararg => {
+                    let register = instruction.a();
+                    let is_single_vararg = instruction.b() == 1;
                     if is_single_vararg {
                         let value = self
                             .call_frame()
@@ -1145,70 +1067,66 @@ impl LuaState {
                         // Clear out extraneous registers
                         self.clear_registers_from(register as usize + self.multres);
                     }
-                    3
                 }
-                Instruction::ToClose => {
-                    let register = register!();
+                OpCode::ToClose => {
+                    let register = instruction.a();
                     self.call_frame_mut().to_close.push(register);
-                    2
                 }
-                Instruction::Close => {
-                    let from_register = register!();
+                OpCode::Close => {
+                    let from_register = instruction.a();
                     self.close(from_register, None)?;
-                    2
                 }
 
                 // Table
-                Instruction::NewTable => {
-                    let register = register!();
+                OpCode::NewTable => {
+                    let register = instruction.a();
                     let table = LuaObject::Table(Default::default());
                     self.set(register, table.into());
-                    2
                 }
-                instr @ Instruction::SetTable
-                | instr @ Instruction::SetTableConstKey
-                | instr @ Instruction::SetTableUpval
-                | instr @ Instruction::SetTableUpvalConstKey => {
-                    let (table, key, value_r, increment) = match instr {
-                        Instruction::SetTable => {
-                            let table_r = register!(1);
-                            let key_r = register!(2);
-                            let value_r = register!(3);
+                instr @ OpCode::SetTable
+                | instr @ OpCode::SetTableConstKey
+                | instr @ OpCode::SetTableUpval
+                | instr @ OpCode::SetTableUpvalConstKey => {
+                    let (table, key, value_r) = match instr {
+                        OpCode::SetTable => {
+                            let table_r = instruction.a();
+                            let key_r = instruction.b();
+                            let value_r = instruction.c();
 
                             let table = self.get(table_r);
                             let key = self.get(key_r);
 
-                            (table, key, value_r, 4)
+                            (table, key, value_r)
                         }
-                        Instruction::SetTableConstKey => {
-                            let table_r = register!(1);
-                            let const_index = const_index!(2);
+                        OpCode::SetTableConstKey => {
+                            let table_r = instruction.a();
+                            let const_index = instruction.b();
                             let key = self.get_const(chunk_index, const_index).into();
-                            let value_r = register!(2 + size_of::<ConstIndex>());
+                            let value_r = instruction.c();
 
                             let table = self.get(table_r);
 
-                            (table, key, value_r, 3 + size_of::<ConstIndex>())
+                            (table, key, value_r)
                         }
-                        Instruction::SetTableUpval => {
-                            let upval_index = instr_param!(1);
-                            let key_r = register!(2);
-                            let value_r = register!(3);
+                        OpCode::SetTableUpval => {
+                            let upval_index = instruction.a();
+                            let key_r = instruction.b();
+                            let value_r = instruction.c();
 
                             let table = self.get_upvalue(upval_index);
                             let key = self.get(key_r);
 
-                            (table, key, value_r, 4)
+                            (table, key, value_r)
                         }
-                        Instruction::SetTableUpvalConstKey => {
-                            let upval_index = instr_param!(1);
-                            let const_index = const_index!(2);
+                        OpCode::SetTableUpvalConstKey => {
+                            let upval_index = instruction.a();
+                            let const_index = instruction.b();
                             let key = self.get_const(chunk_index, const_index).into();
-                            let value_r = register!(2 + size_of::<ConstIndex>());
+                            let value_r = instruction.c();
 
                             let table = self.get_upvalue(upval_index);
 
-                            (table, key, value_r, 3 + size_of::<ConstIndex>())
+                            (table, key, value_r)
                         }
                         _ => unreachable!(),
                     };
@@ -1242,17 +1160,17 @@ impl LuaState {
                                         // - args_r + 1 points to the key
                                         // - args_r + 2 points to the value
                                         let args_r = match instr {
-                                            Instruction::SetTable
-                                            | Instruction::SetTableConstKey
-                                            | Instruction::SetTableUpval
-                                            | Instruction::SetTableUpvalConstKey => {
+                                            OpCode::SetTable
+                                            | OpCode::SetTableConstKey
+                                            | OpCode::SetTableUpval
+                                            | OpCode::SetTableUpvalConstKey => {
                                                 self.extend_stack([target, key, value])
                                             }
                                             _ => unreachable!(),
                                         };
                                         self.set_up_closure_call_frame(
                                             self.call_frame().frame_pointer + args_r as usize,
-                                            ip + increment,
+                                            ip + 1,
                                             // Dismiss return values, place them _after_ the table
                                             args_r + 1,
                                             closure,
@@ -1294,8 +1212,8 @@ impl LuaState {
 
                     if !handled {
                         match instr {
-                            Instruction::SetTable | Instruction::SetTableConstKey => {
-                                let table_r = register!(1);
+                            OpCode::SetTable | OpCode::SetTableConstKey => {
+                                let table_r = instruction.a();
                                 if let Some(name_info) =
                                     self.describe_register(chunk_index, ip, table_r)
                                 {
@@ -1305,8 +1223,8 @@ impl LuaState {
                                     ));
                                 }
                             }
-                            Instruction::SetTableUpval | Instruction::SetTableUpvalConstKey => {
-                                let upval_index = instr_param!(1);
+                            OpCode::SetTableUpval | OpCode::SetTableUpvalConstKey => {
+                                let upval_index = instruction.a();
                                 if let Some(upval_name) = self
                                     .with_chunk(chunk_index, |chunk| {
                                         chunk
@@ -1328,41 +1246,39 @@ impl LuaState {
 
                         return Err(lua_error!("attempt to index a non-table"));
                     }
-
-                    increment
                 }
-                instr @ Instruction::GetTable
-                | instr @ Instruction::GetTableConstKey
-                | instr @ Instruction::GetTableUpval
-                | instr @ Instruction::GetTableUpvalConstKey => {
-                    let dest_r = register!(1);
+                instr @ OpCode::GetTable
+                | instr @ OpCode::GetTableConstKey
+                | instr @ OpCode::GetTableUpval
+                | instr @ OpCode::GetTableUpvalConstKey => {
+                    let dest_r = instruction.a();
 
-                    let (table, key, increment) = match instr {
-                        Instruction::GetTable => {
-                            let table_r = register!(2);
-                            let key_r = register!(3);
-                            (self.get(table_r), self.get(key_r), 4)
+                    let (table, key) = match instr {
+                        OpCode::GetTable => {
+                            let table_r = instruction.b();
+                            let key_r = instruction.c();
+                            (self.get(table_r), self.get(key_r))
                         }
-                        Instruction::GetTableConstKey => {
-                            let table_r = register!(2);
-                            let const_index = const_index!(3);
+                        OpCode::GetTableConstKey => {
+                            let table_r = instruction.b();
+                            let const_index = instruction.c();
                             let key = self.get_const(chunk_index, const_index).into();
-                            (self.get(table_r), key, 3 + size_of::<ConstIndex>())
+                            (self.get(table_r), key)
                         }
-                        Instruction::GetTableUpval => {
-                            let upval_index = instr_param!(2);
-                            let key_r = register!(3);
+                        OpCode::GetTableUpval => {
+                            let upval_index = instruction.b();
+                            let key_r = instruction.c();
                             let table = self.get_upvalue(upval_index);
                             let key = self.get(key_r);
-                            (table, key, 4)
+                            (table, key)
                         }
-                        Instruction::GetTableUpvalConstKey => {
-                            let upval_index = instr_param!(2);
-                            let const_index = const_index!(3);
+                        OpCode::GetTableUpvalConstKey => {
+                            let upval_index = instruction.b();
+                            let const_index = instruction.c();
                             let table = self.get_upvalue(upval_index);
                             let key = self.get_const(chunk_index, const_index).into();
 
-                            (table, key, 3 + size_of::<ConstIndex>())
+                            (table, key)
                         }
                         _ => unreachable!(),
                     };
@@ -1389,14 +1305,13 @@ impl LuaState {
                             let __index_callable: Result<Callable, _> = (&__index).try_into();
                             if let Ok(__index) = __index_callable {
                                 let args_r = match instr {
-                                    Instruction::GetTable => register!(2),
-                                    Instruction::GetTableConstKey => {
-                                        let table_r = register!(2);
+                                    OpCode::GetTable => instruction.b(),
+                                    OpCode::GetTableConstKey => {
+                                        let table_r = instruction.b();
                                         self.set(table_r + 1, key);
                                         table_r
                                     }
-                                    Instruction::GetTableUpval
-                                    | Instruction::GetTableUpvalConstKey => {
+                                    OpCode::GetTableUpval | OpCode::GetTableUpvalConstKey => {
                                         // In these cases, the table and/or key are not yet
                                         // loaded into registers, which it needs to be for
                                         // the __index call.
@@ -1409,7 +1324,7 @@ impl LuaState {
                                         let parent_frame_pointer = self.call_frame().frame_pointer;
                                         self.set_up_closure_call_frame(
                                             parent_frame_pointer + args_r as usize,
-                                            ip + increment,
+                                            ip + 1,
                                             dest_r,
                                             closure,
                                             2usize,
@@ -1451,8 +1366,8 @@ impl LuaState {
                             self.set(dest_r, LuaValue::NIL);
                         } else {
                             match instr {
-                                Instruction::GetTable | Instruction::GetTableConstKey => {
-                                    let table_r = register!(1);
+                                OpCode::GetTable | OpCode::GetTableConstKey => {
+                                    let table_r = instruction.a();
                                     if let Some(name_info) =
                                         self.describe_register(chunk_index, ip, table_r)
                                     {
@@ -1462,8 +1377,8 @@ impl LuaState {
                                         ));
                                     }
                                 }
-                                Instruction::GetTableUpval | Instruction::GetTableUpvalConstKey => {
-                                    let upval_index = instr_param!(1);
+                                OpCode::GetTableUpval | OpCode::GetTableUpvalConstKey => {
+                                    let upval_index = instruction.a();
                                     if let Some(upval_name) = self
                                         .with_chunk(chunk_index, |chunk| {
                                             chunk
@@ -1486,14 +1401,12 @@ impl LuaState {
                             return Err(lua_error!("attempt to index a non-table"));
                         }
                     }
-
-                    increment
                 }
-                instr @ Instruction::AppendToTable | instr @ Instruction::AppendToTableM => {
+                instr @ OpCode::AppendToTable | instr @ OpCode::AppendToTableM => {
                     // Append each value to the table at the stack right before the values
-                    let table_r = register!();
-                    let mut num_values = instr_param!(2) as usize;
-                    if matches!(instr, Instruction::AppendToTableM) {
+                    let table_r = instruction.a();
+                    let mut num_values = instruction.b() as usize;
+                    if matches!(instr, OpCode::AppendToTableM) {
                         num_values += self.multres;
                     }
                     let table = self.get(table_r);
@@ -1511,17 +1424,15 @@ impl LuaState {
                     } else {
                         return Err(lua_error!("attempt to index a non-table"));
                     }
-
-                    3
                 }
 
                 // Function
-                instr @ Instruction::Call | instr @ Instruction::CallM => {
-                    let func_r = register!();
-                    let is_single_return = instr_param!(2) == 1;
-                    let mut num_args = instr_param!(3) as usize;
+                instr @ OpCode::Call | instr @ OpCode::CallM => {
+                    let func_r = instruction.a();
+                    let is_single_return = instruction.b() == 1;
+                    let mut num_args = instruction.c() as usize;
 
-                    let is_callm = matches!(instr, Instruction::CallM);
+                    let is_callm = matches!(instr, OpCode::CallM);
                     if is_callm {
                         num_args += self.multres;
                     }
@@ -1558,7 +1469,7 @@ impl LuaState {
                                 false,
                                 parent_frame_pointer + params_r as usize,
                                 max_regs,
-                                ip + 4,
+                                ip + 1,
                                 func_r,
                                 Some(closure.upvalues.clone()),
                                 num_params as u16,
@@ -1580,7 +1491,7 @@ impl LuaState {
                                     resume_args_register: Some(func_r),
                                 };
                                 // Increment IP past the Call instruction so we don't re-execute it on resume
-                                self.call_frame_mut().inc_ip(4);
+                                self.call_frame_mut().inc_ip();
                                 return Ok(ExecutionResult::Yielded(yield_values));
                             }
 
@@ -1606,8 +1517,6 @@ impl LuaState {
                             }
 
                             self.clear_registers_from(func_r as usize + self.multres);
-
-                            4
                         }
                         _ => {
                             return Err(match self.describe_register(chunk_index, ip, func_r) {
@@ -1622,12 +1531,12 @@ impl LuaState {
                         }
                     }
                 }
-                instr @ Instruction::CallT | instr @ Instruction::CallTM => {
-                    let args_r = register!();
-                    // let is_single_return = instr_param!(2) == 1;
-                    let mut num_passed_args = instr_param!(3) as usize;
+                instr @ OpCode::CallT | instr @ OpCode::CallTM => {
+                    let args_r = instruction.a();
+                    // let is_single_return = instruction.b() == 1;
+                    let mut num_passed_args = instruction.c() as usize;
 
-                    let is_callm = matches!(instr, Instruction::CallTM);
+                    let is_callm = matches!(instr, OpCode::CallTM);
                     if is_callm {
                         num_passed_args += self.multres;
                     }
@@ -1652,20 +1561,20 @@ impl LuaState {
                     self.call_frame_mut().set_ip(0);
                     continue;
                 }
-                instr @ Instruction::Return
-                | instr @ Instruction::Return0
-                | instr @ Instruction::Return1
-                | instr @ Instruction::ReturnM => {
+                instr @ OpCode::Return
+                | instr @ OpCode::Return0
+                | instr @ OpCode::Return1
+                | instr @ OpCode::ReturnM => {
                     // Find the marker indicating the start of the return values
                     let (values_starting_register, num_return_values) = match instr {
-                        Instruction::Return => (register!(), instr_param!(2) as usize),
-                        Instruction::ReturnM => {
-                            (register!(), instr_param!(2) as usize + self.multres)
+                        OpCode::Return => (instruction.a(), instruction.b() as usize),
+                        OpCode::ReturnM => {
+                            (instruction.a(), instruction.b() as usize + self.multres)
                         }
-                        Instruction::Return1 => (register!(), 1),
+                        OpCode::Return1 => (instruction.a(), 1),
                         // NOTE: Register doesn't matter for Return0, as the iterator below to
                         // collect return values won't run.
-                        Instruction::Return0 => (0, 0),
+                        OpCode::Return0 => (0, 0),
                         _ => unreachable!(),
                     };
 
@@ -1716,8 +1625,8 @@ impl LuaState {
                 }
 
                 // Control
-                Instruction::Jmp => {
-                    let addr = jump_addr!(1);
+                OpCode::Jmp => {
+                    let addr: JumpAddr = instruction.bc();
                     if addr == JumpAddr::MAX {
                         // TODO: We probably want a nicer error here. Was this a break
                         // outside of a loop? Was it a goto statement with no matching
@@ -1727,29 +1636,27 @@ impl LuaState {
                     self.call_frame_mut().set_ip(addr as usize);
                     continue;
                 }
-                Instruction::JmpTrue => {
-                    let register = register!();
+                OpCode::JmpTrue => {
+                    let register = instruction.a();
                     let value = self.get_ref(register);
                     if value.cast_to_bool() {
-                        let addr = jump_addr!(2);
+                        let addr: JumpAddr = instruction.bc();
                         self.call_frame_mut().set_ip(addr as usize);
                         continue;
                     }
-                    2 + size_of::<JumpAddr>()
                 }
-                Instruction::JmpFalse => {
-                    let register = register!();
+                OpCode::JmpFalse => {
+                    let register = instruction.a();
                     let value = self.get_ref(register);
                     if !value.cast_to_bool() {
-                        let addr = jump_addr!(2);
+                        let addr: JumpAddr = instruction.bc();
                         self.call_frame_mut().set_ip(addr as usize);
                         continue;
                     }
-                    2 + size_of::<JumpAddr>()
                 }
-                Instruction::JmpClose => {
-                    let from_register = register!();
-                    let addr = jump_addr!(2);
+                OpCode::JmpClose => {
+                    let from_register = instruction.a();
+                    let addr: JumpAddr = instruction.bc();
                     if addr == JumpAddr::MAX {
                         // TODO: We probably want a nicer error here. Was this a break
                         // outside of a loop? Was it a goto statement with no matching
@@ -1764,12 +1671,13 @@ impl LuaState {
                 }
 
                 // Other
-                Instruction::Error => {
-                    let error_type = instr_param!();
+                OpCode::Error => {
+                    let error_type = instruction.a();
                     return Err(RuntimeError::try_from(error_type)?).into_lua_error();
                 }
             };
-            self.call_frame_mut().inc_ip(instruction_increment);
+
+            self.call_frame_mut().inc_ip();
         }
     }
 }

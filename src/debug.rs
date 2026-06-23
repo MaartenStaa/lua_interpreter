@@ -3,7 +3,7 @@ use std::mem::size_of;
 use crate::{
     chunk::Chunk,
     error::RuntimeError,
-    instruction::Instruction,
+    instruction::{Instruction, OpCode},
     value::LuaConst,
     vm::{ChunkIndex, ConstIndex, JumpAddr},
 };
@@ -21,90 +21,84 @@ macro_rules! instr {
 
 pub fn print_instructions(chunk: &Chunk) {
     let instructions = chunk.get_instructions();
-    let mut instruction_pointer = 0;
 
-    loop {
-        if instruction_pointer >= instructions.len() {
-            break;
-        }
-
-        let instruction = instructions[instruction_pointer];
-
-        let instruction_increment = print_instruction(
-            chunk,
-            instructions,
-            instruction_pointer,
-            instruction,
-        );
-        instruction_pointer += instruction_increment;
+    for (ip, instruction) in instructions.iter().enumerate() {
+        print_instruction(chunk, chunk_index, ip, *instruction);
     }
 }
 
 pub(crate) fn print_instruction(
     chunk: &Chunk,
     instruction_pointer: usize,
-    instruction: u8,
+    instruction: Instruction,
 ) -> usize {
-    let instructions = &chunk.instructions;
     macro_rules! reg {
-        ($offset:expr) => {{
-            let r = instructions[instruction_pointer + $offset];
-            eprint!("\x1b[33m{:>1$}\x1b[0m ", format!("R{}", r), REG_TEXT_WIDTH);
+        (1) => {{
+            let r = instruction.a();
+            reg!(_print r);
+        }};
+        (2) => {{
+            let r = instruction.b();
+            reg!(_print r);
+        }};
+        (3) => {{
+            let r = instruction.c();
+            reg!(_print r);
         }};
         () => {
             reg!(1);
         };
+        (_print $r:expr) => {
+            eprint!("\x1b[33m{:>1$}\x1b[0m ", format!("R{}", $r), REG_TEXT_WIDTH);
+        }
     }
 
     eprint!(
-        "{instruction_pointer:00$}  \x1b[90m0x{instruction:01$x}\x1b[0m  ",
-        IP_WIDTH, IP_HEX_WIDTH
+        "{instruction_pointer:00$}  \x1b[90m0x{opcode:01$x}\x1b[0m  ",
+        IP_WIDTH,
+        IP_HEX_WIDTH,
+        opcode = instruction.opcode().raw()
     );
 
-    match Instruction::from(instruction) {
+    match instruction.opcode() {
         // Stack manipulation
-        Instruction::LoadConst => {
-            let const_index_bytes = &instructions
-                [instruction_pointer + 2..instruction_pointer + 2 + size_of::<ConstIndex>()];
-            let const_index = ConstIndex::from_be_bytes(const_index_bytes.try_into().unwrap());
+        OpCode::LoadConst => {
+            let const_index = instruction.b() as ConstIndex;
+            dbg!(&const_index);
             instr!("LOAD_CONST");
             reg!();
             print_const(chunk.get_const(const_index));
             eprintln!();
             2 + size_of::<ConstIndex>()
         }
-        Instruction::LoadClosure => {
-            let const_index_bytes = &instructions
-                [instruction_pointer + 2..instruction_pointer + 2 + size_of::<ConstIndex>()];
-            let chunk_index = ConstIndex::from_be_bytes(const_index_bytes.try_into().unwrap());
+        OpCode::LoadClosure => {
+            let chunk_index = instruction.bc() as ChunkIndex;
             instr!("LOAD_CLOSURE");
             reg!();
             eprintln!("FUNCTION<{name}:{chunk_index:04}>", name = chunk.name);
 
             2 + size_of::<ChunkIndex>()
         }
-        Instruction::LoadNil => {
+        OpCode::LoadNil => {
             instr!("LOAD_NIL");
             reg!(1);
             reg!(2);
             eprintln!();
             3
         }
-        Instruction::LoadShort => {
+        OpCode::LoadShort => {
             instr!("LOAD_SHORT");
             reg!();
-            let value_bytes =
-                &instructions[instruction_pointer + 2..instruction_pointer + 2 + size_of::<i16>()];
-            let value = i16::from_be_bytes(value_bytes.try_into().unwrap());
+            let bc = instruction.bc();
+            let value = u16::cast_signed(bc);
             eprintln!("SHORT {value}");
             4
         }
-        Instruction::LoadShortFloat => {
+        OpCode::LoadShortFloat => {
             instr!("LOAD_SHORT_FLOAT");
             reg!();
-            let value_bytes =
-                &instructions[instruction_pointer + 2..instruction_pointer + 2 + size_of::<i16>()];
-            let value = i16::from_be_bytes(value_bytes.try_into().unwrap());
+            let bc = instruction.bc();
+            let value = u16::cast_signed(bc);
             let value = value as f32;
             eprintln!("SHORT_FLOAT {value}");
             4
@@ -112,7 +106,7 @@ pub(crate) fn print_instruction(
 
         // Binary operations
         // Arithmetic
-        Instruction::Add => {
+        OpCode::Add => {
             instr!("ADD");
             reg!(1);
             reg!(2);
@@ -120,7 +114,7 @@ pub(crate) fn print_instruction(
             eprintln!();
             4
         }
-        Instruction::Sub => {
+        OpCode::Sub => {
             instr!("SUB");
             reg!(1);
             reg!(2);
@@ -128,7 +122,7 @@ pub(crate) fn print_instruction(
             eprintln!();
             4
         }
-        Instruction::Mul => {
+        OpCode::Mul => {
             instr!("MUL");
             reg!(1);
             reg!(2);
@@ -136,7 +130,7 @@ pub(crate) fn print_instruction(
             eprintln!();
             4
         }
-        Instruction::Div => {
+        OpCode::Div => {
             instr!("DIV");
             reg!(1);
             reg!(2);
@@ -144,7 +138,7 @@ pub(crate) fn print_instruction(
             eprintln!();
             4
         }
-        Instruction::Mod => {
+        OpCode::Mod => {
             instr!("MOD");
             reg!(1);
             reg!(2);
@@ -152,7 +146,7 @@ pub(crate) fn print_instruction(
             eprintln!();
             4
         }
-        Instruction::Pow => {
+        OpCode::Pow => {
             instr!("POW");
             reg!(1);
             reg!(2);
@@ -160,7 +154,7 @@ pub(crate) fn print_instruction(
             eprintln!();
             4
         }
-        Instruction::IDiv => {
+        OpCode::IDiv => {
             instr!("IDIV");
             reg!(1);
             reg!(2);
@@ -168,7 +162,7 @@ pub(crate) fn print_instruction(
             eprintln!();
             4
         }
-        Instruction::Band => {
+        OpCode::Band => {
             instr!("BAND");
             reg!(1);
             reg!(2);
@@ -176,7 +170,7 @@ pub(crate) fn print_instruction(
             eprintln!();
             4
         }
-        Instruction::Bor => {
+        OpCode::Bor => {
             instr!("BOR");
             reg!(1);
             reg!(2);
@@ -184,7 +178,7 @@ pub(crate) fn print_instruction(
             eprintln!();
             4
         }
-        Instruction::Bxor => {
+        OpCode::Bxor => {
             instr!("BXOR");
             reg!(1);
             reg!(2);
@@ -192,7 +186,7 @@ pub(crate) fn print_instruction(
             eprintln!();
             4
         }
-        Instruction::Shl => {
+        OpCode::Shl => {
             instr!("SHL");
             reg!(1);
             reg!(2);
@@ -200,7 +194,7 @@ pub(crate) fn print_instruction(
             eprintln!();
             4
         }
-        Instruction::Shr => {
+        OpCode::Shr => {
             instr!("SHR");
             reg!(1);
             reg!(2);
@@ -210,7 +204,7 @@ pub(crate) fn print_instruction(
         }
 
         // Comparison
-        Instruction::Eq => {
+        OpCode::Eq => {
             instr!("EQ");
             reg!(1);
             reg!(2);
@@ -218,7 +212,7 @@ pub(crate) fn print_instruction(
             eprintln!();
             4
         }
-        Instruction::Ne => {
+        OpCode::Ne => {
             instr!("NE");
             reg!(1);
             reg!(2);
@@ -226,7 +220,7 @@ pub(crate) fn print_instruction(
             eprintln!();
             4
         }
-        Instruction::Lt => {
+        OpCode::Lt => {
             instr!("LT");
             reg!(1);
             reg!(2);
@@ -234,7 +228,7 @@ pub(crate) fn print_instruction(
             eprintln!();
             4
         }
-        Instruction::Le => {
+        OpCode::Le => {
             instr!("LE");
             reg!(1);
             reg!(2);
@@ -244,7 +238,7 @@ pub(crate) fn print_instruction(
         }
 
         // Concatenation
-        Instruction::Concat => {
+        OpCode::Concat => {
             instr!("CONCAT");
             reg!(1);
             reg!(2);
@@ -254,28 +248,28 @@ pub(crate) fn print_instruction(
         }
 
         // Unary operations
-        Instruction::Neg => {
+        OpCode::Neg => {
             instr!("NEG");
             reg!(1);
             reg!(2);
             eprintln!();
             3
         }
-        Instruction::Not => {
+        OpCode::Not => {
             instr!("NOT");
             reg!(1);
             reg!(2);
             eprintln!();
             3
         }
-        Instruction::Len => {
+        OpCode::Len => {
             instr!("LEN");
             reg!(1);
             reg!(2);
             eprintln!();
             3
         }
-        Instruction::BNot => {
+        OpCode::BNot => {
             instr!("BNOT");
             reg!(1);
             reg!(2);
@@ -284,42 +278,42 @@ pub(crate) fn print_instruction(
         }
 
         // Variables
-        Instruction::Mov => {
+        OpCode::Mov => {
             instr!("MOV");
             reg!(1);
             reg!(2);
             eprintln!();
             3
         }
-        Instruction::SetUpval => {
-            let upval_index = instructions[instruction_pointer + 1];
+        OpCode::SetUpval => {
+            let upval_index = instruction.a();
             instr!("SET_UPVAL");
             eprint!("{upval_index}");
             reg!();
             eprintln!();
             3
         }
-        Instruction::GetUpval => {
-            let upval_index = instructions[instruction_pointer + 2];
+        OpCode::GetUpval => {
+            let upval_index = instruction.b();
             instr!("GET_UPVAL");
             reg!();
             eprintln!("{upval_index}");
             3
         }
-        Instruction::LoadVararg => {
-            let is_single_value = instructions[instruction_pointer + 2] == 1;
+        OpCode::LoadVararg => {
+            let is_single_value = instruction.b() == 1;
             instr!("LOAD_VARARG");
             reg!();
             eprintln!("{}", if is_single_value { "single" } else { "multi" });
             3
         }
-        Instruction::ToClose => {
+        OpCode::ToClose => {
             instr!("TO_CLOSE");
             reg!();
             eprintln!();
             2
         }
-        Instruction::Close => {
+        OpCode::Close => {
             instr!("CLOSE");
             reg!();
             eprintln!();
@@ -327,13 +321,13 @@ pub(crate) fn print_instruction(
         }
 
         // Table
-        Instruction::NewTable => {
+        OpCode::NewTable => {
             instr!("NEW_TABLE");
             reg!();
             eprintln!();
             2
         }
-        Instruction::SetTable => {
+        OpCode::SetTable => {
             instr!("SET_TABLE");
             reg!(1);
             reg!(2);
@@ -341,39 +335,35 @@ pub(crate) fn print_instruction(
             eprintln!();
             4
         }
-        Instruction::SetTableConstKey => {
-            let const_index_bytes = &instructions
-                [instruction_pointer + 2..instruction_pointer + 2 + size_of::<ConstIndex>()];
-            let const_index = ConstIndex::from_be_bytes(const_index_bytes.try_into().unwrap());
+        OpCode::SetTableConstKey => {
             instr!("SET_TABLE_CK");
             reg!(1);
+            let const_index: ConstIndex = instruction.b();
             print_const(chunk.get_const(const_index));
-            reg!(2 + size_of::<ConstIndex>());
+            reg!(3);
             eprintln!();
             3 + size_of::<ConstIndex>()
         }
-        Instruction::SetTableUpval => {
-            let upval_index = instructions[instruction_pointer + 2];
+        OpCode::SetTableUpval => {
             instr!("SET_TABLE_UP");
             reg!(1);
+            let upval_index = instruction.b();
             eprint!("{upval_index}");
             reg!(3);
             eprintln!();
             4
         }
-        Instruction::SetTableUpvalConstKey => {
-            let const_index_bytes = &instructions
-                [instruction_pointer + 2..instruction_pointer + 2 + size_of::<ConstIndex>()];
-            let const_index = ConstIndex::from_be_bytes(const_index_bytes.try_into().unwrap());
+        OpCode::SetTableUpvalConstKey => {
             instr!("SET_TABLE_UP_CK");
-            let upval_index = instructions[instruction_pointer + 1];
+            let upval_index = instruction.b();
             eprint!("{upval_index} ");
+            let const_index: ConstIndex = instruction.b();
             print_const(chunk.get_const(const_index));
-            reg!(2 + size_of::<ConstIndex>());
+            reg!(3);
             eprintln!();
             3 + size_of::<ConstIndex>()
         }
-        Instruction::GetTable => {
+        OpCode::GetTable => {
             instr!("GET_TABLE");
             reg!(1);
             reg!(2);
@@ -381,65 +371,61 @@ pub(crate) fn print_instruction(
             eprintln!();
             4
         }
-        Instruction::GetTableConstKey => {
-            let const_index_bytes = &instructions
-                [instruction_pointer + 3..instruction_pointer + 3 + size_of::<ConstIndex>()];
-            let const_index = ConstIndex::from_be_bytes(const_index_bytes.try_into().unwrap());
+        OpCode::GetTableConstKey => {
             instr!("GET_TABLE_CK");
             reg!(1);
             reg!(2);
+            let const_index: ConstIndex = instruction.c();
             print_const(chunk.get_const(const_index));
             eprintln!();
             3 + size_of::<ConstIndex>()
         }
-        Instruction::GetTableUpval => {
-            let upval_index = instructions[instruction_pointer + 3];
+        OpCode::GetTableUpval => {
             instr!("GET_TABLE_UP");
             reg!(1);
+            let upval_index = instruction.b();
             eprint!("{upval_index}");
             reg!(3);
             eprintln!();
             4
         }
-        Instruction::GetTableUpvalConstKey => {
-            let const_index_bytes = &instructions
-                [instruction_pointer + 3..instruction_pointer + 3 + size_of::<ConstIndex>()];
-            let const_index = ConstIndex::from_be_bytes(const_index_bytes.try_into().unwrap());
+        OpCode::GetTableUpvalConstKey => {
             instr!("GET_TABLE_UP_CK");
             reg!(1);
-            let upval_index = instructions[instruction_pointer + 2];
+            let upval_index = instruction.b();
             eprint!("{upval_index} ");
+            let const_index: ConstIndex = instruction.c();
             print_const(chunk.get_const(const_index));
             eprintln!();
             3 + size_of::<ConstIndex>()
         }
-        Instruction::AppendToTable => {
+        OpCode::AppendToTable => {
             instr!("APPEND_TO_TABLE");
             reg!();
-            let num_values = instructions[instruction_pointer + 2];
+            let num_values = instruction.b();
             eprintln!("{num_values}");
             3
         }
-        Instruction::AppendToTableM => {
+        OpCode::AppendToTableM => {
             instr!("APPEND_TO_TABLE_M");
             reg!();
-            let num_values = instructions[instruction_pointer + 2];
+            let num_values = instruction.b();
             eprintln!("{num_values}");
             3
         }
 
         // Function
-        instr @ Instruction::Call
-        | instr @ Instruction::CallM
-        | instr @ Instruction::CallT
-        | instr @ Instruction::CallTM => {
-            let is_single_return = instructions[instruction_pointer + 2] == 1;
-            let num_params = instructions[instruction_pointer + 3];
+        instr @ OpCode::Call
+        | instr @ OpCode::CallM
+        | instr @ OpCode::CallT
+        | instr @ OpCode::CallTM => {
+            let is_single_return = instruction.b() == 1;
+            let num_params = instruction.c();
             instr!(match instr {
-                Instruction::Call => "CALL",
-                Instruction::CallM => "CALL_M",
-                Instruction::CallT => "CALL_T",
-                Instruction::CallTM => "CALL_T_M",
+                OpCode::Call => "CALL",
+                OpCode::CallM => "CALL_M",
+                OpCode::CallT => "CALL_T",
+                OpCode::CallTM => "CALL_T_M",
                 _ => unreachable!(),
             });
             reg!();
@@ -449,63 +435,56 @@ pub(crate) fn print_instruction(
             );
             4
         }
-        Instruction::Return => {
+        OpCode::Return => {
             instr!("RETURN");
             reg!();
-            let n = instructions[instruction_pointer + 2];
+            let n = instruction.b();
             eprintln!("{n}");
             3
         }
-        Instruction::Return0 => {
+        OpCode::Return0 => {
             instr!("RETURN0");
             eprintln!();
             1
         }
-        Instruction::Return1 => {
+        OpCode::Return1 => {
             instr!("RETURN1");
             reg!();
             eprintln!();
             2
         }
-        Instruction::ReturnM => {
+        OpCode::ReturnM => {
             instr!("RETURN_M");
             reg!();
-            let n = instructions[instruction_pointer + 2];
+            let n = instruction.b();
             eprintln!("{n}");
             3
         }
 
         // Control
-        Instruction::Jmp => {
-            let offset_bytes = &instructions
-                [instruction_pointer + 1..instruction_pointer + 1 + size_of::<JumpAddr>()];
-            let offset = JumpAddr::from_be_bytes(offset_bytes.try_into().unwrap());
+        OpCode::Jmp => {
+            // NOTE: The `JMP` instruction has nothing in slot `A`.
+            let offset: JumpAddr = instruction.bc();
             instr!("JMP");
             eprintln!("{offset:04}");
             1 + size_of::<JumpAddr>()
         }
-        Instruction::JmpTrue => {
-            let offset_bytes = &instructions
-                [instruction_pointer + 2..instruction_pointer + 2 + size_of::<JumpAddr>()];
-            let offset = JumpAddr::from_be_bytes(offset_bytes.try_into().unwrap());
+        OpCode::JmpTrue => {
+            let offset: JumpAddr = instruction.bc();
             instr!("JMP_TRUE");
             reg!();
             eprintln!("{offset:04}");
             2 + size_of::<JumpAddr>()
         }
-        Instruction::JmpFalse => {
-            let offset_bytes = &instructions
-                [instruction_pointer + 2..instruction_pointer + 2 + size_of::<JumpAddr>()];
-            let offset = JumpAddr::from_be_bytes(offset_bytes.try_into().unwrap());
+        OpCode::JmpFalse => {
+            let offset: JumpAddr = instruction.bc();
             instr!("JMP_FALSE");
             reg!();
             eprintln!("{offset:04}");
             2 + size_of::<JumpAddr>()
         }
-        Instruction::JmpClose => {
-            let offset_bytes = &instructions
-                [instruction_pointer + 2..instruction_pointer + 2 + size_of::<JumpAddr>()];
-            let offset = JumpAddr::from_be_bytes(offset_bytes.try_into().unwrap());
+        OpCode::JmpClose => {
+            let offset: JumpAddr = instruction.bc();
             instr!("JMP_CLOSE");
             reg!();
             eprintln!("{offset:04}");
@@ -513,8 +492,8 @@ pub(crate) fn print_instruction(
         }
 
         // Other
-        Instruction::Error => {
-            let error_code = instructions[instruction_pointer + 1];
+        OpCode::Error => {
+            let error_code = instruction.a();
             let error = RuntimeError::try_from(error_code).expect("valid error code");
             instr!("ERROR");
             eprintln!("{:?}", error);
