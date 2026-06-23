@@ -14,7 +14,7 @@ use crate::{
         TokenTree, UnaryOperator, Variable,
     },
     bytecode::{Bytecode, JumpToUndecidedAddress},
-    chunk::{Chunk, ChunkUpValue},
+    chunk::{Chunk, ChunkUpValue, LocalVarInfo},
     compiler::{
         block::{BlockOptions, BlockResult, BreakJump, NewLocalsAfterGoto},
         expression::{ExpressionListLength, ExpressionMode, ExpressionResult, VariableMode},
@@ -244,6 +244,11 @@ impl Compiler {
             "all locals should be popped, found {:?}",
             self.frame.locals
         );
+
+        let end_ip = self.chunk.get_current_addr() as usize;
+        for local in self.frame.locals.drain(..) {
+            self.chunk.local_vars[local.local_var_index].end_ip = end_ip;
+        }
 
         // Get rid of the root frame, to resolve any pending gotos and such.
         if let Some((name, goto)) = self
@@ -2544,6 +2549,7 @@ impl Compiler {
             .expect("there should be a starting register for the scope");
         self.release_registers_from(starting_register);
 
+        let end_ip = self.chunk.get_current_addr() as usize;
         while !self.frame.locals.is_empty()
             && self
                 .frame
@@ -2552,7 +2558,8 @@ impl Compiler {
                 .as_ref()
                 .is_some_and(|local| local.depth > self.scope_depth)
         {
-            self.frame.locals.pop();
+            let local = self.frame.locals.pop().unwrap();
+            self.chunk.local_vars[local.local_var_index].end_ip = end_ip;
         }
 
         // If we have any gotos still pending, they're going to jump out of this scope. So we need
@@ -2617,11 +2624,19 @@ impl Compiler {
 
     fn add_local(&mut self, name: LuaString, register: u8, attributes: u8, span: Option<Span>) {
         self.reserve_register(register);
+        let local_var_index = self.chunk.local_vars.len();
+        self.chunk.local_vars.push(LocalVarInfo {
+            name: name.clone(),
+            register,
+            start_ip: self.chunk.get_current_addr() as usize,
+            end_ip: usize::MAX,
+        });
         let local = Local {
             name: name.clone(),
             depth: self.scope_depth,
             span,
             attributes,
+            local_var_index,
         };
 
         let index = self.frame.locals.len() as u8;

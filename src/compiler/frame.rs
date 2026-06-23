@@ -235,6 +235,7 @@ mod tests {
             depth: 0,
             span: None,
             attributes: 0,
+            local_var_index: 0,
         });
         assert!(matches!(
             frame1.resolve_name(&b"x".into()),
@@ -247,6 +248,7 @@ mod tests {
             depth: 0,
             span: None,
             attributes: 0,
+            local_var_index: 0,
         });
         assert!(matches!(
             frame1.resolve_name(&b"foo".into()),
@@ -293,6 +295,7 @@ mod tests {
             depth: 0,
             span: None,
             attributes: 0,
+            local_var_index: 0,
         });
 
         // From frame3, we can resolve the local `x` from the grandparent, its source is an upvalue

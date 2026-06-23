@@ -8,7 +8,7 @@ use std::{
 
 use crate::{
     ExecutionResult, ThreadStatus,
-    chunk::Chunk,
+    chunk::{Chunk, RegisterName},
     error::{IntoLuaError, RuntimeError, lua_error},
     instruction::Instruction,
     macros::{assert_closure, assert_table},
@@ -70,6 +70,40 @@ impl LuaState {
 
     pub fn get_chunk_name(&self, chunk: ChunkIndex) -> Option<LuaString> {
         self.with_chunk(chunk, |c| c.name.clone())
+    }
+
+    fn describe_register(
+        &self,
+        chunk_index: ChunkIndex,
+        ip: usize,
+        register: u8,
+    ) -> Option<String> {
+        let global = self.global.read().unwrap();
+        let chunk = global
+            .chunks
+            .get(chunk_index as usize)
+            .expect("chunk index is always valid");
+        match chunk.get_register_name(register, ip) {
+            Some(RegisterName::Local(n)) => Some(format!("local '{}'", String::from_utf8_lossy(n))),
+            Some(RegisterName::Upvalue(n)) => {
+                Some(format!("upvalue '{}'", String::from_utf8_lossy(n)))
+            }
+            Some(RegisterName::Global { key_const_index }) => {
+                if let LuaConst::String(s) = &global.consts[key_const_index as usize] {
+                    Some(format!("global '{}'", String::from_utf8_lossy(s)))
+                } else {
+                    None
+                }
+            }
+            Some(RegisterName::Field { key_const_index }) => {
+                if let LuaConst::String(s) = &global.consts[key_const_index as usize] {
+                    Some(format!("field '{}'", String::from_utf8_lossy(s)))
+                } else {
+                    None
+                }
+            }
+            None => None,
+        }
     }
 
     pub(crate) fn get_stack(&self) -> &[LuaValue] {
@@ -1227,7 +1261,7 @@ impl LuaState {
                                         continue 'main;
                                     }
                                     Method::NativeFunction(name, f) => {
-                                        let args_r = self.extend_stack([table, key, value]);
+                                        let args_r = self.extend_stack([table.clone(), key, value]);
                                         self.run_native_function(name, f, args_r, 3)?;
 
                                         // Check if the native function yielded
@@ -1259,6 +1293,39 @@ impl LuaState {
                     }
 
                     if !handled {
+                        match instr {
+                            Instruction::SetTable | Instruction::SetTableConstKey => {
+                                let table_r = register!(1);
+                                if let Some(name_info) =
+                                    self.describe_register(chunk_index, ip, table_r)
+                                {
+                                    return Err(lua_error!(
+                                        "attempt to index {name_info} (a {} value)",
+                                        table.type_name()
+                                    ));
+                                }
+                            }
+                            Instruction::SetTableUpval | Instruction::SetTableUpvalConstKey => {
+                                let upval_index = instr_param!(1);
+                                if let Some(upval_name) = self
+                                    .with_chunk(chunk_index, |chunk| {
+                                        chunk
+                                            .upvalues
+                                            .get(upval_index as usize)
+                                            .and_then(|u| u.name.as_ref())
+                                            .cloned()
+                                    })
+                                    .flatten()
+                                {
+                                    return Err(lua_error!(
+                                        "attempt to index upvalue '{upval_name}' (a {} value)",
+                                        table.type_name()
+                                    ));
+                                }
+                            }
+                            _ => unreachable!(),
+                        }
+
                         return Err(lua_error!("attempt to index a non-table"));
                     }
 
@@ -1333,7 +1400,7 @@ impl LuaState {
                                         // In these cases, the table and/or key are not yet
                                         // loaded into registers, which it needs to be for
                                         // the __index call.
-                                        self.extend_stack([table, key])
+                                        self.extend_stack([table.clone(), key])
                                     }
                                     _ => unreachable!(),
                                 };
@@ -1383,6 +1450,39 @@ impl LuaState {
                         if valid_object {
                             self.set(dest_r, LuaValue::NIL);
                         } else {
+                            match instr {
+                                Instruction::GetTable | Instruction::GetTableConstKey => {
+                                    let table_r = register!(1);
+                                    if let Some(name_info) =
+                                        self.describe_register(chunk_index, ip, table_r)
+                                    {
+                                        return Err(lua_error!(
+                                            "attempt to index {name_info} (a {} value)",
+                                            table.type_name()
+                                        ));
+                                    }
+                                }
+                                Instruction::GetTableUpval | Instruction::GetTableUpvalConstKey => {
+                                    let upval_index = instr_param!(1);
+                                    if let Some(upval_name) = self
+                                        .with_chunk(chunk_index, |chunk| {
+                                            chunk
+                                                .upvalues
+                                                .get(upval_index as usize)
+                                                .and_then(|u| u.name.as_ref())
+                                                .cloned()
+                                        })
+                                        .flatten()
+                                    {
+                                        return Err(lua_error!(
+                                            "attempt to index upvalue '{upval_name}' (a {} value)",
+                                            table.type_name()
+                                        ));
+                                    }
+                                }
+                                _ => unreachable!(),
+                            }
+
                             return Err(lua_error!("attempt to index a non-table"));
                         }
                     }
@@ -1510,11 +1610,15 @@ impl LuaState {
                             4
                         }
                         _ => {
-                            // TODO: Might be nice here to print the name of the variable.
-                            return Err(lua_error!(
-                                "attempt to call a {} value",
-                                function.type_name()
-                            ));
+                            return Err(match self.describe_register(chunk_index, ip, func_r) {
+                                Some(name_info) => lua_error!(
+                                    "attempt to call {name_info} (a {} value)",
+                                    function.type_name(),
+                                ),
+                                None => {
+                                    lua_error!("attempt to call a {} value", function.type_name(),)
+                                }
+                            });
                         }
                     }
                 }

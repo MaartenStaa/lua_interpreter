@@ -1,3 +1,7 @@
+use std::mem::size_of;
+
+use crate::vm::{ChunkIndex, ConstIndex, JumpAddr};
+
 #[derive(Debug)]
 #[repr(u8)]
 pub enum Instruction {
@@ -77,6 +81,68 @@ pub enum Instruction {
 
     // Other
     Error,
+}
+
+impl Instruction {
+    pub(crate) fn size(self) -> usize {
+        match self {
+            Self::Return0 => 1,
+
+            Self::ToClose | Self::Close | Self::NewTable | Self::Return1 | Self::Error => 2,
+
+            Self::LoadNil
+            | Self::LoadVararg
+            | Self::Mov
+            | Self::SetUpval
+            | Self::GetUpval
+            | Self::Neg
+            | Self::Not
+            | Self::Len
+            | Self::BNot
+            | Self::Return
+            | Self::ReturnM
+            | Self::AppendToTable
+            | Self::AppendToTableM => 3,
+
+            Self::Add
+            | Self::Sub
+            | Self::Mul
+            | Self::Div
+            | Self::Mod
+            | Self::Pow
+            | Self::IDiv
+            | Self::Band
+            | Self::Bor
+            | Self::Bxor
+            | Self::Shl
+            | Self::Shr
+            | Self::Eq
+            | Self::Ne
+            | Self::Lt
+            | Self::Le
+            | Self::Concat
+            | Self::SetTable
+            | Self::SetTableUpval
+            | Self::GetTable
+            | Self::GetTableUpval
+            | Self::Call
+            | Self::CallM
+            | Self::CallT
+            | Self::CallTM => 4,
+
+            Self::LoadConst => 2 + size_of::<ConstIndex>(),
+            Self::LoadClosure => 2 + size_of::<ChunkIndex>(),
+            Self::LoadShort | Self::LoadShortFloat => 2 + size_of::<i16>(),
+
+            Self::Jmp => 1 + size_of::<JumpAddr>(),
+            Self::JmpTrue | Self::JmpFalse | Self::JmpClose => 2 + size_of::<JumpAddr>(),
+
+            Self::SetTableConstKey
+            | Self::SetTableUpvalConstKey
+            | Self::GetTableConstKey
+            | Self::GetTableUpvalConstKey => 3 + size_of::<ConstIndex>(),
+        }
+    }
 }
 
 impl From<Instruction> for u8 {
