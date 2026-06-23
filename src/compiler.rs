@@ -1481,14 +1481,32 @@ impl Compiler {
         let num_args = function_call.node.args.node.len() + self_arg_n;
         let expression_list_length = self.compile_expression_list(function_call.node.args.node)?;
 
-        self.chunk.push_call_instruction(
-            function_register,
-            matches!(expression_list_length, ExpressionListLength::MultRes { .. }),
-            result_mode,
-            match expression_list_length {
-                ExpressionListLength::Constant { .. } => num_args as u8,
-                // Subtract one, because the last argument will be accounted for via multres
-                ExpressionListLength::MultRes { .. } => num_args as u8 - 1,
+        let args_multres = matches!(expression_list_length, ExpressionListLength::MultRes { .. });
+        let num_args = match expression_list_length {
+            ExpressionListLength::Constant { .. } => num_args as u8,
+            // Subtract one, because the last argument will be accounted for via multres
+            ExpressionListLength::MultRes { .. } => num_args as u8 - 1,
+        };
+
+        // Instruction: [CALL|CALLM] [NUM_RESULTS] [NUM_KNOWN_ARGUMENTS]
+        // CALL for regular calls, CALLM for calls with a multres expression at
+        // the end of its arguments.
+        // NUM_RESULTS is 1 for single result, 0 for multres.
+        // NUM_KNOWN_ARGUMENTS is the number of known arguments, not counting
+        // the multres at the end (if any), plus 1.
+        self.chunk.push_bytecode(
+            if args_multres {
+                Bytecode::CallM {
+                    func_register: function_register,
+                    result_mode,
+                    num_args,
+                }
+            } else {
+                Bytecode::Call {
+                    func_register: function_register,
+                    result_mode,
+                    num_args,
+                }
             },
             Some(function_call.span),
         );
@@ -1545,15 +1563,34 @@ impl Compiler {
             expression_list_length.get_register()
         };
 
-        self.chunk.push_callt_instruction(
-            parameters_register,
-            matches!(expression_list_length, ExpressionListLength::MultRes { .. }),
-            // TODO: Is this right? Does it matter?
-            ExpressionResultMode::Multiple,
-            match expression_list_length {
-                ExpressionListLength::Constant { .. } => num_args as u8,
-                // Subtract one, because the last argument will be accounted for via multres
-                ExpressionListLength::MultRes { .. } => num_args as u8 - 1,
+        // TODO: Is this right? Does it matter?
+        let result_mode = ExpressionResultMode::Multiple;
+        let num_args = match expression_list_length {
+            ExpressionListLength::Constant { .. } => num_args as u8,
+            // Subtract one, because the last argument will be accounted for via multres
+            ExpressionListLength::MultRes { .. } => num_args as u8 - 1,
+        };
+
+        // Instruction: [CALL|CALLM] [NUM_RESULTS] [NUM_KNOWN_ARGUMENTS]
+        // CALL for regular calls, CALLM for calls with a multres expression at
+        // the end of its arguments.
+        // NUM_RESULTS is 1 for single result, 0 for multres.
+        // NUM_KNOWN_ARGUMENTS is the number of known arguments, not counting
+        // the multres at the end (if any), plus 1.
+        let args_multres = matches!(expression_list_length, ExpressionListLength::MultRes { .. });
+        self.chunk.push_bytecode(
+            if args_multres {
+                Bytecode::CallTM {
+                    args_from_register: parameters_register,
+                    result_mode,
+                    num_args,
+                }
+            } else {
+                Bytecode::CallT {
+                    args_from_register: parameters_register,
+                    result_mode,
+                    num_args,
+                }
             },
             Some(function_call.span),
         );

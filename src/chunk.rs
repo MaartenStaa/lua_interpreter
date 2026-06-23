@@ -11,7 +11,6 @@ use miette::NamedSource;
 use crate::{
     bytecode::{Bytecode, JumpToUndecidedAddress},
     instruction::Instruction,
-    compiler::ExpressionResultMode,
     token::Span,
     value::LuaString,
     vm::{ConstIndex, JumpAddr},
@@ -114,70 +113,6 @@ impl Chunk {
         self.push_bytecode(jump.into_bytecode(jump_addr_ip), span);
 
         jump_addr_ip
-    }
-
-    pub(crate) fn push_call_instruction(
-        &mut self,
-        function_register: u8,
-        args_multres: bool,
-        result_mode: ExpressionResultMode,
-        num_args: u8,
-        span: Option<Span>,
-    ) {
-        // Instruction: [CALL|CALLM] [NUM_RESULTS] [NUM_KNOWN_ARGUMENTS]
-        // CALL for regular calls, CALLM for calls with a multres expression at
-        // the end of its arguments.
-        // NUM_RESULTS is 1 for single result, 0 for multres.
-        // NUM_KNOWN_ARGUMENTS is the number of known arguments, not counting
-        // the multres at the end (if any), plus 1.
-        self.push_bytecode(
-            if args_multres {
-                Bytecode::CallM {
-                    func_register: function_register,
-                    result_mode,
-                    num_args,
-                }
-            } else {
-                Bytecode::Call {
-                    func_register: function_register,
-                    result_mode,
-                    num_args,
-                }
-            },
-            span,
-        );
-    }
-
-    pub(crate) fn push_callt_instruction(
-        &mut self,
-        args_from_register: u8,
-        args_multres: bool,
-        result_mode: ExpressionResultMode,
-        num_args: u8,
-        span: Option<Span>,
-    ) {
-        // Instruction: [CALL|CALLM] [NUM_RESULTS] [NUM_KNOWN_ARGUMENTS]
-        // CALL for regular calls, CALLM for calls with a multres expression at
-        // the end of its arguments.
-        // NUM_RESULTS is 1 for single result, 0 for multres.
-        // NUM_KNOWN_ARGUMENTS is the number of known arguments, not counting
-        // the multres at the end (if any), plus 1.
-        self.push_bytecode(
-            if args_multres {
-                Bytecode::CallTM {
-                    args_from_register,
-                    result_mode,
-                    num_args,
-                }
-            } else {
-                Bytecode::CallT {
-                    args_from_register,
-                    result_mode,
-                    num_args,
-                }
-            },
-            span,
-        );
     }
 
     pub fn patch_addr_placeholder(&mut self, index: JumpAddr) {
