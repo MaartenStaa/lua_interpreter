@@ -663,7 +663,9 @@ impl<'path, 'source> Lexer<'path, 'source> {
                         chars.next();
                     }
 
-                    if equals == expected_equals && let Some(b']') = chars.peek() {
+                    if equals == expected_equals
+                        && let Some(b']') = chars.peek()
+                    {
                         self.position += 2 + equals as usize;
                         self.rest =
                             &self.rest[self.position - start - 2 - expected_equals as usize..];
