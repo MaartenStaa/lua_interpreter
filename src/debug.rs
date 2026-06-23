@@ -19,7 +19,7 @@ macro_rules! instr {
     };
 }
 
-pub fn print_instructions(consts: &[LuaConst], chunk: &Chunk) {
+pub fn print_instructions(chunk: &Chunk) {
     let instructions = chunk.get_instructions();
     let mut instruction_pointer = 0;
 
@@ -33,7 +33,6 @@ pub fn print_instructions(consts: &[LuaConst], chunk: &Chunk) {
         let instruction_increment = print_instruction(
             chunk,
             instructions,
-            consts,
             instruction_pointer,
             instruction,
         );
@@ -43,11 +42,10 @@ pub fn print_instructions(consts: &[LuaConst], chunk: &Chunk) {
 
 pub(crate) fn print_instruction(
     chunk: &Chunk,
-    instructions: &[u8],
-    consts: &[LuaConst],
     instruction_pointer: usize,
     instruction: u8,
 ) -> usize {
+    let instructions = &chunk.instructions;
     macro_rules! reg {
         ($offset:expr) => {{
             let r = instructions[instruction_pointer + $offset];
@@ -71,13 +69,13 @@ pub(crate) fn print_instruction(
             let const_index = ConstIndex::from_be_bytes(const_index_bytes.try_into().unwrap());
             instr!("LOAD_CONST");
             reg!();
-            print_const(&consts[const_index as usize]);
+            print_const(chunk.get_const(const_index));
             eprintln!();
             2 + size_of::<ConstIndex>()
         }
         Instruction::LoadClosure => {
             let const_index_bytes = &instructions
-                [instruction_pointer + 2..instruction_pointer + 2 + size_of::<ChunkIndex>()];
+                [instruction_pointer + 2..instruction_pointer + 2 + size_of::<ConstIndex>()];
             let chunk_index = ConstIndex::from_be_bytes(const_index_bytes.try_into().unwrap());
             instr!("LOAD_CLOSURE");
             reg!();
@@ -349,7 +347,7 @@ pub(crate) fn print_instruction(
             let const_index = ConstIndex::from_be_bytes(const_index_bytes.try_into().unwrap());
             instr!("SET_TABLE_CK");
             reg!(1);
-            print_const(&consts[const_index as usize]);
+            print_const(chunk.get_const(const_index));
             reg!(2 + size_of::<ConstIndex>());
             eprintln!();
             3 + size_of::<ConstIndex>()
@@ -370,7 +368,7 @@ pub(crate) fn print_instruction(
             instr!("SET_TABLE_UP_CK");
             let upval_index = instructions[instruction_pointer + 1];
             eprint!("{upval_index} ");
-            print_const(&consts[const_index as usize]);
+            print_const(chunk.get_const(const_index));
             reg!(2 + size_of::<ConstIndex>());
             eprintln!();
             3 + size_of::<ConstIndex>()
@@ -390,7 +388,7 @@ pub(crate) fn print_instruction(
             instr!("GET_TABLE_CK");
             reg!(1);
             reg!(2);
-            print_const(&consts[const_index as usize]);
+            print_const(chunk.get_const(const_index));
             eprintln!();
             3 + size_of::<ConstIndex>()
         }
@@ -411,7 +409,7 @@ pub(crate) fn print_instruction(
             reg!(1);
             let upval_index = instructions[instruction_pointer + 2];
             eprint!("{upval_index} ");
-            print_const(&consts[const_index as usize]);
+            print_const(chunk.get_const(const_index));
             eprintln!();
             3 + size_of::<ConstIndex>()
         }

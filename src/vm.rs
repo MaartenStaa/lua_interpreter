@@ -32,7 +32,7 @@ pub(crate) mod trace;
 pub(crate) const MAX_STACK_SIZE: usize = 256;
 
 pub type JumpAddr = u16;
-pub type ConstIndex = u16;
+pub type ConstIndex = u8;
 pub type ChunkIndex = u16;
 
 impl LuaState {
@@ -89,14 +89,14 @@ impl LuaState {
                 Some(format!("upvalue '{}'", String::from_utf8_lossy(n)))
             }
             Some(RegisterName::Global { key_const_index }) => {
-                if let LuaConst::String(s) = &global.consts[key_const_index as usize] {
+                if let LuaConst::String(s) = chunk.get_const(key_const_index) {
                     Some(format!("global '{}'", String::from_utf8_lossy(s)))
                 } else {
                     None
                 }
             }
             Some(RegisterName::Field { key_const_index }) => {
-                if let LuaConst::String(s) = &global.consts[key_const_index as usize] {
+                if let LuaConst::String(s) = chunk.get_const(key_const_index) {
                     Some(format!("field '{}'", String::from_utf8_lossy(s)))
                 } else {
                     None
@@ -296,9 +296,9 @@ impl LuaState {
 
     // Helper method to get const values
     #[inline]
-    fn get_const(&self, index: ConstIndex) -> LuaConst {
+    fn get_const(&self, chunk_index: ChunkIndex, index: ConstIndex) -> LuaConst {
         let global = self.global.read().unwrap();
-        global.consts[index as usize].clone()
+        global.chunks[chunk_index as usize].consts[index as usize].clone()
     }
 
     pub fn run(&mut self) -> crate::Result<Vec<LuaValue>> {
@@ -640,7 +640,7 @@ impl LuaState {
                     ChunkIndex::from_be_bytes(bytes.try_into().unwrap())
                 }};
                 () => {
-                    const_index!(2)
+                    chunk_index!(2)
                 };
             }
             macro_rules! jump_addr {
@@ -838,7 +838,7 @@ impl LuaState {
                 Instruction::LoadConst => {
                     let register = register!();
                     let const_index = const_index!();
-                    let constant = self.get_const(const_index);
+                    let constant = self.get_const(chunk_index, const_index);
                     self.set(register, constant.into());
                     2 + size_of::<ConstIndex>()
                 }
@@ -1183,7 +1183,7 @@ impl LuaState {
                         Instruction::SetTableConstKey => {
                             let table_r = register!(1);
                             let const_index = const_index!(2);
-                            let key = self.get_const(const_index).into();
+                            let key = self.get_const(chunk_index, const_index).into();
                             let value_r = register!(2 + size_of::<ConstIndex>());
 
                             let table = self.get(table_r);
@@ -1203,7 +1203,7 @@ impl LuaState {
                         Instruction::SetTableUpvalConstKey => {
                             let upval_index = instr_param!(1);
                             let const_index = const_index!(2);
-                            let key = self.get_const(const_index).into();
+                            let key = self.get_const(chunk_index, const_index).into();
                             let value_r = register!(2 + size_of::<ConstIndex>());
 
                             let table = self.get_upvalue(upval_index);
@@ -1346,7 +1346,7 @@ impl LuaState {
                         Instruction::GetTableConstKey => {
                             let table_r = register!(2);
                             let const_index = const_index!(3);
-                            let key = self.get_const(const_index).into();
+                            let key = self.get_const(chunk_index, const_index).into();
                             (self.get(table_r), key, 3 + size_of::<ConstIndex>())
                         }
                         Instruction::GetTableUpval => {
@@ -1360,7 +1360,7 @@ impl LuaState {
                             let upval_index = instr_param!(2);
                             let const_index = const_index!(3);
                             let table = self.get_upvalue(upval_index);
-                            let key = self.get_const(const_index).into();
+                            let key = self.get_const(chunk_index, const_index).into();
 
                             (table, key, 3 + size_of::<ConstIndex>())
                         }

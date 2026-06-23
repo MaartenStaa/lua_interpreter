@@ -12,7 +12,7 @@ use crate::{
     bytecode::{Bytecode, JumpToUndecidedAddress},
     instruction::Instruction,
     token::Span,
-    value::LuaString,
+    value::{LuaConst, LuaString},
     vm::{ConstIndex, JumpAddr},
 };
 
@@ -51,6 +51,7 @@ pub struct Chunk {
     pub(crate) has_varargs: bool,
     pub(crate) upvalues: Vec<ChunkUpValue>,
     pub(crate) local_vars: Vec<LocalVarInfo>,
+    pub(crate) consts: Vec<LuaConst>,
 }
 
 impl Chunk {
@@ -73,6 +74,7 @@ impl Chunk {
             has_varargs,
             upvalues,
             local_vars: vec![],
+            consts: vec![],
         }
     }
 
@@ -86,6 +88,28 @@ impl Chunk {
 
     pub fn get_source(&self) -> &[u8] {
         &self.source
+    }
+
+    pub fn register_const(&mut self, constant: LuaConst) -> ConstIndex {
+        let index = self.consts.len();
+        assert!(
+            index < ConstIndex::MAX as usize,
+            "too many constants registered (max {})",
+            ConstIndex::MAX,
+        );
+        self.consts.push(constant);
+        index as ConstIndex
+    }
+
+    pub fn lookup_const(&self, constant: &LuaConst) -> Option<ConstIndex> {
+        self.consts
+            .iter()
+            .position(|c| c == constant)
+            .map(|i| i as ConstIndex)
+    }
+
+    pub fn get_const(&self, index: ConstIndex) -> &LuaConst {
+        &self.consts[index as usize]
     }
 
     pub fn get_current_addr(&self) -> JumpAddr {
@@ -183,10 +207,9 @@ impl Chunk {
         } else if opcode == Instruction::GetTableUpvalConstKey as u8 {
             // GetTableUpvalConstKey: [opcode, dest_register, upval_index, const_index(2)]
             let upval_index = self.instructions[setter_ip + 2] as usize;
-            let key_const_index = ConstIndex::from_be_bytes([
-                self.instructions[setter_ip + 3],
-                self.instructions[setter_ip + 4],
-            ]);
+            let const_index_bytes =
+                &self.instructions[setter_ip + 3..setter_ip + 3 + size_of::<ConstIndex>()];
+            let key_const_index = ConstIndex::from_be_bytes(const_index_bytes.try_into().unwrap());
             if self
                 .upvalues
                 .get(upval_index)
@@ -199,10 +222,9 @@ impl Chunk {
             return Some(RegisterName::Field { key_const_index });
         } else if opcode == Instruction::GetTableConstKey as u8 {
             // GetTableConstKey: [opcode, dest_register, table_register, const_index(2)]
-            let key_const_index = ConstIndex::from_be_bytes([
-                self.instructions[setter_ip + 3],
-                self.instructions[setter_ip + 4],
-            ]);
+            let const_index_bytes =
+                &self.instructions[setter_ip + 3..setter_ip + 3 + size_of::<ConstIndex>()];
+            let key_const_index = ConstIndex::from_be_bytes(const_index_bytes.try_into().unwrap());
 
             return Some(RegisterName::Field { key_const_index });
         }

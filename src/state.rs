@@ -2,13 +2,10 @@ use crate::{
     chunk::Chunk,
     env,
     value::{
-        LuaConst, LuaValue, UpValue,
+        LuaValue, UpValue,
         callable::{Callable, Method},
     },
-    vm::{
-        CallFrameKind, ChunkIndex, ConstIndex, MAX_STACK_SIZE, call_frame::CallFrame,
-        trace::VMTracer,
-    },
+    vm::{CallFrameKind, ChunkIndex, MAX_STACK_SIZE, call_frame::CallFrame, trace::VMTracer},
 };
 use std::{
     collections::HashMap,
@@ -20,8 +17,6 @@ use std::{
 #[derive(Debug)]
 pub struct GlobalState {
     pub(crate) chunks: Vec<Chunk>,
-    pub(crate) consts: Vec<LuaConst>,
-    pub(crate) const_index: ConstIndex,
     pub(crate) global_env: Arc<RwLock<UpValue>>,
 }
 
@@ -36,8 +31,6 @@ impl GlobalState {
     fn new() -> Self {
         Self {
             chunks: Vec::new(),
-            consts: Vec::new(),
-            const_index: 0,
             global_env: env::create_global_env(),
         }
     }
@@ -53,29 +46,6 @@ impl GlobalState {
 
     pub fn get_chunk(&self, index: ChunkIndex) -> Option<&Chunk> {
         self.chunks.get(index as usize)
-    }
-
-    pub fn register_const(&mut self, constant: LuaConst) -> ConstIndex {
-        let index = self.const_index;
-        assert!(
-            index < ConstIndex::MAX,
-            "too many constants registered (max {})",
-            ConstIndex::MAX
-        );
-        self.consts.push(constant);
-        self.const_index += 1;
-        index
-    }
-
-    pub fn lookup_const(&self, constant: &LuaConst) -> Option<ConstIndex> {
-        self.consts[..self.const_index as usize]
-            .iter()
-            .position(|c| c == constant)
-            .map(|i| i as ConstIndex)
-    }
-
-    pub fn get_consts(&self) -> &[LuaConst] {
-        &self.consts
     }
 
     pub fn get_global_env(&self) -> Arc<RwLock<UpValue>> {

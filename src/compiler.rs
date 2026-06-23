@@ -289,7 +289,7 @@ impl Compiler {
         };
 
         if self.print_bytecode {
-            debug::print_instructions(&self.global_state.read().unwrap().consts, &self.chunk);
+            debug::print_instructions(&self.chunk);
         }
 
         Ok(CompiledChunk {
@@ -333,15 +333,11 @@ impl Compiler {
     }
 
     fn get_const_index(&mut self, lua_const: LuaConst) -> ConstIndex {
-        let global_state = self.global_state.read().unwrap();
-        if let Some(const_index) = global_state.lookup_const(&lua_const) {
+        if let Some(const_index) = self.chunk.lookup_const(&lua_const) {
             return const_index;
         }
 
-        // Release the read lock
-        drop(global_state);
-
-        self.global_state.write().unwrap().register_const(lua_const)
+        self.chunk.register_const(lua_const)
     }
 
     fn get_global_name_index(&mut self, name: LuaString) -> ConstIndex {
