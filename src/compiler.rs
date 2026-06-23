@@ -1950,33 +1950,57 @@ impl Compiler {
                         }
                     }
                     Variable::Field(prefix, name) => {
-                        let current_r = self.register_index;
-                        let table_r = self
-                            .compile_prefix_expression(
-                                *prefix,
-                                ExpressionMode::Ref,
-                                ExpressionResultMode::Single,
-                            )?
-                            .get_register();
+                        if let PrefixExpression::Variable(TokenTree {
+                            node: Variable::Name(target_name),
+                            ..
+                        }) = &prefix.node
+                            && let ResolvedName::Upvalue {
+                                index: upval_index, ..
+                            } = self.frame.resolve_name(&target_name.node.0)
+                        {
+                            let dest_r = self.take_register();
+                            let key_const_index =
+                                self.get_const_index(LuaConst::String(name.node.0));
 
-                        let const_index = self.get_const_index(LuaConst::String(name.node.0));
-                        let dest_r = if table_r == current_r {
-                            table_r
+                            self.push_bytecode(
+                                Bytecode::GetTableUpvalConstKey {
+                                    dest_register: dest_r,
+                                    table_upval_index: upval_index,
+                                    key_const_index,
+                                },
+                                Some(prefix_expression.span),
+                            );
+
+                            dest_r
                         } else {
-                            self.take_register()
-                        };
-                        self.push_bytecode(
-                            Bytecode::GetTableConstKey {
-                                dest_register: dest_r,
-                                table_register: table_r,
-                                key_const_index: const_index,
-                            },
-                            Some(prefix_expression.span),
-                        );
+                            let current_r = self.register_index;
+                            let table_r = self
+                                .compile_prefix_expression(
+                                    *prefix,
+                                    ExpressionMode::Ref,
+                                    ExpressionResultMode::Single,
+                                )?
+                                .get_register();
 
-                        self.release_registers_from(dest_r + 1);
+                            let const_index = self.get_const_index(LuaConst::String(name.node.0));
+                            let dest_r = if table_r == current_r {
+                                table_r
+                            } else {
+                                self.take_register()
+                            };
+                            self.push_bytecode(
+                                Bytecode::GetTableConstKey {
+                                    dest_register: dest_r,
+                                    table_register: table_r,
+                                    key_const_index: const_index,
+                                },
+                                Some(prefix_expression.span),
+                            );
 
-                        dest_r
+                            self.release_registers_from(dest_r + 1);
+
+                            dest_r
+                        }
                     }
                 };
 
@@ -2530,35 +2554,26 @@ impl Compiler {
                     unreachable!("the _ENV variable should always be bound to a local or upvalue");
                 }
 
-                // Resolve the name `_ENV`. Note that in the future we may want to implement a
-                // specialized `GETTABUP` opcode like Lua has, to fetch a table key from an
-                // upvalue directly, without moving the upvalue into a register.
-                let current_r = self.register_index;
-                let env_register = self.read_variable(
-                    TokenTree {
-                        node: Name(ENV_NAME.into()),
-                        span: name.span,
+                // `_ENV` should always be equivalent to upvalue 0.
+                let key_const_index = self.get_global_name_index(name.node.0.clone());
+                match self.frame.resolve_name(&ENV_NAME.into()) {
+                    ResolvedName::Local { register, .. } => Bytecode::SetTableConstKey {
+                        table_register: register,
+                        key_const_index,
+                        value_register,
                     },
-                    VariableMode::Ref,
-                )?;
-
-                let const_index = self.get_global_name_index(name.node.0.clone());
-
-                let key_r = self.take_register();
-                self.push_bytecode(
-                    Bytecode::LoadConst {
-                        register: key_r,
-                        const_index,
+                    ResolvedName::Upvalue {
+                        index: upval_index, ..
+                    } => Bytecode::SetTableUpvalConstKey {
+                        table_upval_index: upval_index,
+                        key_const_index,
+                        value_register,
                     },
-                    Some(span),
-                );
-
-                self.release_registers_from(current_r);
-
-                Bytecode::SetTable {
-                    table_register: env_register,
-                    value_register,
-                    key_register: key_r,
+                    ResolvedName::None => {
+                        unreachable!(
+                            "the _ENV variable should always be bound to a local or upvalue"
+                        );
+                    }
                 }
             }
         };
