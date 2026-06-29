@@ -13,7 +13,7 @@ use crate::{
     ExecutionResult, LuaState,
     compiler::Compiler,
     error::{IntoLuaError, lua_error},
-    macros::{assert_string, assert_table, require_table},
+    macros::{assert_string, assert_table, native_function, require_table},
     stdlib::package,
     value::{
         IntegerRepr, LuaClosure, LuaObject, LuaString, LuaValue,
@@ -265,7 +265,7 @@ pub(crate) fn ipairs(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
 
     // Return three values: the iterator function, the target value, and the initial index
     Ok(vec![
-        LuaObject::NativeFunction("iter", iter).into(),
+        native_function!(iter),
         value.clone(),
         LuaValue::from_integer(0),
     ])
@@ -428,7 +428,7 @@ pub(crate) fn pairs(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
     }
 
     Ok(vec![
-        LuaObject::NativeFunction("next", next).into(),
+        native_function!(next),
         t,
         LuaValue::NIL,
     ])

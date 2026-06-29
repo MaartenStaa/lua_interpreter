@@ -2,6 +2,7 @@ use std::sync::{LazyLock, RwLock};
 
 use crate::{
     error::lua_error,
+    macros::native_function,
     state::LuaState,
     value::{LuaNumber, LuaObject, LuaTable, LuaValue},
 };
@@ -11,98 +12,29 @@ pub static MATH: LazyLock<LuaValue> = LazyLock::new(|| {
     let mut math = LuaTable::new();
 
     // Functions
-    math.insert(
-        "abs".into(),
-        LuaObject::NativeFunction("math.abs", abs).into(),
-    );
-    math.insert(
-        "acos".into(),
-        LuaObject::NativeFunction("math.acos", acos).into(),
-    );
-    math.insert(
-        "asin".into(),
-        LuaObject::NativeFunction("math.asin", asin).into(),
-    );
-    math.insert(
-        "atan".into(),
-        LuaObject::NativeFunction("math.atan", atan).into(),
-    );
-    math.insert(
-        "ceil".into(),
-        LuaObject::NativeFunction("math.ceil", ceil).into(),
-    );
-    math.insert(
-        "cos".into(),
-        LuaObject::NativeFunction("math.cos", cos).into(),
-    );
-    math.insert(
-        "deg".into(),
-        LuaObject::NativeFunction("math.deg", deg).into(),
-    );
-    math.insert(
-        "exp".into(),
-        LuaObject::NativeFunction("math.exp", exp).into(),
-    );
-    math.insert(
-        "floor".into(),
-        LuaObject::NativeFunction("math.floor", floor).into(),
-    );
-    math.insert(
-        "fmod".into(),
-        LuaObject::NativeFunction("math.fmod", fmod).into(),
-    );
-    math.insert(
-        "log".into(),
-        LuaObject::NativeFunction("math.log", log).into(),
-    );
-    math.insert(
-        "max".into(),
-        LuaObject::NativeFunction("math.max", max).into(),
-    );
-    math.insert(
-        "min".into(),
-        LuaObject::NativeFunction("math.min", min).into(),
-    );
-    math.insert(
-        "modf".into(),
-        LuaObject::NativeFunction("math.modf", modf).into(),
-    );
-    math.insert(
-        "rad".into(),
-        LuaObject::NativeFunction("math.rad", rad).into(),
-    );
-    math.insert(
-        "random".into(),
-        LuaObject::NativeFunction("math.random", random).into(),
-    );
-    math.insert(
-        "randomseed".into(),
-        LuaObject::NativeFunction("math.randomseed", randomseed).into(),
-    );
-    math.insert(
-        "sin".into(),
-        LuaObject::NativeFunction("math.sin", sin).into(),
-    );
-    math.insert(
-        "sqrt".into(),
-        LuaObject::NativeFunction("math.sqrt", sqrt).into(),
-    );
-    math.insert(
-        "tan".into(),
-        LuaObject::NativeFunction("math.tan", tan).into(),
-    );
-    math.insert(
-        "tointeger".into(),
-        LuaObject::NativeFunction("math.tointeger", tointeger).into(),
-    );
-    math.insert(
-        "type".into(),
-        LuaObject::NativeFunction("math.r", r#type).into(),
-    );
-    math.insert(
-        "ult".into(),
-        LuaObject::NativeFunction("math.ult", ult).into(),
-    );
+    math.insert("abs".into(), native_function!("math"; abs));
+    math.insert("acos".into(), native_function!("math"; acos));
+    math.insert("asin".into(), native_function!("math"; asin));
+    math.insert("atan".into(), native_function!("math"; atan));
+    math.insert("ceil".into(), native_function!("math"; ceil));
+    math.insert("cos".into(), native_function!("math"; cos));
+    math.insert("deg".into(), native_function!("math"; deg));
+    math.insert("exp".into(), native_function!("math"; exp));
+    math.insert("floor".into(), native_function!("math"; floor));
+    math.insert("fmod".into(), native_function!("math"; fmod));
+    math.insert("log".into(), native_function!("math"; log));
+    math.insert("max".into(), native_function!("math"; max));
+    math.insert("min".into(), native_function!("math"; min));
+    math.insert("modf".into(), native_function!("math"; modf));
+    math.insert("rad".into(), native_function!("math"; rad));
+    math.insert("random".into(), native_function!("math"; random));
+    math.insert("randomseed".into(), native_function!("math"; randomseed));
+    math.insert("sin".into(), native_function!("math"; sin));
+    math.insert("sqrt".into(), native_function!("math"; sqrt));
+    math.insert("tan".into(), native_function!("math"; tan));
+    math.insert("tointeger".into(), native_function!("math"; tointeger));
+    math.insert("type".into(), native_function!("math"; "type", r#type));
+    math.insert("ult".into(), native_function!("math"; ult));
 
     // Constants
     math.insert("huge".into(), LuaValue::from_float(f64::INFINITY));

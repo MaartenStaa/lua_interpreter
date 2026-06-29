@@ -4,6 +4,7 @@ use std::{ffi::OsString, sync::LazyLock};
 
 use crate::{
     error::lua_error,
+    macros::native_function,
     state::LuaState,
     value::{LuaObject, LuaTable, LuaValue},
 };
@@ -11,30 +12,12 @@ use crate::{
 pub static OS: LazyLock<LuaValue> = LazyLock::new(|| {
     let mut os = LuaTable::new();
 
-    os.insert(
-        "clock".into(),
-        LuaObject::NativeFunction("os.clock", clock).into(),
-    );
-    os.insert(
-        "getenv".into(),
-        LuaObject::NativeFunction("os.getenv", getenv).into(),
-    );
-    os.insert(
-        "setlocale".into(),
-        LuaObject::NativeFunction("setlocale", setlocale).into(),
-    );
-    os.insert(
-        "time".into(),
-        LuaObject::NativeFunction("os.time", time).into(),
-    );
-    os.insert(
-        "tmpname".into(),
-        LuaObject::NativeFunction("tmpname", tmpname).into(),
-    );
-    os.insert(
-        "tmpname".into(),
-        LuaObject::NativeFunction("tmpname", tmpname).into(),
-    );
+    os.insert("clock".into(), native_function!("os"; clock));
+    os.insert("getenv".into(), native_function!("os"; getenv));
+    os.insert("setlocale".into(), native_function!("os"; setlocale));
+    os.insert("time".into(), native_function!("os"; time));
+    os.insert("tmpname".into(), native_function!("os"; tmpname));
+    os.insert("tmpname".into(), native_function!("os"; tmpname));
 
     os.into()
 });

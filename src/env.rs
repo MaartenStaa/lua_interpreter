@@ -1,8 +1,8 @@
 use std::sync::{Arc, RwLock};
 
 use crate::{
-    macros::assert_table,
-    stdlib,
+    macros::{assert_table, native_function},
+    stdlib::{self, globals::*},
     value::{LuaObject, LuaTable, LuaValue, UpValue},
 };
 
@@ -10,101 +10,32 @@ pub fn create_global_env() -> Arc<RwLock<UpValue>> {
     let mut env = LuaTable::new();
 
     // Global functions
-    env.insert(
-        "assert".into(),
-        LuaObject::NativeFunction("assert", stdlib::globals::assert).into(),
-    );
-    env.insert(
-        "collectgarbage".into(),
-        LuaObject::NativeFunction("collectgarbage", stdlib::globals::collectgarbage).into(),
-    );
-    env.insert(
-        "dofile".into(),
-        LuaObject::NativeFunction("dofile", stdlib::globals::dofile).into(),
-    );
-    env.insert(
-        "error".into(),
-        LuaObject::NativeFunction("error", stdlib::globals::error).into(),
-    );
-    env.insert(
-        "getmetatable".into(),
-        LuaObject::NativeFunction("getmetatable", stdlib::globals::getmetatable).into(),
-    );
-    env.insert(
-        "ipairs".into(),
-        LuaObject::NativeFunction("ipairs", stdlib::globals::ipairs).into(),
-    );
-    env.insert(
-        "load".into(),
-        LuaObject::NativeFunction("load", stdlib::globals::load).into(),
-    );
-    env.insert(
-        "next".into(),
-        LuaObject::NativeFunction("next", stdlib::globals::next).into(),
-    );
-    env.insert(
-        "pairs".into(),
-        LuaObject::NativeFunction("pairs", stdlib::globals::pairs).into(),
-    );
-    env.insert(
-        "pcall".into(),
-        LuaObject::NativeFunction("pcall", stdlib::globals::pcall).into(),
-    );
-    env.insert(
-        "print".into(),
-        LuaObject::NativeFunction("print", stdlib::globals::print).into(),
-    );
-    env.insert(
-        "rawequal".into(),
-        LuaObject::NativeFunction("rawequal", stdlib::globals::rawequal).into(),
-    );
-    env.insert(
-        "rawget".into(),
-        LuaObject::NativeFunction("rawget", stdlib::globals::rawget).into(),
-    );
-    env.insert(
-        "rawlen".into(),
-        LuaObject::NativeFunction("rawlen", stdlib::globals::rawlen).into(),
-    );
-    env.insert(
-        "rawset".into(),
-        LuaObject::NativeFunction("rawset", stdlib::globals::rawset).into(),
-    );
-    env.insert(
-        "require".into(),
-        LuaObject::NativeFunction("require", stdlib::globals::require).into(),
-    );
-    env.insert(
-        "select".into(),
-        LuaObject::NativeFunction("select", stdlib::globals::select).into(),
-    );
-    env.insert(
-        "setmetatable".into(),
-        LuaObject::NativeFunction("setmetatable", stdlib::globals::setmetatable).into(),
-    );
-    env.insert(
-        "tonumber".into(),
-        LuaObject::NativeFunction("tonumber", stdlib::globals::tonumber).into(),
-    );
-    env.insert(
-        "tostring".into(),
-        LuaObject::NativeFunction("tostring", stdlib::globals::tostring).into(),
-    );
-    env.insert(
-        "type".into(),
-        LuaObject::NativeFunction("type", stdlib::globals::r#type).into(),
-    );
-    env.insert(
-        "warn".into(),
-        LuaObject::NativeFunction("warn", stdlib::globals::warn).into(),
-    );
-    env.insert(
-        "xpcall".into(),
-        LuaObject::NativeFunction("xpcall", stdlib::globals::xpcall).into(),
-    );
+    env.insert("assert".into(), native_function!(assert));
+    env.insert("collectgarbage".into(), native_function!(collectgarbage));
+    env.insert("dofile".into(), native_function!(dofile));
+    env.insert("error".into(), native_function!(error));
+    env.insert("getmetatable".into(), native_function!(getmetatable));
+    env.insert("ipairs".into(), native_function!(ipairs));
+    env.insert("load".into(), native_function!(load));
+    env.insert("next".into(), native_function!(next));
+    env.insert("pairs".into(), native_function!(pairs));
+    env.insert("pcall".into(), native_function!(pcall));
+    env.insert("print".into(), native_function!(print));
+    env.insert("rawequal".into(), native_function!(rawequal));
+    env.insert("rawget".into(), native_function!(rawget));
+    env.insert("rawlen".into(), native_function!(rawlen));
+    env.insert("rawset".into(), native_function!(rawset));
+    env.insert("require".into(), native_function!(require));
+    env.insert("select".into(), native_function!(select));
+    env.insert("setmetatable".into(), native_function!(setmetatable));
+    env.insert("tonumber".into(), native_function!(tonumber));
+    env.insert("tostring".into(), native_function!(tostring));
+    env.insert("type".into(), native_function!("type", r#type));
+    env.insert("warn".into(), native_function!(warn));
+    env.insert("xpcall".into(), native_function!(xpcall));
 
     // Global constants
-    env.insert("_VERSION".into(), stdlib::globals::_VERSION.into());
+    env.insert("_VERSION".into(), _VERSION.into());
 
     // Namespaced modules
     env.insert("coroutine".into(), stdlib::coroutine::COROUTINE.clone());

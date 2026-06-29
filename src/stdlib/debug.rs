@@ -2,7 +2,7 @@ use std::sync::LazyLock;
 
 use crate::{
     error::lua_error,
-    macros::require_closure,
+    macros::{native_function, require_closure},
     state::LuaState,
     value::{
         IntegerRepr, LuaObject, LuaTable, LuaValue,
@@ -13,22 +13,13 @@ use crate::{
 pub static DEBUG: LazyLock<LuaValue> = LazyLock::new(|| {
     let mut debug = LuaTable::new();
 
-    debug.insert(
-        "getinfo".into(),
-        LuaObject::NativeFunction("getinfo", getinfo).into(),
-    );
-    debug.insert(
-        "getupvalue".into(),
-        LuaObject::NativeFunction("debug.getupvalue", getupvalue).into(),
-    );
+    debug.insert("getinfo".into(), native_function!("debug"; getinfo));
+    debug.insert("getupvalue".into(), native_function!("debug"; getupvalue));
     debug.insert(
         "setmetatable".into(),
-        LuaObject::NativeFunction("setmetatable", setmetatable).into(),
+        native_function!("debug"; setmetatable),
     );
-    debug.insert(
-        "upvalueid".into(),
-        LuaObject::NativeFunction("debug.upvalueid", upvalueid).into(),
-    );
+    debug.insert("upvalueid".into(), native_function!("debug"; upvalueid));
 
     debug.into()
 });

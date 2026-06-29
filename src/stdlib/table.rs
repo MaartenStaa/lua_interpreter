@@ -2,7 +2,7 @@ use std::sync::LazyLock;
 
 use crate::{
     error::lua_error,
-    macros::require_table,
+    macros::{native_function, require_table},
     state::LuaState,
     value::{IntegerRepr, LuaObject, LuaTable, LuaValue},
 };
@@ -10,22 +10,10 @@ use crate::{
 pub static TABLE: LazyLock<LuaValue> = LazyLock::new(|| {
     let mut table = LuaTable::new();
 
-    table.insert(
-        "concat".into(),
-        LuaObject::NativeFunction("table.concat", concat).into(),
-    );
-    table.insert(
-        "insert".into(),
-        LuaObject::NativeFunction("table.insert", insert).into(),
-    );
-    table.insert(
-        "pack".into(),
-        LuaObject::NativeFunction("table.pack", pack).into(),
-    );
-    table.insert(
-        "unpack".into(),
-        LuaObject::NativeFunction("table.unpack", unpack).into(),
-    );
+    table.insert("concat".into(), native_function!("table"; concat));
+    table.insert("insert".into(), native_function!("table"; insert));
+    table.insert("pack".into(), native_function!("table"; pack));
+    table.insert("unpack".into(), native_function!("table"; unpack));
 
     table.into()
 });

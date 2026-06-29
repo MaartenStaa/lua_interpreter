@@ -4,7 +4,7 @@ use subslice::SubsliceExt;
 
 use crate::{
     error::lua_error,
-    macros::require_userdata,
+    macros::{native_function, require_userdata},
     state::LuaState,
     stdlib::utils::pack::{
         PackOption, PackOptionItem, copy_bytes_fix_endian, get_pack_option, pack_int, unpack_int,
@@ -15,66 +15,21 @@ use crate::{
 pub static STRING: LazyLock<LuaValue> = LazyLock::new(|| {
     let mut string = LuaTable::new();
 
-    string.insert(
-        "byte".into(),
-        LuaObject::NativeFunction("string.byte", byte).into(),
-    );
-    string.insert(
-        "char".into(),
-        LuaObject::NativeFunction("string.char", char).into(),
-    );
-    string.insert(
-        "find".into(),
-        LuaObject::NativeFunction("string.find", find).into(),
-    );
-    string.insert(
-        "format".into(),
-        LuaObject::NativeFunction("string.format", format).into(),
-    );
-    string.insert(
-        "gmatch".into(),
-        LuaObject::NativeFunction("string.gmatch", gmatch).into(),
-    );
-    string.insert(
-        "len".into(),
-        LuaObject::NativeFunction("string.len", len).into(),
-    );
-    string.insert(
-        "lower".into(),
-        LuaObject::NativeFunction("string.lower", lower).into(),
-    );
-    string.insert(
-        "match".into(),
-        LuaObject::NativeFunction("string.match", r#match).into(),
-    );
-    string.insert(
-        "rep".into(),
-        LuaObject::NativeFunction("string.rep", rep).into(),
-    );
-    string.insert(
-        "reverse".into(),
-        LuaObject::NativeFunction("string.reverse", reverse).into(),
-    );
-    string.insert(
-        "pack".into(),
-        LuaObject::NativeFunction("string.pack", pack).into(),
-    );
-    string.insert(
-        "packsize".into(),
-        LuaObject::NativeFunction("string.packsize", packsize).into(),
-    );
-    string.insert(
-        "sub".into(),
-        LuaObject::NativeFunction("string.sub", sub).into(),
-    );
-    string.insert(
-        "unpack".into(),
-        LuaObject::NativeFunction("string.unpack", unpack).into(),
-    );
-    string.insert(
-        "upper".into(),
-        LuaObject::NativeFunction("string.upper", upper).into(),
-    );
+    string.insert("byte".into(), native_function!("string"; byte));
+    string.insert("char".into(), native_function!("string"; char));
+    string.insert("find".into(), native_function!("string"; find));
+    string.insert("format".into(), native_function!("string"; format));
+    string.insert("gmatch".into(), native_function!("string"; gmatch));
+    string.insert("len".into(), native_function!("string"; len));
+    string.insert("lower".into(), native_function!("string"; lower));
+    string.insert("match".into(), native_function!("string"; "match", r#match));
+    string.insert("rep".into(), native_function!("string"; rep));
+    string.insert("reverse".into(), native_function!("string"; reverse));
+    string.insert("pack".into(), native_function!("string"; pack));
+    string.insert("packsize".into(), native_function!("string"; packsize));
+    string.insert("sub".into(), native_function!("string"; sub));
+    string.insert("unpack".into(), native_function!("string"; unpack));
+    string.insert("upper".into(), native_function!("string"; upper));
 
     string.into()
 });
@@ -362,7 +317,7 @@ fn gmatch(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
     };
 
     Ok(vec![
-        LuaObject::NativeFunction("gmatch_iter", gmatch_iter).into(),
+        native_function!(gmatch_iter),
         UserData::new_light(state).into(),
         LuaValue::NIL,
     ])

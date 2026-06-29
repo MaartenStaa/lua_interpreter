@@ -5,7 +5,12 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
-use crate::{LuaState, error::lua_error, stdlib};
+use crate::{
+    LuaState,
+    error::lua_error,
+    macros::native_function,
+    stdlib,
+};
 
 use super::{LuaNumber, LuaObject, LuaTable, LuaValue, metatables};
 
@@ -133,50 +138,17 @@ pub(crate) fn get_string_metatable() -> LuaTable {
 
     metatable.insert(metatables::INDEX_KEY.clone(), stdlib::string());
 
-    metatable.insert(
-        metatables::ADD_KEY.clone(),
-        LuaObject::NativeFunction("add", add).into(),
-    );
-    metatable.insert(
-        metatables::SUB_KEY.clone(),
-        LuaObject::NativeFunction("sub", sub).into(),
-    );
-    metatable.insert(
-        metatables::MUL_KEY.clone(),
-        LuaObject::NativeFunction("mul", mul).into(),
-    );
-    metatable.insert(
-        metatables::DIV_KEY.clone(),
-        LuaObject::NativeFunction("div", div).into(),
-    );
-    metatable.insert(
-        metatables::MOD_KEY.clone(),
-        LuaObject::NativeFunction("mod", mod_).into(),
-    );
-    metatable.insert(
-        metatables::POW_KEY.clone(),
-        LuaObject::NativeFunction("pow", pow).into(),
-    );
-    metatable.insert(
-        metatables::UNM_KEY.clone(),
-        LuaObject::NativeFunction("unm", unm).into(),
-    );
-    metatable.insert(
-        metatables::IDIV_KEY.clone(),
-        LuaObject::NativeFunction("idiv", idiv).into(),
-    );
-    metatable.insert(
-        metatables::BAND_KEY.clone(),
-        LuaObject::NativeFunction("band", band).into(),
-    );
-    metatable.insert(
-        metatables::BOR_KEY.clone(),
-        LuaObject::NativeFunction("bor", bor).into(),
-    );
-    metatable.insert(
-        metatables::BXOR_KEY.clone(),
-        LuaObject::NativeFunction("bxor", bxor).into(),
-    );
+    metatable.insert(metatables::ADD_KEY.clone(), native_function!(add));
+    metatable.insert(metatables::SUB_KEY.clone(), native_function!(sub));
+    metatable.insert(metatables::MUL_KEY.clone(), native_function!(mul));
+    metatable.insert(metatables::DIV_KEY.clone(), native_function!(div));
+    metatable.insert(metatables::MOD_KEY.clone(), native_function!("mod", mod_));
+    metatable.insert(metatables::POW_KEY.clone(), native_function!(pow));
+    metatable.insert(metatables::UNM_KEY.clone(), native_function!(unm));
+    metatable.insert(metatables::IDIV_KEY.clone(), native_function!(idiv));
+    metatable.insert(metatables::BAND_KEY.clone(), native_function!(band));
+    metatable.insert(metatables::BOR_KEY.clone(), native_function!(bor));
+    metatable.insert(metatables::BXOR_KEY.clone(), native_function!(bxor));
 
     metatable
 }

@@ -7,7 +7,7 @@ use std::{
 
 use crate::{
     error::{IntoLuaError, lua_error},
-    macros::{require_userdata, require_userdata_type},
+    macros::{native_function, require_userdata, require_userdata_type},
     state::LuaState,
     value::{IntegerRepr, LuaObject, LuaTable, LuaValue, UserData, metatables},
 };
@@ -15,10 +15,7 @@ use crate::{
 static FILE_METATABLE: LazyLock<LuaTable> = LazyLock::new(|| {
     let mut file_metatable = LuaTable::new();
 
-    file_metatable.insert(
-        metatables::INDEX_KEY.clone(),
-        LuaObject::NativeFunction("file_index", file_index).into(),
-    );
+    file_metatable.insert(metatables::INDEX_KEY.clone(), native_function!(file_index));
     file_metatable.insert(metatables::NAME_KEY.clone(), "FILE*".into());
 
     file_metatable
@@ -46,34 +43,13 @@ pub static IO: LazyLock<LuaValue> = LazyLock::new(|| {
     );
 
     // Functions
-    io.insert(
-        "close".into(),
-        LuaObject::NativeFunction("close", close).into(),
-    );
-    io.insert(
-        "input".into(),
-        LuaObject::NativeFunction("input", input).into(),
-    );
-    io.insert(
-        "open".into(),
-        LuaObject::NativeFunction("open", open).into(),
-    );
-    io.insert(
-        "output".into(),
-        LuaObject::NativeFunction("output", output).into(),
-    );
-    io.insert(
-        "read".into(),
-        LuaObject::NativeFunction("read", read).into(),
-    );
-    io.insert(
-        "type".into(),
-        LuaObject::NativeFunction("type", r#type).into(),
-    );
-    io.insert(
-        "write".into(),
-        LuaObject::NativeFunction("write", write).into(),
-    );
+    io.insert("close".into(), native_function!(close));
+    io.insert("input".into(), native_function!(input));
+    io.insert("open".into(), native_function!(open));
+    io.insert("output".into(), native_function!(output));
+    io.insert("read".into(), native_function!(read));
+    io.insert("type".into(), native_function!("type", r#type));
+    io.insert("write".into(), native_function!(write));
 
     io.into()
 });
@@ -162,18 +138,9 @@ impl FileHandle {
 fn create_file(handle: FileHandle) -> Arc<RwLock<LuaObject>> {
     let mut methods = LuaTable::new();
 
-    methods.insert(
-        "close".into(),
-        LuaObject::NativeFunction("file_close", file_close).into(),
-    );
-    methods.insert(
-        "read".into(),
-        LuaObject::NativeFunction("file_read", file_read).into(),
-    );
-    methods.insert(
-        "write".into(),
-        LuaObject::NativeFunction("file_write", file_write).into(),
-    );
+    methods.insert("close".into(), native_function!(file_close));
+    methods.insert("read".into(), native_function!(file_read));
+    methods.insert("write".into(), native_function!(file_write));
 
     Arc::new(RwLock::new(
         UserData::new_full(File { methods, handle }, FILE_METATABLE.clone()).into(),

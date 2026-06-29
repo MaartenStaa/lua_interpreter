@@ -2,6 +2,7 @@ use std::sync::{Arc, LazyLock};
 
 use crate::{
     error::lua_error,
+    macros::{lua_return, native_function},
     state::LuaState,
     value::{LuaObject, LuaTable, LuaValue},
 };
@@ -9,21 +10,12 @@ use crate::{
 pub static COROUTINE: LazyLock<LuaValue> = LazyLock::new(|| {
     let mut coroutine = LuaTable::new();
 
-    coroutine.insert(
-        "create".into(),
-        LuaObject::NativeFunction("coroutine.create", create).into(),
-    );
-    coroutine.insert(
-        "resume".into(),
-        LuaObject::NativeFunction("coroutine.resume", resume).into(),
-    );
-    coroutine.insert(
-        "wrap".into(),
-        LuaObject::NativeFunction("coroutine.wrap", wrap).into(),
-    );
+    coroutine.insert("create".into(), native_function!("coroutine"; create));
+    coroutine.insert("resume".into(), native_function!("coroutine"; resume));
+    coroutine.insert("wrap".into(), native_function!("coroutine"; wrap));
     coroutine.insert(
         "yield".into(),
-        LuaObject::NativeFunction("coroutine.yield", yield_fn).into(),
+        native_function!("coroutine"; "yield", yield_fn),
     );
 
     coroutine.into()
@@ -84,7 +76,7 @@ fn wrap(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
     let mut metatable = LuaTable::new();
     metatable.insert(
         LuaValue::from_string(b"__call"),
-        LuaObject::NativeFunction("coroutine.wrap_resume", wrap_resume).into(),
+        native_function!("coroutine"; wrap_resume),
     );
     holder.set_metatable(Some(metatable.into()));
 

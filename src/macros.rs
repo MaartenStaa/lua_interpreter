@@ -1,3 +1,29 @@
+macro_rules! native_function {
+    ($func:ident) => {{
+        $crate::value::LuaValue::from_object(::std::sync::Arc::new(::std::sync::RwLock::new(
+            $crate::value::LuaObject::NativeFunction(stringify!($func), $func),
+        )))
+    }};
+    ($name:expr, $func:ident) => {{
+        $crate::value::LuaValue::from_object(::std::sync::Arc::new(::std::sync::RwLock::new(
+            $crate::value::LuaObject::NativeFunction($name, $func),
+        )))
+    }};
+    ($namespace:expr; $func:ident) => {{
+        $crate::value::LuaValue::from_object(::std::sync::Arc::new(::std::sync::RwLock::new(
+            $crate::value::LuaObject::NativeFunction(
+                concat!($namespace, ".", stringify!($func)),
+                $func,
+            ),
+        )))
+    }};
+    ($namespace:expr; $name:expr, $func:ident) => {{
+        $crate::value::LuaValue::from_object(::std::sync::Arc::new(::std::sync::RwLock::new(
+            $crate::value::LuaObject::NativeFunction(concat!($namespace, ".", $name), $func),
+        )))
+    }};
+}
+
 macro_rules! assert_closure(
     (read, $value:expr, $closure:ident, $tt:stmt) => {
         match $value {
@@ -322,6 +348,6 @@ macro_rules! require_userdata_type {
 }
 
 pub(crate) use {
-    assert_closure, assert_string, assert_table, assert_table_object, require_closure,
-    require_table, require_userdata, require_userdata_type,
+    assert_closure, assert_string, assert_table, assert_table_object, native_function,
+    require_closure, require_table, require_userdata, require_userdata_type,
 };
