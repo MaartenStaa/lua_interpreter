@@ -128,9 +128,9 @@ impl Frame {
     }
 
     fn resolve_local_inner<'l>(locals: &'l [Local], name: &[u8]) -> Option<(u8, &'l Local)> {
-        locals.iter().enumerate().rev().find_map(|(i, local)| {
+        locals.iter().rev().find_map(|local| {
             if local.name == name {
-                Some((i as u8, local))
+                Some((local.register, local))
             } else {
                 None
             }
@@ -152,27 +152,8 @@ impl Frame {
                 attributes: upvalue.attributes,
             });
         }
-        //
-        // polonius!(|upvalues| -> Option<ResolvedUpvalue> {
-        //     if let Some(upvalue) = upvalues.get(name) {
-        //         polonius_return!(Some(ResolvedUpvalue::Upvalue {
-        //             index: upvalue.index,
-        //             attributes: upvalue.attributes,
-        //         }));
-        //     }
-        // });
 
         if let Some((local_register, local)) = Self::resolve_local_inner(locals, name) {
-            // return Some(Self::add_upvalue_inner(
-            //     upvalues,
-            //     name.clone(),
-            //     // local_register,
-            //     // true,
-            //     UpvalueLocation::Local {
-            //         register: local_register,
-            //     },
-            //     local.attributes,
-            // ));
             return Some(ResolvedUpvalue::Local {
                 register: local_register,
                 attributes: local.attributes,
@@ -232,6 +213,7 @@ mod tests {
         // After adding, x resolves to the local
         frame1.locals.push(Local {
             name: b"x".into(),
+            register: 123,
             depth: 0,
             span: None,
             attributes: 0,
@@ -239,12 +221,13 @@ mod tests {
         });
         assert!(matches!(
             frame1.resolve_name(&b"x".into()),
-            ResolvedName::Local { register: 0, .. }
+            ResolvedName::Local { register: 123, .. }
         ));
 
         // Registers are incrementing
         frame1.locals.push(Local {
             name: b"foo".into(),
+            register: 124,
             depth: 0,
             span: None,
             attributes: 0,
@@ -252,7 +235,7 @@ mod tests {
         });
         assert!(matches!(
             frame1.resolve_name(&b"foo".into()),
-            ResolvedName::Local { register: 1, .. }
+            ResolvedName::Local { register: 124, .. }
         ));
 
         // Can add an upvalue manually and resolve it
@@ -292,6 +275,7 @@ mod tests {
         // We'll give frame 2 its own local
         frame2.locals.push(Local {
             name: b"z".into(),
+            register: 125,
             depth: 0,
             span: None,
             attributes: 0,
@@ -318,7 +302,7 @@ mod tests {
         assert!(matches!(
             frame2.upvalues.get(&b"x".into()),
             Some(Upvalue {
-                source: UpvalueLocation::Local { register: 0 },
+                source: UpvalueLocation::Local { register: 123 },
                 ..
             })
         ));

@@ -4,7 +4,7 @@ use subslice::SubsliceExt;
 
 use crate::{
     error::lua_error,
-    macros::{native_function, require_userdata},
+    macros::{lua_return, native_function, require_userdata},
     state::LuaState,
     stdlib::utils::pack::{
         PackOption, PackOptionItem, copy_bytes_fix_endian, get_pack_option, pack_int, unpack_int,
@@ -168,7 +168,7 @@ fn pattern_to_regex(pattern: &[u8]) -> crate::Result<LuaPattern> {
     }
 }
 
-fn byte(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+fn byte(state: &mut LuaState) -> crate::Result<u16> {
     let s = state.arg_as_string(0)?;
     let i = state.try_arg_as_integer(1)?.unwrap_or(1);
     let j = state.try_arg_as_integer(2)?.unwrap_or(i);
@@ -183,7 +183,7 @@ fn byte(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
         Ordering::Less => s.len() as i64 + j + 1,
         Ordering::Greater if j >= s.len() as i64 => s.len() as i64,
         Ordering::Greater => j,
-        Ordering::Equal => return Ok(vec![]),
+        Ordering::Equal => lua_return!(state),
     };
     let j = if j > s.len() as i64 {
         s.len() as i64
@@ -191,34 +191,34 @@ fn byte(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
         j
     };
 
-    let result: Vec<_> = (i..=j)
-        .map(|i| s[i as usize - 1])
-        .map(|v| (v as i64).into())
-        .collect();
-    Ok(if result.is_empty() {
-        vec![LuaValue::NIL]
-    } else {
-        result
-    })
+    if j < i {
+        lua_return!(state)
+    }
+
+    for (r, i) in (i..=j).enumerate() {
+        state.set(r, (s[i as usize - 1] as i64).into());
+    }
+    Ok((j - i + 1) as u16)
 }
 
-fn char(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
-    let mut str = Vec::with_capacity(state.num_args());
+fn char(state: &mut LuaState) -> crate::Result<u16> {
+    let mut str = Vec::with_capacity(state.num_args() as usize);
     for i in 0..state.num_args() {
-        let i = state.arg_as_integer(i)?;
+        let i = state.arg_as_integer(i as usize)?;
         if i < u8::MIN as i64 || i > u8::MAX as i64 {
             return Err(lua_error!(
                 "bad argument #{i} to 'string.char' (value out of range)",
             ));
         }
 
+        #[allow(clippy::cast_possible_truncation)]
         str.push(i as u8);
     }
 
-    Ok(vec![LuaValue::from_string(str)])
+    lua_return!(state; LuaValue::from_string(str))
 }
 
-fn find(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+fn find(state: &mut LuaState) -> crate::Result<u16> {
     let s = state.arg_as_string(0)?;
     let pattern = state.arg_as_string(1)?;
     let init = match state.arg(2) {
@@ -237,14 +237,14 @@ fn find(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
     };
 
     if init > s.len() as i64 + 1 {
-        return Ok(vec![LuaValue::NIL]);
+        lua_return!(state; LuaValue::NIL)
     }
 
     if pattern.is_empty() {
-        return Ok(vec![
+        lua_return!(state;
             LuaValue::from_integer(init),
             LuaValue::from_integer(init - 1),
-        ]);
+        )
     }
 
     let s = &s[(init - 1) as usize..];
@@ -262,15 +262,12 @@ fn find(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
         LuaPattern::Regex(regex) => regex.find(s).map(|m| (m.start() as i64, m.end() as i64)),
     };
 
-    Ok(match start_end {
+    match start_end {
         Some((start, end)) => {
-            vec![
-                LuaValue::from_integer(start + init),
-                LuaValue::from_integer(end + init - 1),
-            ]
+            lua_return!(state; LuaValue::from_integer(start + init), LuaValue::from_integer(end + init - 1))
         }
-        None => vec![LuaValue::NIL],
-    })
+        None => lua_return!(state),
+    }
 }
 
 #[derive(Debug)]
@@ -281,7 +278,7 @@ struct GmatchState {
     last_match_empty: bool,
 }
 
-fn gmatch(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+fn gmatch(state: &mut LuaState) -> crate::Result<u16> {
     let s = state.arg_as_string(0)?;
     let pattern_str = state.arg_as_string(1)?;
     let init = match state.arg(2) {
@@ -309,61 +306,61 @@ fn gmatch(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
     };
     let pattern = pattern_to_regex(pattern_str)?;
 
-    let state = GmatchState {
+    let gmatch_state = GmatchState {
         pos: (init - 1).min(s.len()),
         s,
         pattern,
         last_match_empty: false,
     };
 
-    Ok(vec![
+    lua_return!(state;
         native_function!(gmatch_iter),
-        UserData::new_light(state).into(),
+        UserData::new_light(gmatch_state).into(),
         LuaValue::NIL,
-    ])
+    )
 }
 
-fn gmatch_iter(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+fn gmatch_iter(state: &mut LuaState) -> crate::Result<u16> {
     require_userdata!(write, state.try_arg(0), "gmatch_iter", 0, userdata, {
         let data = match userdata {
             UserData::Light(data) => data,
-            _ => return Ok(vec![LuaValue::NIL]),
+            _ => lua_return!(state),
         };
-        let state = match data.write().unwrap().downcast_mut::<GmatchState>() {
+        let gmatch_state = match data.write().unwrap().downcast_mut::<GmatchState>() {
             Some(s) => s as *mut GmatchState,
-            None => return Ok(vec![LuaValue::NIL]),
+            None => lua_return!(state),
         };
 
         // SAFETY: we hold the write lock on the Arc<RwLock<..>> for the duration of this
         // block (the require_userdata macro holds it), so exclusive access is guaranteed.
-        let state = unsafe { &mut *state };
+        let gmatch_state = unsafe { &mut *gmatch_state };
 
         loop {
-            if state.pos > state.s.len() {
-                return Ok(vec![LuaValue::NIL]);
+            if gmatch_state.pos > gmatch_state.s.len() {
+                lua_return!(state)
             }
 
-            let haystack = &state.s[state.pos..];
+            let haystack = &gmatch_state.s[gmatch_state.pos..];
 
-            match &state.pattern {
+            match &gmatch_state.pattern {
                 LuaPattern::Plain(pattern) => match haystack.find(pattern) {
                     Some(offset) => {
-                        let abs_start = state.pos + offset;
+                        let abs_start = gmatch_state.pos + offset;
                         let abs_end = abs_start + pattern.len();
                         if pattern.is_empty() {
-                            if state.last_match_empty {
-                                state.pos = abs_end + 1;
-                                state.last_match_empty = false;
+                            if gmatch_state.last_match_empty {
+                                gmatch_state.pos = abs_end + 1;
+                                gmatch_state.last_match_empty = false;
                                 continue;
                             }
-                            state.last_match_empty = true;
+                            gmatch_state.last_match_empty = true;
                         } else {
-                            state.last_match_empty = false;
+                            gmatch_state.last_match_empty = false;
                         }
-                        state.pos = abs_end;
-                        return Ok(vec![LuaValue::from_string(&state.s[abs_start..abs_end])]);
+                        gmatch_state.pos = abs_end;
+                        lua_return!(state; LuaValue::from_string(&gmatch_state.s[abs_start..abs_end]))
                     }
-                    None => return Ok(vec![LuaValue::NIL]),
+                    None => lua_return!(state),
                 },
                 LuaPattern::Regex(regex) => {
                     let captures = regex.captures(haystack);
@@ -371,38 +368,38 @@ fn gmatch_iter(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
                     match captures {
                         Some(captures) => {
                             let full_match = captures.get(0).unwrap();
-                            let abs_end = state.pos + full_match.end();
+                            let abs_end = gmatch_state.pos + full_match.end();
 
                             if full_match.as_bytes().is_empty() {
-                                if state.last_match_empty {
-                                    state.pos += 1;
-                                    state.last_match_empty = false;
+                                if gmatch_state.last_match_empty {
+                                    gmatch_state.pos += 1;
+                                    gmatch_state.last_match_empty = false;
                                     continue;
                                 }
-                                state.last_match_empty = true;
+                                gmatch_state.last_match_empty = true;
                             } else {
-                                state.last_match_empty = false;
+                                gmatch_state.last_match_empty = false;
                             }
 
-                            state.pos = abs_end;
+                            gmatch_state.pos = abs_end;
 
                             let has_groups = regex.captures_len() > 1;
                             if has_groups {
-                                let mut results = Vec::with_capacity(regex.captures_len() - 1);
                                 for i in 1..regex.captures_len() {
                                     match captures.get(i) {
                                         Some(m) => {
-                                            results.push(LuaValue::from_string(m.as_bytes()))
+                                            state.set(i - 1, LuaValue::from_string(m.as_bytes()))
                                         }
-                                        None => results.push(LuaValue::NIL),
+                                        None => state.set(i, LuaValue::NIL),
                                     }
                                 }
-                                return Ok(results);
+                                return Ok(u16::try_from(regex.captures_len() - 1)
+                                    .expect("too many captures"));
                             } else {
-                                return Ok(vec![LuaValue::from_string(full_match.as_bytes())]);
+                                lua_return!(state; LuaValue::from_string(full_match.as_bytes()))
                             }
                         }
-                        None => return Ok(vec![LuaValue::NIL]),
+                        None => lua_return!(state),
                     }
                 }
             }
@@ -410,12 +407,12 @@ fn gmatch_iter(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
     })
 }
 
-fn format(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+fn format(state: &mut LuaState) -> crate::Result<u16> {
     let mut format_string = state.arg_as_string(0)?;
 
     let mut format_from = 0;
     for i in 1..state.num_args() {
-        let v = state.arg(i);
+        let v = state.arg(i as usize);
         let Some((index, format)) =
             format_string
                 .iter()
@@ -456,24 +453,24 @@ fn format(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
         format_from = index + formatted_value.len();
     }
 
-    Ok(vec![LuaValue::from_string(format_string)])
+    lua_return!(state; LuaValue::from_string(format_string))
 }
 
-fn len(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+fn len(state: &mut LuaState) -> crate::Result<u16> {
     let input = state.arg_as_string(0)?;
 
-    Ok(vec![LuaValue::from_integer(input.len() as i64)])
+    lua_return!(state; LuaValue::from_integer(input.len() as i64))
 }
 
-fn lower(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+fn lower(state: &mut LuaState) -> crate::Result<u16> {
     let input = state.arg_as_string(0)?;
     let string = String::from_utf8_lossy(&input);
     let lower = string.to_lowercase();
 
-    Ok(vec![LuaValue::from_string(lower.into_bytes())])
+    lua_return!(state; LuaValue::from_string(lower.into_bytes()))
 }
 
-fn r#match(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+fn r#match(state: &mut LuaState) -> crate::Result<u16> {
     let s = state.arg_as_string(0)?;
     let pattern = state.arg_as_string(1)?;
     // TODO: init parameter
@@ -481,10 +478,10 @@ fn r#match(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
     let pattern = pattern_to_regex(&pattern)?;
     match pattern {
         LuaPattern::Plain(pattern) => match s.find(&pattern) {
-            Some(start) => Ok(vec![LuaValue::from_string(
-                &s[start..start + pattern.len()],
-            )]),
-            None => Ok(vec![LuaValue::NIL]),
+            Some(start) => {
+                lua_return!(state; LuaValue::from_string(&s[start..start + pattern.len()]))
+            }
+            None => lua_return!(state),
         },
         LuaPattern::Regex(regex) => {
             let captures = regex.captures(&s);
@@ -492,24 +489,24 @@ fn r#match(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
             match captures {
                 Some(captures) => {
                     if let Some(capture) = captures.get(0) {
-                        Ok(vec![LuaValue::from_string(capture.as_bytes())])
+                        lua_return!(state; LuaValue::from_string(capture.as_bytes()))
                     } else {
-                        Ok(vec![s.into()])
+                        lua_return!(state; s.into())
                     }
                 }
-                None => Ok(vec![LuaValue::NIL]),
+                None => lua_return!(state),
             }
         }
     }
 }
 
-fn rep(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+fn rep(state: &mut LuaState) -> crate::Result<u16> {
     let s = state.arg_as_string(0)?;
     let n = state.arg_as_integer(1)?;
     let sep = state.try_arg_as_string(2)?;
     let sep = sep.as_ref().map(|s| s.as_slice()).unwrap_or(b"");
     if n < 1 {
-        return Ok(vec![LuaValue::from_string(LuaString::new())]);
+        lua_return!(state; LuaValue::from_string(LuaString::new()))
     }
 
     let mut result = s.clone();
@@ -518,18 +515,18 @@ fn rep(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
         result.extend_from_slice(&s);
     }
 
-    Ok(vec![LuaValue::from_string(result)])
+    lua_return!(state; LuaValue::from_string(result))
 }
 
-fn reverse(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+fn reverse(state: &mut LuaState) -> crate::Result<u16> {
     let input = state.arg_as_string(0)?;
 
     let mut reversed = input.clone();
     reversed.reverse();
-    Ok(vec![LuaValue::from_string(reversed)])
+    lua_return!(state; LuaValue::from_string(reversed))
 }
 
-fn pack(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+fn pack(state: &mut LuaState) -> crate::Result<u16> {
     let fmt = state.arg_as_string(0)?;
     let mut result = LuaString::new();
     let mut max_alignment = 1;
@@ -661,10 +658,10 @@ fn pack(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
         }
     }
 
-    Ok(vec![LuaValue::from_string(result)])
+    lua_return!(state; LuaValue::from_string(result))
 }
 
-fn packsize(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+fn packsize(state: &mut LuaState) -> crate::Result<u16> {
     let fmt = state.arg_as_string(0)?;
     let mut result = 0;
     let mut max_alignment = 1;
@@ -710,10 +707,10 @@ fn packsize(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
         item += 1;
     }
 
-    Ok(vec![LuaValue::from_integer(result as i64)])
+    lua_return!(state; LuaValue::from_integer(result as i64))
 }
 
-fn sub(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+fn sub(state: &mut LuaState) -> crate::Result<u16> {
     let s = state.arg_as_string(0)?;
     let i = state.arg_as_integer(1)?;
     let j = match state.try_arg(2) {
@@ -738,7 +735,7 @@ fn sub(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
         Ordering::Less => s.len() as i64 + j + 1,
         Ordering::Greater if j >= s.len() as i64 => s.len() as i64,
         Ordering::Greater => j,
-        Ordering::Equal => return Ok(vec![LuaValue::from_string(LuaString::new())]),
+        Ordering::Equal => lua_return!(state; LuaValue::from_string(LuaString::new())),
     };
     let j = if j > s.len() as i64 {
         s.len() as i64
@@ -747,15 +744,15 @@ fn sub(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
     };
 
     if i > j {
-        return Ok(vec![LuaValue::from_string(LuaString::new())]);
+        lua_return!(state; LuaValue::from_string(LuaString::new()))
     }
 
-    Ok(vec![LuaValue::from_string(
+    lua_return!(state; LuaValue::from_string(
         &s[(i - 1) as usize..=(j - 1) as usize],
-    )])
+    ))
 }
 
-fn unpack(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+fn unpack(state: &mut LuaState) -> crate::Result<u16> {
     let fmt = state.arg_as_string(0)?;
     let s = state.arg_as_string(1)?;
     let mut pos = state
@@ -774,7 +771,13 @@ fn unpack(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
         ));
     }
 
-    let mut result = vec![];
+    let mut result_index: u16 = 0;
+    macro_rules! result(
+        ($value:expr) => {{
+            state.set(result_index, $value);
+            result_index += 1;
+        }};
+    );
     let mut is_little_endian = cfg!(target_endian = "little");
     let mut max_alignment = 1;
 
@@ -820,7 +823,7 @@ fn unpack(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
                     ));
                 }
 
-                result.push(unpack_int(&s[pos..pos + size], is_little_endian, size, true)?.into());
+                result!(unpack_int(&s[pos..pos + size], is_little_endian, size, true)?.into());
                 pos += size;
             }
             PackOption::UnsignedInt => {
@@ -831,7 +834,7 @@ fn unpack(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
                     ));
                 }
 
-                result.push(unpack_int(&s[pos..pos + size], is_little_endian, size, false)?.into());
+                result!(unpack_int(&s[pos..pos + size], is_little_endian, size, false)?.into());
                 pos += size;
             }
             PackOption::Float => {
@@ -845,7 +848,7 @@ fn unpack(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
                 let mut buff = [0u8; size_of::<f32>()];
                 copy_bytes_fix_endian(&mut buff, &s[pos..], is_little_endian);
                 let float = f32::from_ne_bytes(buff);
-                result.push(LuaNumber::Float(float as f64).into());
+                result!(LuaNumber::Float(float as f64).into());
                 pos += size;
             }
             PackOption::Double | PackOption::LuaNumber => {
@@ -859,7 +862,7 @@ fn unpack(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
                 let mut buff = [0u8; size_of::<f64>()];
                 copy_bytes_fix_endian(&mut buff, &s[pos..], is_little_endian);
                 let float = f64::from_ne_bytes(buff);
-                result.push(LuaNumber::Float(float).into());
+                result!(LuaNumber::Float(float).into());
                 pos += size;
             }
             PackOption::FixedString => {
@@ -870,7 +873,7 @@ fn unpack(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
                     ));
                 }
 
-                result.push(LuaValue::from_string(&s[pos..pos + size]));
+                result!(LuaValue::from_string(&s[pos..pos + size]));
                 pos += size;
             }
             PackOption::String => {
@@ -890,7 +893,7 @@ fn unpack(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
                 }
 
                 let string = Vec::from(&s[pos..pos + len]);
-                result.push(LuaValue::from_string(string));
+                result!(LuaValue::from_string(string));
                 pos += len;
             }
             PackOption::Zstr => {
@@ -902,7 +905,7 @@ fn unpack(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
                 };
 
                 let string = Vec::from(&s[pos..pos + len]);
-                result.push(LuaValue::from_string(string));
+                result!(LuaValue::from_string(string));
                 // skip past string and the null terminator
                 pos += len + 1;
             }
@@ -926,14 +929,14 @@ fn unpack(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
         }
     }
 
-    result.push((pos as i64 + 1).into());
-    Ok(result)
+    result!((pos as i64 + 1).into());
+    Ok(result_index)
 }
 
-fn upper(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+fn upper(state: &mut LuaState) -> crate::Result<u16> {
     let input = state.arg_as_string(0)?;
     let string = String::from_utf8_lossy(&input);
     let upper = string.to_uppercase();
 
-    Ok(vec![LuaValue::from_string(upper.into_bytes())])
+    lua_return!(state; LuaValue::from_string(upper.into_bytes()))
 }

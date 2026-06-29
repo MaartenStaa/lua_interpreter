@@ -4,9 +4,9 @@ use std::{ffi::OsString, sync::LazyLock};
 
 use crate::{
     error::lua_error,
-    macros::native_function,
+    macros::{lua_return, native_function},
     state::LuaState,
-    value::{LuaObject, LuaTable, LuaValue},
+    value::{LuaTable, LuaValue},
 };
 
 pub static OS: LazyLock<LuaValue> = LazyLock::new(|| {
@@ -24,25 +24,25 @@ pub static OS: LazyLock<LuaValue> = LazyLock::new(|| {
 
 pub static CLOCK_START: LazyLock<ProcessTime> = LazyLock::new(ProcessTime::now);
 
-fn clock(_: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
-    Ok(vec![CLOCK_START.elapsed().as_secs_f64().into()])
+fn clock(state: &mut LuaState) -> crate::Result<u16> {
+    lua_return!(state; CLOCK_START.elapsed().as_secs_f64().into())
 }
 
-fn getenv(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+fn getenv(state: &mut LuaState) -> crate::Result<u16> {
     let name = state.arg_as_string(0)?;
     let name_os_str = OsString::from(String::from_utf8_lossy(name.as_slice()).to_string());
 
     match std::env::var(name_os_str) {
-        Ok(value) => Ok(vec![value.into()]),
-        Err(_) => Ok(vec![LuaValue::NIL]),
+        Ok(value) => lua_return!(state; value.into()),
+        Err(_) => lua_return!(state),
     }
 }
 
-fn setlocale(_: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
-    Ok(vec![LuaValue::NIL])
+fn setlocale(state: &mut LuaState) -> crate::Result<u16> {
+    lua_return!(state)
 }
 
-fn time(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+fn time(state: &mut LuaState) -> crate::Result<u16> {
     if state.num_args() > 0 {
         return Err(lua_error!(
             "passing arguments to 'os.time' is not yet supported"
@@ -52,10 +52,10 @@ fn time(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
     let epoch = chrono::DateTime::UNIX_EPOCH;
     let now = chrono::Utc::now();
 
-    Ok(vec![(now - epoch).num_seconds().into()])
+    lua_return!(state; (now - epoch).num_seconds().into())
 }
 
-fn tmpname(_: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+fn tmpname(state: &mut LuaState) -> crate::Result<u16> {
     let rng = rand::rng();
     let random_string: String = rng
         .sample_iter(distr::Alphanumeric)
@@ -66,5 +66,5 @@ fn tmpname(_: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
     let tmpdir = std::env::temp_dir();
     let tmpname = tmpdir.join(format!("lua-{}", random_string));
 
-    Ok(vec![tmpname.to_string_lossy().to_string().into()])
+    lua_return!(state; tmpname.to_string_lossy().to_string().into())
 }

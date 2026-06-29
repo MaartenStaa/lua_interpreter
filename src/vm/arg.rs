@@ -16,20 +16,20 @@ use crate::{
 /// Utility functions for working with function arguments in the Lua state.
 impl LuaState {
     /// Get the number of arguments passed to the current function call.
-    pub fn num_args(&self) -> usize {
-        self.call_frame().num_args as usize
+    pub fn num_args(&self) -> u16 {
+        self.call_frame().num_args
     }
 
     /// Get all arguments for the current function call.
     pub fn args(&self) -> Vec<LuaValue> {
         let num_args = self.call_frame().num_args as usize;
-        (0..num_args).map(|i| self.get(i)).collect()
+        (0..num_args).map(|i| self.get(i + 1)).collect()
     }
 
     /// Get references to all arguments for the current function call.
     pub fn args_ref(&self) -> Vec<Cow<'_, LuaValue>> {
         let num_args = self.call_frame().num_args as usize;
-        (0..num_args).map(|i| self.get_ref(i)).collect()
+        (0..num_args).map(|i| self.get_ref(i + 1)).collect()
     }
 
     /// Get the argument at the given index for the current function call. Returns
@@ -40,7 +40,7 @@ impl LuaState {
             return LuaValue::NIL;
         }
 
-        self.get(index)
+        self.get(index + 1)
     }
 
     /// Try to get the argument at the given index for the current function call. Returns
@@ -51,7 +51,7 @@ impl LuaState {
             return None;
         }
 
-        Some(self.get(index))
+        Some(self.get(index + 1))
     }
 
     /// Ensure that the argument at the given index for the current function call exists. Like
@@ -62,7 +62,7 @@ impl LuaState {
             return self.arg_err(index, "value expected");
         }
 
-        Ok(self.get(index))
+        Ok(self.get(index + 1))
     }
 
     /// Get a reference to the argument at the given index for the current function call. Like
@@ -73,7 +73,7 @@ impl LuaState {
             return std::borrow::Cow::Owned(LuaValue::NIL);
         }
 
-        self.get_ref(index)
+        self.get_ref(index + 1)
     }
 
     pub fn arg_as_callable(&self, index: usize) -> crate::Result<Callable> {

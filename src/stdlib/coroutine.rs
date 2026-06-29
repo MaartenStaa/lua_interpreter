@@ -21,7 +21,7 @@ pub static COROUTINE: LazyLock<LuaValue> = LazyLock::new(|| {
     coroutine.into()
 });
 
-fn create(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+fn create(state: &mut LuaState) -> crate::Result<u16> {
     let callable = state.arg_as_callable(0)?;
 
     // Native functions cannot be used as coroutines directly
@@ -35,29 +35,34 @@ fn create(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
         ));
     }
 
-    let state = LuaState::for_callable(Arc::clone(&state.global), callable)
+    let thread = LuaState::for_callable(Arc::clone(&state.global), callable)
         .with_tracer(state.tracer.is_some());
+    state.set(0usize, thread.into());
 
-    Ok(vec![state.into()])
+    Ok(1)
 }
 
-fn resume(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+fn resume(state: &mut LuaState) -> crate::Result<u16> {
     let mut args = state.args();
     args.remove(0); // remove the thread argument
 
-    state.with_arg_as_mut_thread(0, |co| match co.resume(args) {
-        Ok(mut result) => {
-            result.insert(0, LuaValue::from_bool(true));
-            Ok(result)
+    match state.with_arg_as_mut_thread(0, |co| co.resume(args)) {
+        Ok(result) => {
+            state.set(0usize, LuaValue::from_bool(true));
+            let num_results = result.len();
+            for (i, value) in result.into_iter().enumerate() {
+                state.set(i + 1, value);
+            }
+            Ok(u16::try_from(num_results + 1).expect("too many results from coroutine"))
         }
         Err(e) => {
             let msg = e.message.into_bytes();
-            Ok(vec![LuaValue::from_bool(false), msg.into()])
+            lua_return!(state; LuaValue::from_bool(false), msg.into())
         }
-    })
+    }
 }
 
-fn wrap(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+fn wrap(state: &mut LuaState) -> crate::Result<u16> {
     let callable = state.arg_as_callable(0)?;
 
     if matches!(
@@ -80,14 +85,14 @@ fn wrap(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
     );
     holder.set_metatable(Some(metatable.into()));
 
-    Ok(vec![holder.into()])
+    lua_return!(state; holder.into())
 }
 
-fn wrap_resume(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+fn wrap_resume(state: &mut LuaState) -> crate::Result<u16> {
     let mut args = state.args();
     args.remove(0); // remove self (the table)
 
-    state.with_arg_as_mut_table(0, |table| {
+    let result = state.with_arg_as_mut_table(0, |table| {
         let thread_val = match table.get(&LuaValue::from_integer(1)) {
             Some(v) => v.clone(),
             None => return Err(lua_error!("cannot resume dead coroutine")),
@@ -98,16 +103,15 @@ fn wrap_resume(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
         let obj = unsafe { thread_val.as_object() };
         let mut obj = obj.write().unwrap();
         match &mut *obj {
-            LuaObject::Thread(co) => match co.resume(args) {
-                Ok(result) => Ok(result),
-                Err(e) => Err(e),
-            },
+            LuaObject::Thread(co) => co.resume(args),
             _ => Err(lua_error!("cannot resume dead coroutine")),
         }
-    })
+    })?;
+
+    lua_return!(state; from = result)
 }
 
-fn yield_fn(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+fn yield_fn(state: &mut LuaState) -> crate::Result<u16> {
     if state.is_main_thread {
         return Err(crate::error::lua_error!(
             "attempt to yield from outside a coroutine"
@@ -123,6 +127,6 @@ fn yield_fn(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
     let values = state.args();
     state.yield_values(values);
 
-    // Return empty vec - the actual yield values will be picked up by pending_yield
-    Ok(vec![])
+    // Return no values - the actual yield values will be picked up by pending_yield
+    lua_return!(state)
 }

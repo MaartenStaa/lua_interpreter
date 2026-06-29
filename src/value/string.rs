@@ -8,11 +8,11 @@ use std::{
 use crate::{
     LuaState,
     error::lua_error,
-    macros::native_function,
+    macros::{lua_return, native_function},
     stdlib,
 };
 
-use super::{LuaNumber, LuaObject, LuaTable, LuaValue, metatables};
+use super::{LuaNumber, LuaTable, LuaValue, metatables};
 
 #[derive(Clone, PartialEq, Eq, Hash, Default, PartialOrd)]
 pub struct LuaString(Vec<u8>);
@@ -188,72 +188,72 @@ fn value_numbers(state: &mut LuaState) -> crate::Result<(LuaNumber, LuaNumber)> 
     Ok((a, b))
 }
 
-fn add(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+fn add(state: &mut LuaState) -> crate::Result<u16> {
     let (a, b) = value_numbers(state)?;
 
-    Ok(vec![LuaValue::from_number(a + b)])
+    lua_return!(state; LuaValue::from_number(a + b))
 }
 
-fn sub(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+fn sub(state: &mut LuaState) -> crate::Result<u16> {
     let (a, b) = value_numbers(state)?;
 
-    Ok(vec![LuaValue::from_number(a - b)])
+    lua_return!(state; LuaValue::from_number(a - b))
 }
 
-fn mul(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+fn mul(state: &mut LuaState) -> crate::Result<u16> {
     let (a, b) = value_numbers(state)?;
 
-    Ok(vec![LuaValue::from_number(a * b)])
+    lua_return!(state; LuaValue::from_number(a * b))
 }
 
-fn div(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+fn div(state: &mut LuaState) -> crate::Result<u16> {
     let (a, b) = value_numbers(state)?;
 
-    Ok(vec![LuaValue::from_number(a / b)])
+    lua_return!(state; LuaValue::from_number(a / b))
 }
 
-fn mod_(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+fn mod_(state: &mut LuaState) -> crate::Result<u16> {
     let (a, b) = value_numbers(state)?;
 
-    Ok(vec![LuaValue::from_number(a % b)])
+    lua_return!(state; LuaValue::from_number(a % b))
 }
 
-fn pow(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+fn pow(state: &mut LuaState) -> crate::Result<u16> {
     let (a, b) = value_numbers(state)?;
 
-    Ok(vec![LuaValue::from_number(a.pow(&b))])
+    lua_return!(state; LuaValue::from_number(a.pow(&b)))
 }
 
-fn unm(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+fn unm(state: &mut LuaState) -> crate::Result<u16> {
     if state.num_args() != 1 {
         return Err(lua_error!("__unm expects 1 argument"));
     }
 
     let a = coerce_number(state.arg(0))?;
 
-    Ok(vec![LuaValue::from_number(-a)])
+    lua_return!(state; LuaValue::from_number(-a))
 }
 
-fn idiv(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+fn idiv(state: &mut LuaState) -> crate::Result<u16> {
     let (a, b) = value_numbers(state)?;
 
-    Ok(vec![LuaValue::from_number(a.idiv(&b))])
+    lua_return!(state; LuaValue::from_number(a.idiv(&b)))
 }
 
-fn band(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+fn band(state: &mut LuaState) -> crate::Result<u16> {
     let (a, b) = value_numbers(state)?;
 
-    Ok(vec![LuaValue::from_number((a & b)?)])
+    lua_return!(state; LuaValue::from_number((a & b)?))
 }
 
-fn bor(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+fn bor(state: &mut LuaState) -> crate::Result<u16> {
     let (a, b) = value_numbers(state)?;
 
-    Ok(vec![LuaValue::from_number((a | b)?)])
+    lua_return!(state; LuaValue::from_number((a | b)?))
 }
 
-fn bxor(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+fn bxor(state: &mut LuaState) -> crate::Result<u16> {
     let (a, b) = value_numbers(state)?;
 
-    Ok(vec![LuaValue::from_number((a ^ b)?)])
+    lua_return!(state; LuaValue::from_number((a ^ b)?))
 }

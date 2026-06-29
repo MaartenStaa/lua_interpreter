@@ -47,11 +47,13 @@ impl LuaState {
                 };
                 match close.method {
                     Method::Closure(closure) => {
-                        self.run_closure(closure, args)?;
-                    }
-                    Method::NativeFunction(name, func) => {
                         let num_args = args.len();
-                        let args_r = self.extend_stack(args);
+                        let args_r = self.extend_stack(LuaValue::NIL, args);
+                        self.run_closure(closure, args_r, num_args as u16)?;
+                    }
+                    nf @ Method::NativeFunction(name, func) => {
+                        let num_args = args.len();
+                        let args_r = self.extend_stack(nf, args);
                         self.run_native_function(name, func, args_r, num_args as u16)?;
                     }
                 }

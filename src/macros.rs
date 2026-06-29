@@ -1,3 +1,36 @@
+macro_rules! lua_return {
+    // Must always return one value
+    ($state:ident) => {
+        lua_return!(_handle; $state; 0u16; $crate::value::LuaValue::NIL)
+    };
+    ($state:ident; from = $iterable:expr) => {{
+        let mut num = 0;
+        for (i, v) in $iterable.into_iter().enumerate() {
+            num += 1;
+            $state.set(i, v);
+        }
+        if num == 0 {
+            $state.set(0usize, $crate::value::LuaValue::NIL);
+            Ok(1)
+        } else {
+            Ok(num)
+        }
+    }};
+    ($state:ident; $($value:expr),* $(,)?) => {
+        lua_return!(_handle; $state; 0u16; $($value),*)
+    };
+    // Terminal case: encountered a value, and there are no more values remaining
+    (_handle; $state:ident; $index:expr; $value:expr) => {{
+        $state.set($index, $value);
+        return Ok($index + 1);
+    }};
+    // Encountered a value, and there are more values remaining
+    (_handle; $state:ident; $index:expr; $value:expr, $($other_values:expr),*) => {{
+        $state.set($index, $value);
+        lua_return!(_handle; $state; $index + 1; $($other_values),*)
+    }};
+}
+
 macro_rules! native_function {
     ($func:ident) => {{
         $crate::value::LuaValue::from_object(::std::sync::Arc::new(::std::sync::RwLock::new(
@@ -348,6 +381,6 @@ macro_rules! require_userdata_type {
 }
 
 pub(crate) use {
-    assert_closure, assert_string, assert_table, assert_table_object, native_function,
+    assert_closure, assert_string, assert_table, assert_table_object, lua_return, native_function,
     require_closure, require_table, require_userdata, require_userdata_type,
 };

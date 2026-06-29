@@ -500,18 +500,28 @@ impl LuaValue {
                 )
             })?;
 
-            let mut result = match __tostring.method {
-                Method::Closure(closure) => state
-                    .run_closure(closure, vec![self.clone()])?
-                    .unwrap_completed(),
-                Method::NativeFunction(name, f) => {
-                    let args_r = state.extend_stack(vec![self.clone()]);
-                    state.run_native_function(name, f, args_r, 1)?
+            let result = match __tostring.method {
+                Method::Closure(closure) => {
+                    let args_r = state.extend_stack(LuaValue::NIL, [self.clone()]);
+                    state
+                        .run_closure(closure, args_r, 1)?
+                        .unwrap_completed()
+                        .into_iter()
+                        .next()
+                }
+                nf @ Method::NativeFunction(name, f) => {
+                    let args_r = state.extend_stack(nf, [self.clone()]);
+                    let num_return = state.run_native_function(name, f, args_r, 1)?;
+                    debug_assert!(
+                        num_return >= 1,
+                        "native function {} did not return a value",
+                        name
+                    );
+                    Some(state.get(args_r))
                 }
             };
-            result.resize(1, LuaValue::NIL);
 
-            return match result.swap_remove(0) {
+            return match result.unwrap_or(LuaValue::NIL) {
                 v if v.is_string() => Ok(unsafe { v.into_string() }),
                 v => Err(lua_error!(
                     "__tostring metamethod must return a string, got {}",

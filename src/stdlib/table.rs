@@ -2,7 +2,7 @@ use std::sync::LazyLock;
 
 use crate::{
     error::lua_error,
-    macros::{native_function, require_table},
+    macros::{lua_return, native_function, require_table},
     state::LuaState,
     value::{IntegerRepr, LuaObject, LuaTable, LuaValue},
 };
@@ -18,7 +18,7 @@ pub static TABLE: LazyLock<LuaValue> = LazyLock::new(|| {
     table.into()
 });
 
-fn concat(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+fn concat(state: &mut LuaState) -> crate::Result<u16> {
     // Temporary storage for number conversion, avoids needing to clone a string separator to match
     // the Vec<u8> type.
     let temp;
@@ -70,10 +70,10 @@ fn concat(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
         }
     });
 
-    Ok(vec![LuaValue::from_string(result)])
+    lua_return!(state; result.into())
 }
 
-fn insert(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+fn insert(state: &mut LuaState) -> crate::Result<u16> {
     require_table!(write, state.try_arg(0), "table.insert", 0, table, {
         let len = table.len() as i64;
 
@@ -102,34 +102,38 @@ fn insert(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
             }
         }
 
-        Ok(vec![])
+        lua_return!(state)
     })
 }
 
-fn pack(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+fn pack(state: &mut LuaState) -> crate::Result<u16> {
     let mut result = LuaTable::new();
 
     let len = state.num_args();
     for i in 0..len {
-        let v = state.arg(i);
+        let v = state.arg(i as usize);
         result.insert((i as i64 + 1).into(), v);
     }
 
     result.insert("n".into(), (len as i64).into());
 
-    Ok(vec![result.into()])
+    lua_return!(state; result.into())
 }
 
-fn unpack(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+fn unpack(state: &mut LuaState) -> crate::Result<u16> {
     require_table!(read, state.try_arg(0), "table.unpack", 0, table, {
         let i = state.try_arg_as_integer(1)?.unwrap_or(1);
         let j = state.try_arg_as_integer(2)?.unwrap_or(table.len() as i64);
+        let num_values = (j - i + 1) as usize;
+        state.ensure_stack_space(num_values);
 
-        let mut result = Vec::new();
-        for k in i..=j {
-            result.push(table.get(&k.into()).unwrap_or(&LuaValue::NIL).clone());
+        for (register, k) in (i..=j).enumerate() {
+            state.set(
+                register,
+                table.get(&k.into()).unwrap_or(&LuaValue::NIL).clone(),
+            );
         }
 
-        Ok(result)
+        Ok(u16::try_from(num_values).expect("too many values to unpack"))
     })
 }

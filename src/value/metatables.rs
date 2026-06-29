@@ -116,7 +116,9 @@ pub fn handle(
         {
             match &*unsafe { mv.as_object() }.read().unwrap() {
                 LuaObject::Closure(c) => {
-                    let result = match state.run_closure(c.clone(), input) {
+                    let num_args = input.len();
+                    let args_r = state.extend_stack(mv.clone(), input);
+                    let result = match state.run_closure(c.clone(), args_r, num_args as u16) {
                         Ok(result) => result,
                         Err(e) => return Some(Err(e)),
                     };
@@ -125,13 +127,17 @@ pub fn handle(
                 }
                 LuaObject::NativeFunction(name, f) => {
                     let num_args = input.len();
-                    let args_r = state.extend_stack(input);
-                    let result = match state.run_native_function(name, *f, args_r, num_args as u16)
-                    {
-                        Ok(value) => value,
-                        Err(e) => return Some(Err(e)),
-                    };
-                    return Some(Ok(ExecutionResult::Completed(result)));
+                    let args_r = state.extend_stack(mv.clone(), input);
+                    let num_results =
+                        match state.run_native_function(name, *f, args_r, num_args as u16) {
+                            Ok(value) => value,
+                            Err(e) => return Some(Err(e)),
+                        };
+
+                    let results = (0..num_results)
+                        .map(|i| state.arg(args_r as usize + i as usize))
+                        .collect();
+                    return Some(Ok(ExecutionResult::Completed(results)));
                 }
                 _ => {}
             }

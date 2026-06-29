@@ -2,7 +2,7 @@ use std::sync::LazyLock;
 
 use crate::{
     error::lua_error,
-    macros::{native_function, require_closure},
+    macros::{lua_return, native_function, require_closure},
     state::LuaState,
     value::{
         IntegerRepr, LuaObject, LuaTable, LuaValue,
@@ -24,7 +24,7 @@ pub static DEBUG: LazyLock<LuaValue> = LazyLock::new(|| {
     debug.into()
 });
 
-fn getinfo(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+fn getinfo(state: &mut LuaState) -> crate::Result<u16> {
     // TODO: First argument can optionally refer to the thread
     // TODO: Last argument can refer to which fields to fill in the table
 
@@ -33,7 +33,7 @@ fn getinfo(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
         v if v.is_number() => {
             let call_frame_offset = unsafe { v.as_number() }.integer_repr()?;
             if call_frame_offset < 0 || call_frame_offset as usize > state.call_stack_index {
-                return Ok(vec![LuaValue::NIL]);
+                lua_return!(state)
             }
 
             // let call_frame = &vm.call_stack[vm.call_stack_index - call_frame_offset as usize];
@@ -68,10 +68,10 @@ fn getinfo(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
         }
     }
 
-    Ok(vec![info.into()])
+    lua_return!(state; info.into())
 }
 
-fn getupvalue(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+fn getupvalue(state: &mut LuaState) -> crate::Result<u16> {
     // TODO: Will produce error "value expected" rather than "function expected, got no value"
     let value = state.ensure_arg(0)?;
     let callable: Result<Callable, _> = value.clone().try_into();
@@ -85,11 +85,11 @@ fn getupvalue(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
     let n = state.arg_as_integer(1)? - 1;
 
     let Method::Closure(closure) = callable.method else {
-        return Ok(vec![]);
+        return Ok(0);
     };
 
     if n < 0 || n as usize >= closure.upvalues.len() {
-        return Ok(vec![]);
+        return Ok(0);
     }
 
     if let Some(upvalue) = &closure.upvalues.get(&(n as usize)) {
@@ -99,33 +99,34 @@ fn getupvalue(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
             .expect("invalid chunk")
             .unwrap_or_else(|| b"?".into());
 
-        Ok(vec![name.into(), upvalue.read().unwrap().clone()])
+        lua_return!(state;
+            name.into(),
+            upvalue.read().unwrap().clone(),
+        )
     } else {
-        Ok(vec![])
+        Ok(0)
     }
 }
 
-fn setmetatable(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+fn setmetatable(state: &mut LuaState) -> crate::Result<u16> {
     let mut value = state.ensure_arg(0)?;
     let mt = state.try_arg(1);
 
     value.set_metatable(mt)?;
-    Ok(vec![value])
+    lua_return!(state; value)
 }
 
-fn upvalueid(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+fn upvalueid(state: &mut LuaState) -> crate::Result<u16> {
     require_closure!(state.try_arg(0), "debug.upvalueid", closure, {
         let n = state.arg_as_integer(1)? - 1;
         if n < 0 || n as usize >= closure.upvalues.len() {
-            return Ok(vec![LuaValue::NIL]);
-        }
-
-        if let Some(upvalue) = &closure.upvalues.get(&(n as usize)) {
+            lua_return!(state)
+        } else if let Some(upvalue) = &closure.upvalues.get(&(n as usize)) {
             let id = (&*upvalue.read().unwrap()) as *const _ as i64;
             // TODO: This should be a "light userdata" value
-            Ok(vec![id.into()])
+            lua_return!(state; id.into())
         } else {
-            Ok(vec![LuaValue::NIL])
+            lua_return!(state)
         }
     })
 }

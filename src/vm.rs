@@ -98,7 +98,7 @@ impl LuaState {
     }
 
     #[inline]
-    fn get(&self, register: impl Into<usize>) -> LuaValue {
+    pub(crate) fn get(&self, register: impl Into<usize>) -> LuaValue {
         let frame_pointer = self.call_frame().frame_pointer;
         let value = &self.stack[frame_pointer + register.into()];
         if value.is_upvalue() {
@@ -131,7 +131,7 @@ impl LuaState {
     }
 
     #[inline]
-    fn set(&mut self, register: impl Into<usize>, value: LuaValue) {
+    pub fn set(&mut self, register: impl Into<usize>, value: LuaValue) {
         let frame_pointer = self.call_frame().frame_pointer;
         self.stack[frame_pointer + register.into()] = value;
     }
@@ -207,7 +207,7 @@ impl LuaState {
         Ok(())
     }
 
-    fn ensure_stack_space(&mut self, max_registers: impl Into<usize>) {
+    pub(crate) fn ensure_stack_space(&mut self, max_registers: impl Into<usize>) {
         let frame_pointer = self.call_frame().frame_pointer;
         let max_registers = max_registers.into();
         let required_stack_size = frame_pointer + max_registers;
@@ -222,6 +222,7 @@ impl LuaState {
     /// located.
     pub(crate) fn extend_stack(
         &mut self,
+        callable: impl Into<LuaValue>,
         values: impl IntoIterator<Item = LuaValue> + Debug + WithCount,
     ) -> u8 {
         let call_frame = self.call_frame();
@@ -229,11 +230,12 @@ impl LuaState {
         let max_registers = call_frame.max_registers;
         let register = max_registers;
 
-        self.ensure_stack_space(register + values.count() as u8);
+        self.ensure_stack_space(register as usize + values.count() + 1);
 
         // Copy over the values into the right area of the stack.
+        self.stack[frame_pointer + register as usize] = callable.into();
         for (i, value) in values.into_iter().enumerate() {
-            self.stack[frame_pointer + register as usize + i] = value;
+            self.stack[frame_pointer + register as usize + i + 1] = value;
         }
 
         register
@@ -313,7 +315,7 @@ impl LuaState {
                 let num_args = args.len();
                 self.stack
                     .reserve(num_args.saturating_sub(self.stack.len()));
-                self.stack.splice(..num_args, args);
+                self.stack.splice(1..=num_args, args);
 
                 // Note: Native functions are not supported as coroutines - coroutine.create() rejects them
                 // If this is ever extended to support native functions, we would need to store the function
@@ -358,8 +360,10 @@ impl LuaState {
                 Ok(values)
             }
             Ok(ExecutionResult::Yielded(values)) => {
-                // Status will be set to Suspended with resume args register
-                // This is handled when we actually yield
+                debug_assert!(
+                    matches!(self.status, ThreadStatus::Suspended { .. }),
+                    "run_inner returned yielded, but thread status doesn't match"
+                );
                 Ok(values)
             }
             Err(err) => {
@@ -372,10 +376,11 @@ impl LuaState {
     pub(crate) fn run_closure(
         &mut self,
         value: LuaClosure,
-        args: Vec<LuaValue>,
+        args_r: u8,
+        num_args: u16,
     ) -> crate::Result<ExecutionResult> {
         let original_call_stack_index = self.call_stack_index;
-        let frame_pointer = self.stack.len();
+        let frame_pointer = self.call_frame().frame_pointer + args_r as usize;
 
         let (max_registers, num_params, has_varargs) = self
             .with_chunk(value.chunk, |chunk| {
@@ -401,21 +406,17 @@ impl LuaState {
             false,
         )?;
 
-        let num_args = args.len();
-        self.ensure_stack_space(max_registers.max(num_args as u8));
-        for (index, arg) in args.into_iter().enumerate() {
-            self.set(index, arg);
-        }
 
+        // TODO: Move this responsibility out of here so we can get it set up right before even
+        // putting the values on the stack?
         self.align_closure_args(num_params, num_args, has_varargs);
 
         let result = match self.run_inner() {
-            Ok(ExecutionResult::Completed(values)) => {
+            Ok(result) => {
                 // NOTE: in this case we don't need to pop the call frame, as it was
                 // already popped by the `return` instruction (which is always present).
-                Ok(ExecutionResult::Completed(values))
+                Ok(result)
             }
-            Ok(ExecutionResult::Yielded(values)) => Ok(ExecutionResult::Yielded(values)),
             Err(err) => {
                 println!("err {err}");
                 Err(self.pop_call_frames_into_error(original_call_stack_index, *err))
@@ -488,14 +489,14 @@ impl LuaState {
             // TODO: Can just copy these once we have static stack access.
             let num_varargs = num_passed_params - num_params;
             for i in 0..num_varargs {
-                let arg = self.get(num_params + i);
+                let arg = self.get(num_params + i + 1);
                 self.call_frame_mut().varargs.push(arg);
             }
         }
 
         // Clear out the stack beyond the number of fixed params by filling it
         // with `nil` values. This gets rid of any stale values.
-        self.clear_registers_from(num_params.min(num_passed_params));
+        self.clear_registers_from(num_params.min(num_passed_params) + 1);
     }
 
     fn clear_registers_from(&mut self, from_register: impl Into<usize>) {
@@ -509,13 +510,27 @@ impl LuaState {
             .fill(LuaValue::NIL);
     }
 
+    /// Run a native function in this thread ([`LuaState`]). This will handle automatically pushing
+    /// and popping the call frame for the native function, and will ensure that the stack is in a
+    /// valid state before and after the call.
+    ///
+    /// # Expectations
+    ///
+    /// The stack is assumed to be in a correct state before the call. This means that:
+    /// - `args_r` is valid, and is an offset from the parent frame pointer.
+    /// - The actual <num_args> arguments sit at `stack[args_r + 1], stack[args_r + 2], ...,
+    ///   stack[args_r + num_args]`.
+    /// - The invoked function _may_ be at `stack[args_r]`, but this is not a requirement.
+    /// - The _return values_ of the native function will be placed starting at `stack[args_r]`.
+    ///
+    /// Like the native function itself, this returns the number of return values.
     pub(crate) fn run_native_function(
         &mut self,
         name: &'static str,
         function: NativeLuaFunction,
         args_r: u8,
         num_args: u16,
-    ) -> crate::Result<Vec<LuaValue>> {
+    ) -> crate::Result<u16> {
         let original_call_stack_index = self.call_stack_index;
         let parent_frame_pointer = if self.call_stack_index > 0 {
             self.call_frame().frame_pointer
@@ -1163,23 +1178,24 @@ impl LuaState {
                                             OpCode::SetTable
                                             | OpCode::SetTableConstKey
                                             | OpCode::SetTableUpval
-                                            | OpCode::SetTableUpvalConstKey => {
-                                                self.extend_stack([target, key, value])
-                                            }
+                                            | OpCode::SetTableUpvalConstKey => self.extend_stack(
+                                                closure.clone(),
+                                                [target, key, value],
+                                            ),
                                             _ => unreachable!(),
                                         };
                                         self.set_up_closure_call_frame(
                                             self.call_frame().frame_pointer + args_r as usize,
                                             ip + 1,
-                                            // Dismiss return values, place them _after_ the table
-                                            args_r + 1,
+                                            args_r,
                                             closure,
                                             3usize,
                                         )?;
                                         continue 'main;
                                     }
-                                    Method::NativeFunction(name, f) => {
-                                        let args_r = self.extend_stack([table.clone(), key, value]);
+                                    nf @ Method::NativeFunction(name, f) => {
+                                        let args_r =
+                                            self.extend_stack(nf, [table.clone(), key, value]);
                                         self.run_native_function(name, f, args_r, 3)?;
 
                                         // Check if the native function yielded
@@ -1315,7 +1331,10 @@ impl LuaState {
                                         // In these cases, the table and/or key are not yet
                                         // loaded into registers, which it needs to be for
                                         // the __index call.
-                                        self.extend_stack([table.clone(), key])
+                                        self.extend_stack(
+                                            __index.method.clone(),
+                                            [table.clone(), key],
+                                        )
                                     }
                                     _ => unreachable!(),
                                 };
@@ -1332,8 +1351,7 @@ impl LuaState {
                                         continue 'main;
                                     }
                                     Method::NativeFunction(name, f) => {
-                                        let result =
-                                            self.run_native_function(name, f, args_r, 2)?;
+                                        self.run_native_function(name, f, args_r, 2)?;
 
                                         // Check if the native function yielded
                                         if let Some(yield_values) = self.pending_yield.take() {
@@ -1344,11 +1362,7 @@ impl LuaState {
                                             return Ok(ExecutionResult::Yielded(yield_values));
                                         }
 
-                                        if let Some(return_value) = result.into_iter().next() {
-                                            self.set(dest_r, return_value);
-                                        } else {
-                                            self.set(dest_r, LuaValue::NIL);
-                                        }
+                                        self.set(dest_r, self.get(args_r));
                                     }
                                 }
                                 handled = true;
@@ -1438,26 +1452,41 @@ impl LuaState {
                     }
 
                     // Get the function value
-                    let function = self.get_ref(func_r);
+                    let function = self.get(func_r);
 
                     // Find the underlying closure or native function, handling metamethods
-                    let callable: Option<Callable> = function.as_ref().try_into().ok();
-
-                    let params_r = if callable.as_ref().is_some_and(|c| c.is_metamethod) {
-                        // This means that the function being called is actually a value with
-                        // a `__call` metamethod. Account for an extra argument, and use the
-                        // register for the "function" as the frame pointer, so it will be passed
-                        // as the implicit self paremeter.
-                        num_args += 1;
-                        func_r
-                    } else {
-                        // Normally, the parameters start just after the function register.
-                        func_r + 1
+                    let Some(Callable {
+                        is_metamethod,
+                        method,
+                    }) = (&function).try_into().ok()
+                    else {
+                        return Err(match self.describe_register(chunk_index, ip, func_r) {
+                            Some(name_info) => lua_error!(
+                                "attempt to call {name_info} (a {} value)",
+                                function.type_name(),
+                            ),
+                            None => {
+                                lua_error!("attempt to call a {} value", function.type_name(),)
+                            }
+                        });
                     };
 
-                    let callable = callable.map(|c| c.method);
-                    match callable {
-                        Some(Method::Closure(closure)) => {
+                    if is_metamethod {
+                        // This means that the function being called is actually a value with
+                        // a `__call` metamethod. Unfortunately, because `func_r` refers to the source
+                        // of the metamethod, we need to copy args over, as function calls expect
+                        // the arguments to start at `func_r + 1`.
+                        self.ensure_stack_space(func_r as usize + num_args + 1);
+                        for i in (0..num_args).rev() {
+                            let value = self.get(func_r as usize + i + 1);
+                            self.set(func_r as usize + i + 2, value);
+                        }
+                        self.set(func_r + 1, function);
+                        num_args += 1;
+                    }
+
+                    match method {
+                        Method::Closure(closure) => {
                             let parent_frame_pointer = self.call_frame().frame_pointer;
                             let (max_regs, num_params, has_varargs) = self
                                 .with_chunk(closure.chunk, |c| {
@@ -1467,7 +1496,7 @@ impl LuaState {
                             self.push_call_frame(
                                 CallFrameKind::for_chunk(closure.chunk),
                                 false,
-                                parent_frame_pointer + params_r as usize,
+                                parent_frame_pointer + func_r as usize,
                                 max_regs,
                                 ip + 1,
                                 func_r,
@@ -1480,9 +1509,13 @@ impl LuaState {
 
                             continue;
                         }
-                        Some(Method::NativeFunction(name, f)) => {
-                            let result =
-                                self.run_native_function(name, f, params_r, num_args as u16)?;
+                        Method::NativeFunction(name, f) => {
+                            let result = self.run_native_function(
+                                name,
+                                f,
+                                func_r,
+                                num_args.try_into().expect("too many args"),
+                            )?;
 
                             // Check if the native function yielded
                             if let Some(yield_values) = self.pending_yield.take() {
@@ -1495,39 +1528,24 @@ impl LuaState {
                                 return Ok(ExecutionResult::Yielded(yield_values));
                             }
 
-                            let value_slots_needed = match (is_single_return, result.len()) {
+                            let value_slots_needed = match (is_single_return, result) {
                                 (true, 0) => 1,
                                 (true, n) => n.min(1),
                                 (false, n) => n,
                             };
-                            self.ensure_stack_space(func_r as usize + value_slots_needed);
+                            self.ensure_stack_space(func_r as usize + value_slots_needed as usize);
 
-                            if result.is_empty() && is_single_return {
+                            if result == 0 && is_single_return {
                                 self.set(func_r, LuaValue::NIL);
                                 self.multres = 0;
+                            } else if is_single_return {
+                                // TODO: Do we need to cap the values set by the native function?
+                                self.multres = 1;
                             } else {
-                                self.multres = result.len();
-                                for (index, value) in result.into_iter().enumerate() {
-                                    self.set(func_r as usize + index, value);
-                                    if is_single_return {
-                                        self.multres = 1;
-                                        break;
-                                    }
-                                }
+                                self.multres = result as usize;
                             }
 
                             self.clear_registers_from(func_r as usize + self.multres);
-                        }
-                        _ => {
-                            return Err(match self.describe_register(chunk_index, ip, func_r) {
-                                Some(name_info) => lua_error!(
-                                    "attempt to call {name_info} (a {} value)",
-                                    function.type_name(),
-                                ),
-                                None => {
-                                    lua_error!("attempt to call a {} value", function.type_name(),)
-                                }
-                            });
                         }
                     }
                 }

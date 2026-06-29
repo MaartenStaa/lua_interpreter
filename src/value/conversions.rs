@@ -75,9 +75,18 @@ impl From<LuaNumber> for LuaValue {
     }
 }
 
-impl From<LuaTable> for LuaValue {
+impl<T> From<T> for LuaValue
+where
+    T: Into<LuaObject>,
+{
+    fn from(object: T) -> Self {
+        LuaValue::from_object(Arc::new(RwLock::new(object.into())))
+    }
+}
+
+impl From<LuaTable> for LuaObject {
     fn from(table: LuaTable) -> Self {
-        LuaValue::from_object(Arc::new(RwLock::new(LuaObject::Table(table))))
+        LuaObject::Table(table)
     }
 }
 
@@ -93,12 +102,6 @@ impl From<LuaState> for LuaValue {
     }
 }
 
-impl From<UserData> for LuaValue {
-    fn from(user_data: UserData) -> Self {
-        LuaValue::from_object(Arc::new(RwLock::new(LuaObject::UserData(user_data))))
-    }
-}
-
 impl From<LuaConst> for LuaValue {
     fn from(constant: LuaConst) -> Self {
         match constant {
@@ -108,12 +111,6 @@ impl From<LuaConst> for LuaValue {
             LuaConst::String(s) => LuaValue::from_string(s),
             LuaConst::Table(t) => LuaValue::from_object(Arc::new(RwLock::new(LuaObject::Table(t)))),
         }
-    }
-}
-
-impl From<LuaObject> for LuaValue {
-    fn from(object: LuaObject) -> Self {
-        LuaValue::from_object(Arc::new(RwLock::new(object)))
     }
 }
 

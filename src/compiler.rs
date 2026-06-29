@@ -139,7 +139,7 @@ impl Compiler {
             scope_id_counter: 1,
             scope_ids: vec![0],
             scope_starting_registers: vec![0],
-            register_index: 0,
+            register_index: 1,
             max_registers: 0,
             print_bytecode,
         };
@@ -191,7 +191,7 @@ impl Compiler {
             scope_id_counter: 1,
             scope_ids: vec![0],
             scope_starting_registers: vec![0],
-            register_index: 0,
+            register_index: 1,
             max_registers: 0,
             print_bytecode,
         };
@@ -1353,7 +1353,7 @@ impl Compiler {
                             .locals
                             .iter()
                             .filter(|local| local.depth <= self.scope_depth)
-                            .nth(goto.current_register as usize);
+                            .nth(goto.current_register as usize - 1);
                         any_new_locals = first_new_local.map(|local| NewLocalsAfterGoto {
                             goto: (label.node.0.clone(), goto.span),
                             local: (local.name.clone(), local.span),
@@ -2681,6 +2681,7 @@ impl Compiler {
         });
         let local = Local {
             name: name.clone(),
+            register,
             depth: self.scope_depth,
             span,
             attributes,
@@ -2689,14 +2690,14 @@ impl Compiler {
 
         let index = self.frame.locals.len() as u8;
         debug_assert!(
-            index == register,
+            index + 1 == register,
             "registers must be allocated sequentially (index: {index}, register: {register}), when adding local {}",
             String::from_utf8_lossy(&name),
         );
         self.frame.locals.push(local);
 
         if attributes & (LuaVariableAttribute::ToBeClosed as u8) != 0 {
-            self.to_close.push(index);
+            self.to_close.push(register);
         }
     }
 }

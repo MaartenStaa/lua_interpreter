@@ -8,7 +8,7 @@ pub struct Callable {
     pub(crate) is_metamethod: bool,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) enum Method {
     Closure(LuaClosure),
     NativeFunction(&'static str, NativeLuaFunction),
@@ -63,6 +63,21 @@ impl TryFrom<&LuaObject> for Callable {
                 is_metamethod: false,
             }),
             _ => Err("expected closure or native function"),
+        }
+    }
+}
+
+impl From<Callable> for LuaObject {
+    fn from(value: Callable) -> Self {
+        LuaObject::from(value.method)
+    }
+}
+
+impl From<Method> for LuaObject {
+    fn from(value: Method) -> Self {
+        match value {
+            Method::Closure(closure) => LuaObject::Closure(closure),
+            Method::NativeFunction(name, f) => LuaObject::NativeFunction(name, f),
         }
     }
 }
