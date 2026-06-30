@@ -415,10 +415,7 @@ pub(crate) fn print_instruction(
         }
 
         // Function
-        instr @ OpCode::Call
-        | instr @ OpCode::CallM
-        | instr @ OpCode::CallT
-        | instr @ OpCode::CallTM => {
+        instr @ (OpCode::Call | OpCode::CallM | OpCode::CallT | OpCode::CallTM) => {
             let is_single_return = instruction.b() == 1;
             let num_params = instruction.c();
             instr!(match instr {
@@ -496,7 +493,7 @@ pub(crate) fn print_instruction(
             let error_code = instruction.a();
             let error = RuntimeError::try_from(error_code).expect("valid error code");
             instr!("ERROR");
-            eprintln!("{:?}", error);
+            eprintln!("{error:?}");
             2
         }
     }
@@ -514,7 +511,7 @@ fn print_const(constant: &LuaConst) {
 
 fn print_number(number: &crate::value::LuaNumber) {
     match number {
-        crate::value::LuaNumber::Integer(i) => eprint!("INT       {}", i),
-        crate::value::LuaNumber::Float(f) => eprint!("FLOAT     {}", f),
+        crate::value::LuaNumber::Integer(i) => eprint!("INT       {i}"),
+        crate::value::LuaNumber::Float(f) => eprint!("FLOAT     {f}"),
     }
 }

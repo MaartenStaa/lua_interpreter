@@ -68,6 +68,7 @@ impl LuaValue {
         }
     }
 
+    #[must_use]
     pub fn get_metavalue(&self, key: &LuaValue) -> Option<LuaValue> {
         self.get_metatable()
             .and_then(|mt| assert_table!(mt, table, table.get(key).cloned()))
@@ -75,6 +76,7 @@ impl LuaValue {
 }
 
 impl LuaObject {
+    #[must_use]
     pub fn get_metatable(&self) -> Option<LuaValue> {
         match self {
             LuaObject::Table(t) => t.metatable().cloned(),
@@ -97,6 +99,7 @@ impl LuaObject {
         }
     }
 
+    #[must_use]
     pub fn get_metavalue(&self, key: &LuaValue) -> Option<LuaValue> {
         self.get_metatable()
             .and_then(|mt| assert_table!(mt, table, table.get(key).cloned()))
@@ -110,7 +113,7 @@ pub fn handle(
 ) -> Option<crate::Result<ExecutionResult>> {
     assert!(!input.is_empty());
 
-    for value in input.iter() {
+    for value in &input {
         if let Some(mv) = value.get_metavalue(key)
             && mv.is_object()
         {
@@ -118,7 +121,7 @@ pub fn handle(
                 LuaObject::Closure(c) => {
                     let num_args = input.len();
                     let args_r = state.extend_stack(mv.clone(), input);
-                    let result = match state.run_closure(c.clone(), args_r, num_args as u16) {
+                    let result = match state.run_closure(c, args_r, num_args as u16) {
                         Ok(result) => result,
                         Err(e) => return Some(Err(e)),
                     };

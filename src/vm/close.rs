@@ -49,7 +49,7 @@ impl LuaState {
                     Method::Closure(closure) => {
                         let num_args = args.len();
                         let args_r = self.extend_stack(LuaValue::NIL, args);
-                        self.run_closure(closure, args_r, num_args as u16)?;
+                        self.run_closure(&closure, args_r, num_args as u16)?;
                     }
                     nf @ Method::NativeFunction(name, func) => {
                         let num_args = args.len();

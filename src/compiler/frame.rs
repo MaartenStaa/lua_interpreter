@@ -19,7 +19,7 @@ pub(crate) enum ResolvedName<'a> {
     None,
 }
 
-impl<'a> ResolvedName<'a> {
+impl ResolvedName<'_> {
     pub(crate) fn attributes(&self) -> u8 {
         match self {
             ResolvedName::Local { local, .. } => local.attributes,
@@ -46,19 +46,17 @@ enum ResolvedUpvalue {
 }
 
 impl ResolvedUpvalue {
-    fn attributes(&self) -> u8 {
+    fn attributes(self) -> u8 {
         match self {
-            ResolvedUpvalue::Local { attributes, .. } => *attributes,
-            ResolvedUpvalue::Upvalue { attributes, .. } => *attributes,
+            ResolvedUpvalue::Local { attributes, .. }
+            | ResolvedUpvalue::Upvalue { attributes, .. } => attributes,
         }
     }
 
-    fn source(&self) -> UpvalueLocation {
+    fn source(self) -> UpvalueLocation {
         match self {
-            ResolvedUpvalue::Local { register, .. } => UpvalueLocation::Local {
-                register: *register,
-            },
-            ResolvedUpvalue::Upvalue { index, .. } => UpvalueLocation::Upvalue { index: *index },
+            ResolvedUpvalue::Local { register, .. } => UpvalueLocation::Local { register },
+            ResolvedUpvalue::Upvalue { index, .. } => UpvalueLocation::Upvalue { index },
         }
     }
 }

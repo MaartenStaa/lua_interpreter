@@ -32,10 +32,10 @@ fn getenv(state: &mut LuaState) -> crate::Result<u16> {
     let name = state.arg_as_string(0)?;
     let name_os_str = OsString::from(String::from_utf8_lossy(name.as_slice()).to_string());
 
-    match std::env::var(name_os_str) {
-        Ok(value) => lua_return!(state; value.into()),
-        Err(_) => lua_return!(state),
+    if let Ok(value) = std::env::var(name_os_str) {
+        lua_return!(state; value.into())
     }
+    lua_return!(state)
 }
 
 fn setlocale(state: &mut LuaState) -> crate::Result<u16> {
@@ -64,7 +64,7 @@ fn tmpname(state: &mut LuaState) -> crate::Result<u16> {
         .collect();
 
     let tmpdir = std::env::temp_dir();
-    let tmpname = tmpdir.join(format!("lua-{}", random_string));
+    let tmpname = tmpdir.join(format!("lua-{random_string}"));
 
     lua_return!(state; tmpname.to_string_lossy().to_string().into())
 }

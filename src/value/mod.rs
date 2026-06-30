@@ -25,6 +25,7 @@ pub use upvalue::UpValue;
 pub use userdata::UserData;
 
 use std::{
+    borrow::Borrow,
     fmt::{Debug, Display},
     hash::Hash,
     sync::{Arc, RwLock},
@@ -32,8 +33,8 @@ use std::{
 
 use crate::{LuaState, error::lua_error};
 
-/// Is it a bird? Is it a plane? No, it's a LuaValue! But maybe it's a string in
-/// a trench coat, or a boolean.
+/// Is it a bird? Is it a plane? No, it's a [`LuaValue`]! But maybe it's a
+/// string in a trench coat, or a boolean.
 ///
 /// # Layout
 ///
@@ -206,14 +207,17 @@ impl LuaValue {
 
     pub const NIL: Self = Self::tagged(2, 0);
 
+    #[must_use]
     pub fn from_bool(b: bool) -> Self {
         Self::tagged(1, b as u64)
     }
 
+    #[must_use]
     pub fn from_float(f: f64) -> Self {
         Self(f.to_bits())
     }
 
+    #[must_use]
     pub fn from_integer(i: i64) -> Self {
         if (Self::SMALL_INT_MIN..=Self::SMALL_INT_MAX).contains(&i) {
             Self::tagged(3, (i as u64) & Self::VALUE_MASK)
@@ -227,10 +231,11 @@ impl LuaValue {
         }
     }
 
-    pub fn from_number(n: LuaNumber) -> Self {
-        match n {
-            LuaNumber::Integer(i) => Self::from_integer(i),
-            LuaNumber::Float(f) => Self::from_float(f),
+    #[must_use]
+    pub fn from_number(n: impl Borrow<LuaNumber>) -> Self {
+        match n.borrow() {
+            LuaNumber::Integer(i) => Self::from_integer(*i),
+            LuaNumber::Float(f) => Self::from_float(*f),
         }
     }
 
@@ -282,6 +287,7 @@ impl LuaValue {
     }
 
     /// Get the type of this value.
+    #[must_use]
     pub fn get_type(&self) -> LuaValueType {
         if !self.is_tagged() {
             return LuaValueType::Float;
@@ -295,6 +301,7 @@ impl LuaValue {
     /// Safe to call multiple times: pointer-based types have their refcounts
     /// incremented (Arc) or values copied by read (Box<i64>), so no ownership
     /// is stolen from the NaN-boxed representation.
+    #[must_use]
     pub fn as_value(&self) -> OldLuaValue {
         if !self.is_tagged() {
             return OldLuaValue::Number(LuaNumber::Float(f64::from_bits(self.0)));
@@ -328,24 +335,28 @@ impl LuaValue {
                 unsafe { Arc::increment_strong_count(ptr) };
                 OldLuaValue::UpValue(unsafe { Arc::from_raw(ptr) })
             }
-            _ => unreachable!("invalid type tag"),
+            LuaValueType::Float => unreachable!("invalid type tag"),
         }
     }
 
     // -- Type checks --
 
+    #[must_use]
     pub fn is_nil(&self) -> bool {
         self.is_tagged() && self.get_type_tag() == LuaValueType::Nil
     }
 
+    #[must_use]
     pub fn is_bool(&self) -> bool {
         self.is_tagged() && self.get_type_tag() == LuaValueType::Boolean
     }
 
+    #[must_use]
     pub fn is_float(&self) -> bool {
         !self.is_tagged()
     }
 
+    #[must_use]
     pub fn is_integer(&self) -> bool {
         self.is_tagged()
             && matches!(
@@ -354,18 +365,22 @@ impl LuaValue {
             )
     }
 
+    #[must_use]
     pub fn is_number(&self) -> bool {
         self.is_float() || self.is_integer()
     }
 
+    #[must_use]
     pub fn is_string(&self) -> bool {
         self.is_tagged() && self.get_type_tag() == LuaValueType::String
     }
 
+    #[must_use]
     pub fn is_object(&self) -> bool {
         self.is_tagged() && self.get_type_tag() == LuaValueType::Object
     }
 
+    #[must_use]
     pub fn is_upvalue(&self) -> bool {
         self.is_tagged() && self.get_type_tag() == LuaValueType::UpValue
     }
@@ -378,6 +393,7 @@ impl LuaValue {
 
     /// # Safety
     /// Value must be a float (not a tagged NaN-boxed value).
+    #[must_use]
     pub unsafe fn as_float(&self) -> f64 {
         debug_assert!(self.is_float(), "not a float");
         f64::from_bits(self.0)
@@ -385,6 +401,7 @@ impl LuaValue {
 
     /// # Safety
     /// Value must be a boolean.
+    #[must_use]
     pub unsafe fn as_bool(&self) -> bool {
         debug_assert!(self.is_bool(), "not a boolean");
         self.get_value_bits() & 1 == 1
@@ -392,6 +409,7 @@ impl LuaValue {
 
     /// # Safety
     /// Value must be an integer (small or large).
+    #[must_use]
     pub unsafe fn as_integer(&self) -> i64 {
         debug_assert!(self.is_integer(), "not an integer");
         let value = self.get_value_bits();
@@ -404,6 +422,7 @@ impl LuaValue {
 
     /// # Safety
     /// Value must be a number (float or integer).
+    #[must_use]
     pub unsafe fn as_number(&self) -> LuaNumber {
         debug_assert!(self.is_number(), "not a number");
         if self.is_float() {
@@ -415,6 +434,7 @@ impl LuaValue {
 
     /// # Safety
     /// Value must be a string.
+    #[must_use]
     pub unsafe fn as_string(&self) -> &LuaString {
         debug_assert!(self.is_string(), "not a string");
         unsafe { &*(self.get_value_bits() as *const LuaString) }
@@ -422,6 +442,7 @@ impl LuaValue {
 
     /// # Safety
     /// Value must be a string.
+    #[must_use]
     pub unsafe fn into_string(self) -> LuaString {
         debug_assert!(self.is_string(), "not a string");
         let s = *unsafe { Box::from_raw(self.get_value_bits() as *mut LuaString) };
@@ -431,6 +452,7 @@ impl LuaValue {
 
     /// # Safety
     /// Value must be an object.
+    #[must_use]
     pub unsafe fn as_object(&self) -> &RwLock<LuaObject> {
         debug_assert!(self.is_object(), "not an object");
         unsafe { &*(self.get_value_bits() as *const RwLock<LuaObject>) }
@@ -438,6 +460,7 @@ impl LuaValue {
 
     /// # Safety
     /// Value must be an object.
+    #[must_use]
     pub unsafe fn into_object(&self) -> Arc<RwLock<LuaObject>> {
         debug_assert!(self.is_object(), "not an object");
         let ptr = self.get_value_bits() as *const RwLock<LuaObject>;
@@ -447,6 +470,7 @@ impl LuaValue {
 
     /// # Safety
     /// Value must be an upvalue.
+    #[must_use]
     pub unsafe fn as_upvalue(&self) -> &RwLock<UpValue> {
         debug_assert!(self.is_upvalue(), "not an upvalue");
         unsafe { &*(self.get_value_bits() as *const RwLock<UpValue>) }
@@ -454,6 +478,7 @@ impl LuaValue {
 
     /// # Safety
     /// Value must be an upvalue.
+    #[must_use]
     pub unsafe fn into_upvalue(&self) -> Arc<RwLock<UpValue>> {
         debug_assert!(self.is_upvalue(), "not an upvalue");
         let ptr = self.get_value_bits() as *const RwLock<UpValue>;
@@ -504,7 +529,7 @@ impl LuaValue {
                 Method::Closure(closure) => {
                     let args_r = state.extend_stack(LuaValue::NIL, [self.clone()]);
                     state
-                        .run_closure(closure, args_r, 1)?
+                        .run_closure(&closure, args_r, 1)?
                         .unwrap_completed()
                         .into_iter()
                         .next()
@@ -514,8 +539,7 @@ impl LuaValue {
                     let num_return = state.run_native_function(name, f, args_r, 1)?;
                     debug_assert!(
                         num_return >= 1,
-                        "native function {} did not return a value",
-                        name
+                        "native function {name} did not return a value",
                     );
                     Some(state.get(args_r))
                 }
@@ -530,7 +554,7 @@ impl LuaValue {
             };
         }
 
-        Ok(format!("{}", self).into_bytes().into())
+        Ok(format!("{self}").into_bytes().into())
     }
 }
 
@@ -538,21 +562,21 @@ impl Debug for LuaValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.as_value() {
             OldLuaValue::Nil => write!(f, "nil"),
-            OldLuaValue::Boolean(b) => write!(f, "{}", b),
-            OldLuaValue::Number(n) => write!(f, "{}", n),
+            OldLuaValue::Boolean(b) => write!(f, "{b}"),
+            OldLuaValue::Number(n) => write!(f, "{n}"),
             OldLuaValue::String(s) => write!(f, "{:?}", String::from_utf8_lossy(&s)),
             // NOTE: Here and for UpValue, lock by write to prevent deadlock/stack overflow, in the
             // case where values are self-referential.
             OldLuaValue::Object(o) => match o.try_write() {
                 Ok(o) => {
-                    write!(f, "{:?}", o)
+                    write!(f, "{o:?}")
                 }
                 Err(e) => {
                     write!(f, "object<{o:012p}>: <locked: {e}>")
                 }
             },
             OldLuaValue::UpValue(u) => match u.try_write() {
-                Ok(inner) => write!(f, "{:?}", inner),
+                Ok(inner) => write!(f, "{inner:?}"),
                 Err(e) => {
                     write!(f, "upvalue<{u:012p}>: <locked: {e}>")
                 }
@@ -589,7 +613,7 @@ impl Clone for LuaValue {
                 unsafe { Arc::increment_strong_count(ptr) };
                 Self::from_upvalue(unsafe { Arc::from_raw(ptr) })
             }
-            _ => unreachable!("invalid type tag"),
+            LuaValueType::Float => unreachable!("invalid type tag"),
         }
     }
 }
@@ -639,7 +663,7 @@ impl Hash for LuaValue {
                 }
                 LuaValueType::Boolean => {
                     state.write_u8(1);
-                    state.write_u8(self.as_bool() as u8);
+                    state.write_u8(u8::from(self.as_bool()));
                 }
                 LuaValueType::Float | LuaValueType::SmallInteger | LuaValueType::LargeInteger => {
                     state.write_u8(2);
@@ -793,8 +817,7 @@ mod tests {
             let as_float = f64::from_bits(value.0);
             assert!(
                 as_float.is_nan(),
-                "expected NaN for non-float value, got {}",
-                as_float
+                "expected NaN for non-float value, got {as_float}",
             );
         }
     }

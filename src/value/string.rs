@@ -18,14 +18,17 @@ use super::{LuaNumber, LuaTable, LuaValue, metatables};
 pub struct LuaString(Vec<u8>);
 
 impl LuaString {
+    #[must_use]
     pub const fn new() -> Self {
         LuaString(Vec::new())
     }
 
+    #[must_use]
     pub fn from_bytes(bytes: Vec<u8>) -> Self {
         LuaString(bytes)
     }
 
+    #[must_use]
     pub fn as_str(&self) -> Cow<'_, str> {
         String::from_utf8_lossy(&self.0)
     }
@@ -38,7 +41,7 @@ impl LuaString {
 impl Debug for LuaString {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match String::from_utf8(self.0.clone()) {
-            Ok(s) => write!(f, "{:?}", s),
+            Ok(s) => write!(f, "{s:?}"),
             Err(_) => write!(f, "{:?} (lossy)", String::from_utf8_lossy(&self.0)),
         }
     }
@@ -47,7 +50,7 @@ impl Debug for LuaString {
 impl Display for LuaString {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match String::from_utf8(self.0.clone()) {
-            Ok(s) => write!(f, "{}", s),
+            Ok(s) => write!(f, "{s}"),
             Err(_) => write!(f, "{}", String::from_utf8_lossy(&self.0)),
         }
     }

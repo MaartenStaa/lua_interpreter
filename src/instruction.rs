@@ -92,8 +92,8 @@ impl From<u8> for OpCode {
 }
 
 impl OpCode {
-    pub(crate) fn raw(&self) -> u8 {
-        *self as u8
+    pub(crate) fn raw(self) -> u8 {
+        self as u8
     }
 }
 
@@ -118,7 +118,7 @@ impl From<u32> for Instruction {
 impl Instruction {
     /// Returns the opcode of the instruction.
     #[inline(always)]
-    pub(crate) fn opcode(&self) -> OpCode {
+    pub(crate) fn opcode(self) -> OpCode {
         let opcode_byte = (self.0 & 0xFF) as u8;
         OpCode::from(opcode_byte)
     }
@@ -143,25 +143,25 @@ impl Instruction {
 
     /// Returns the first operand of the instruction.
     #[inline(always)]
-    pub(crate) fn a(&self) -> u8 {
+    pub(crate) fn a(self) -> u8 {
         ((self.0 >> 8) & 0xFF) as u8
     }
 
     /// Returns the second operand of the instruction.
     #[inline(always)]
-    pub(crate) fn b(&self) -> u8 {
+    pub(crate) fn b(self) -> u8 {
         ((self.0 >> 16) & 0xFF) as u8
     }
 
     /// Returns the third operand of the instruction.
     #[inline(always)]
-    pub(crate) fn c(&self) -> u8 {
+    pub(crate) fn c(self) -> u8 {
         ((self.0 >> 24) & 0xFF) as u8
     }
 
     /// Returns the second and third operands of the instruction as a single 16-bit value.
     #[inline(always)]
-    pub(crate) fn bc(&self) -> u16 {
+    pub(crate) fn bc(self) -> u16 {
         ((self.0 >> 16) & 0xFFFF) as u16
     }
 
@@ -171,7 +171,7 @@ impl Instruction {
         self.0 = (self.0 & 0x0000FFFF) | ((bc as u32 & 0xFFFF) << 16);
     }
 
-    pub(crate) fn raw(&self) -> u32 {
+    pub(crate) fn raw(self) -> u32 {
         self.0
     }
 }

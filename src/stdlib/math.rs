@@ -307,10 +307,10 @@ fn tointeger(state: &mut LuaState) -> crate::Result<u16> {
         }
         Some(v) if v.is_string() => {
             let s = String::from_utf8_lossy(unsafe { v.as_string() });
-            match s.parse::<i64>() {
-                Ok(i) => lua_return!(state; LuaValue::from_integer(i)),
-                Err(_) => lua_return!(state),
+            if let Ok(i) = s.parse::<i64>() {
+                lua_return!(state; LuaValue::from_integer(i))
             }
+            lua_return!(state)
         }
         _ => lua_return!(state),
     }

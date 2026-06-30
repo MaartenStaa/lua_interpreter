@@ -55,8 +55,7 @@ fn main() {
     let source = std::fs::read(&filename).expect("failed to read source code file");
     let chunk_name: LuaString = filename
         .file_name()
-        .map(|n| n.as_bytes().into())
-        .unwrap_or_else(|| b"<file>".into());
+        .map_or_else(|| b"<file>".into(), |n| n.as_bytes().into());
 
     if debug_lexer {
         let lexer = Lexer::new(&chunk_name, &source);
@@ -74,7 +73,7 @@ fn main() {
     let ast = match parser.parse() {
         Ok(ast) => ast,
         Err(e) => {
-            eprintln!("{:?}", e);
+            eprintln!("{e:?}");
             std::process::exit(1);
         }
     };
@@ -112,14 +111,13 @@ fn main() {
     .is_err()
     {
         std::process::exit(1);
-    };
+    }
 }
 
 fn run_debug_lexer(lexer: Lexer, filename: &Path, source: &[u8]) {
     let filename = filename
         .file_name()
-        .map(|f| f.to_string_lossy().to_string())
-        .unwrap_or_else(|| "<file>".to_string());
+        .map_or_else(|| "<file>".to_string(), |f| f.to_string_lossy().to_string());
     let source = String::from_utf8_lossy(source).to_string();
     for token in lexer {
         match token {
@@ -134,10 +132,10 @@ fn run_debug_lexer(lexer: Lexer, filename: &Path, source: &[u8]) {
                     "found a token",
                 )
                 .with_source_code(NamedSource::new(filename.clone(), source.clone()));
-                eprintln!("{:?}", diag);
+                eprintln!("{diag:?}");
             }
             Err(e) => {
-                eprintln!("{:?}", e);
+                eprintln!("{e:?}");
                 std::process::exit(1);
             }
         }
@@ -148,10 +146,10 @@ fn run_debug_parser(mut parser: parser::Parser) {
     let ast = match parser.parse() {
         Ok(ast) => ast,
         Err(e) => {
-            eprintln!("{:?}", e);
+            eprintln!("{e:?}");
             std::process::exit(1);
         }
     };
 
-    println!("{:#?}", ast);
+    println!("{ast:#?}");
 }

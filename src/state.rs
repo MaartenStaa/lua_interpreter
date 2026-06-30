@@ -44,10 +44,12 @@ impl GlobalState {
         Ok(index as ChunkIndex)
     }
 
+    #[must_use]
     pub fn get_chunk(&self, index: ChunkIndex) -> Option<&Chunk> {
         self.chunks.get(index as usize)
     }
 
+    #[must_use]
     pub fn get_global_env(&self) -> Arc<RwLock<UpValue>> {
         self.global_env.clone()
     }
@@ -211,16 +213,18 @@ impl LuaState {
         }
     }
 
+    #[must_use]
     pub fn with_tracer(mut self, trace_vm: bool) -> Self {
         self.tracer = trace_vm.then(VMTracer::new);
         self
     }
 
+    #[must_use]
     pub fn status(&self) -> ThreadStatus {
         self.status
     }
 
-    /// Trigger a yield with the given values. This sets pending_yield which will
+    /// Trigger a yield with the given values. This sets `pending_yield` which will
     /// be checked after the current native function returns.
     pub fn yield_values(&mut self, values: Vec<LuaValue>) {
         self.pending_yield = Some(values);
@@ -229,6 +233,7 @@ impl LuaState {
     /// Check if execution can yield (not across C-call boundary)
     /// A yield is not allowed if there's a C function (native function) in the call stack,
     /// except for the immediate caller (which would be coroutine.yield itself)
+    #[must_use]
     pub fn is_yieldable(&self) -> bool {
         // Check all frames except the top one (which is coroutine.yield)
         // If any is a native function, we cannot yield
@@ -248,6 +253,9 @@ impl Debug for LuaState {
             .field("call_stack", &&self.call_stack[..self.call_stack_index])
             .field("call_stack_index", &self.call_stack_index)
             .field("status", &self.status)
-            .finish()
+            .field("is_main_thread", &self.is_main_thread)
+            .field("pending_yield", &self.pending_yield)
+            .field("multres", &self.multres)
+            .finish_non_exhaustive()
     }
 }

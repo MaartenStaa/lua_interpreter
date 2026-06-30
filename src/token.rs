@@ -17,6 +17,7 @@ impl Debug for Span {
 }
 
 impl Span {
+    #[must_use]
     pub fn new(start: usize, end: usize) -> Span {
         Span { start, end }
     }

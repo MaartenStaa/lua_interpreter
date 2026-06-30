@@ -18,6 +18,7 @@ pub struct LuaTable {
 }
 
 impl LuaTable {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             fields: IndexMap::new(),
@@ -27,6 +28,7 @@ impl LuaTable {
         }
     }
 
+    #[must_use]
     pub fn len(&self) -> usize {
         if self.is_sequence {
             self.last_number_key as usize
@@ -56,6 +58,7 @@ impl LuaTable {
         }
     }
 
+    #[must_use]
     pub fn get(&self, key: &LuaValue) -> Option<&LuaValue> {
         if key.is_float()
             && let Ok(i) = unsafe { key.as_float() }.integer_repr()
@@ -88,7 +91,7 @@ impl LuaTable {
                 self.is_sequence = false;
             }
         } else {
-            self.is_sequence = false
+            self.is_sequence = false;
         }
 
         if value.is_nil() {
@@ -130,10 +133,12 @@ impl LuaTable {
         self.metatable = metatable;
     }
 
+    #[must_use]
     pub fn metatable(&self) -> Option<&LuaValue> {
         self.metatable.as_ref()
     }
 
+    #[must_use]
     pub fn size_bytes(&self) -> u64 {
         size_of::<Self>() as u64
             + self
@@ -144,7 +149,7 @@ impl LuaTable {
             + self
                 .metatable
                 .as_ref()
-                .map(|mt| mt.size_bytes())
+                .map(LuaValue::size_bytes)
                 .unwrap_or_default()
     }
 }

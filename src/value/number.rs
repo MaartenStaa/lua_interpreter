@@ -44,13 +44,13 @@ impl From<LuaNumber> for f64 {
 impl Display for LuaNumber {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            LuaNumber::Integer(i) => write!(f, "{}", i),
+            LuaNumber::Integer(i) => write!(f, "{i}"),
             LuaNumber::Float(fl) => {
                 // Ensure we always print the decimal point
                 if fl.fract() == 0.0 {
-                    write!(f, "{:.1}", fl)
+                    write!(f, "{fl:.1}")
                 } else {
-                    write!(f, "{}", fl)
+                    write!(f, "{fl}")
                 }
             }
         }

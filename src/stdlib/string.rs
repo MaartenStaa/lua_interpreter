@@ -89,20 +89,10 @@ fn pattern_to_regex(pattern: &[u8]) -> crate::Result<LuaPattern> {
                     b'f' => return Err(lua_error!("unsupported pattern character: '%f'")),
 
                     // Things we have to escape for regex
-                    other @ b'%'
-                    | other @ b'.'
-                    | other @ b'['
-                    | other @ b']'
-                    | other @ b'*'
-                    | other @ b'+'
-                    | other @ b'-'
-                    | other @ b'('
-                    | other @ b')'
-                    | other @ b'?'
-                    | other @ b'^'
-                    | other @ b'$' => {
+                    other @ (b'%' | b'.' | b'[' | b']' | b'*' | b'+' | b'-' | b'(' | b')'
+                    | b'?' | b'^' | b'$') => {
                         regex.push('\\');
-                        regex.push(*other as char)
+                        regex.push(*other as char);
                     }
 
                     other => regex.push(*other as char),
@@ -112,37 +102,37 @@ fn pattern_to_regex(pattern: &[u8]) -> crate::Result<LuaPattern> {
             // Anchors
             b'^' if i == 0 => {
                 any_special = true;
-                regex.push('^')
+                regex.push('^');
             }
             b'$' if i == len - 1 => {
                 any_special = true;
-                regex.push('$')
+                regex.push('$');
             }
             b'^' if !inside_character_class => {
                 any_special = true;
-                regex.push_str("\\^")
+                regex.push_str("\\^");
             }
             b'$' => {
                 any_special = true;
-                regex.push_str("\\$")
+                regex.push_str("\\$");
             }
 
             // Translate special characters
             b'-' if !inside_character_class => {
                 any_special = true;
-                regex.push_str("*?")
+                regex.push_str("*?");
             }
 
             // Special to regex, but not special in Lua
             b'\\' | b'{' | b'}' => {
                 regex.push('\\');
-                regex.push(*char as char)
+                regex.push(*char as char);
             }
 
             // Some don't need translating, but we just mark them as special
             b'^' | b'(' | b')' | b'.' | b'*' | b'+' | b'?' => {
                 any_special = true;
-                regex.push(*char as char)
+                regex.push(*char as char);
             }
             b'[' => {
                 any_special = true;
@@ -205,7 +195,7 @@ fn char(state: &mut LuaState) -> crate::Result<u16> {
     let mut str = Vec::with_capacity(state.num_args() as usize);
     for i in 0..state.num_args() {
         let i = state.arg_as_integer(i as usize)?;
-        if i < u8::MIN as i64 || i > u8::MAX as i64 {
+        if i < i64::from(u8::MIN) || i > i64::from(u8::MAX) {
             return Err(lua_error!(
                 "bad argument #{i} to 'string.char' (value out of range)",
             ));
@@ -244,7 +234,7 @@ fn find(state: &mut LuaState) -> crate::Result<u16> {
         lua_return!(state;
             LuaValue::from_integer(init),
             LuaValue::from_integer(init - 1),
-        )
+        );
     }
 
     let s = &s[(init - 1) as usize..];
@@ -262,12 +252,10 @@ fn find(state: &mut LuaState) -> crate::Result<u16> {
         LuaPattern::Regex(regex) => regex.find(s).map(|m| (m.start() as i64, m.end() as i64)),
     };
 
-    match start_end {
-        Some((start, end)) => {
-            lua_return!(state; LuaValue::from_integer(start + init), LuaValue::from_integer(end + init - 1))
-        }
-        None => lua_return!(state),
+    if let Some((start, end)) = start_end {
+        lua_return!(state; LuaValue::from_integer(start + init), LuaValue::from_integer(end + init - 1));
     }
+    lua_return!(state)
 }
 
 #[derive(Debug)]
@@ -322,13 +310,13 @@ fn gmatch(state: &mut LuaState) -> crate::Result<u16> {
 
 fn gmatch_iter(state: &mut LuaState) -> crate::Result<u16> {
     require_userdata!(write, state.try_arg(0), "gmatch_iter", 0, userdata, {
-        let data = match userdata {
-            UserData::Light(data) => data,
-            _ => lua_return!(state),
+        let UserData::Light(data) = userdata else {
+            lua_return!(state);
         };
-        let gmatch_state = match data.write().unwrap().downcast_mut::<GmatchState>() {
-            Some(s) => s as *mut GmatchState,
-            None => lua_return!(state),
+        let gmatch_state = if let Some(s) = data.write().unwrap().downcast_mut::<GmatchState>() {
+            std::ptr::from_mut(s)
+        } else {
+            lua_return!(state)
         };
 
         // SAFETY: we hold the write lock on the Arc<RwLock<..>> for the duration of this
@@ -343,8 +331,8 @@ fn gmatch_iter(state: &mut LuaState) -> crate::Result<u16> {
             let haystack = &gmatch_state.s[gmatch_state.pos..];
 
             match &gmatch_state.pattern {
-                LuaPattern::Plain(pattern) => match haystack.find(pattern) {
-                    Some(offset) => {
+                LuaPattern::Plain(pattern) => {
+                    if let Some(offset) = haystack.find(pattern) {
                         let abs_start = gmatch_state.pos + offset;
                         let abs_end = abs_start + pattern.len();
                         if pattern.is_empty() {
@@ -360,47 +348,45 @@ fn gmatch_iter(state: &mut LuaState) -> crate::Result<u16> {
                         gmatch_state.pos = abs_end;
                         lua_return!(state; LuaValue::from_string(&gmatch_state.s[abs_start..abs_end]))
                     }
-                    None => lua_return!(state),
-                },
+                    lua_return!(state)
+                }
                 LuaPattern::Regex(regex) => {
                     let captures = regex.captures(haystack);
 
-                    match captures {
-                        Some(captures) => {
-                            let full_match = captures.get(0).unwrap();
-                            let abs_end = gmatch_state.pos + full_match.end();
+                    if let Some(captures) = captures {
+                        let full_match = captures.get(0).unwrap();
+                        let abs_end = gmatch_state.pos + full_match.end();
 
-                            if full_match.as_bytes().is_empty() {
-                                if gmatch_state.last_match_empty {
-                                    gmatch_state.pos += 1;
-                                    gmatch_state.last_match_empty = false;
-                                    continue;
-                                }
-                                gmatch_state.last_match_empty = true;
-                            } else {
+                        if full_match.as_bytes().is_empty() {
+                            if gmatch_state.last_match_empty {
+                                gmatch_state.pos += 1;
                                 gmatch_state.last_match_empty = false;
+                                continue;
                             }
-
-                            gmatch_state.pos = abs_end;
-
-                            let has_groups = regex.captures_len() > 1;
-                            if has_groups {
-                                for i in 1..regex.captures_len() {
-                                    match captures.get(i) {
-                                        Some(m) => {
-                                            state.set(i - 1, LuaValue::from_string(m.as_bytes()))
-                                        }
-                                        None => state.set(i, LuaValue::NIL),
-                                    }
-                                }
-                                return Ok(u16::try_from(regex.captures_len() - 1)
-                                    .expect("too many captures"));
-                            } else {
-                                lua_return!(state; LuaValue::from_string(full_match.as_bytes()))
-                            }
+                            gmatch_state.last_match_empty = true;
+                        } else {
+                            gmatch_state.last_match_empty = false;
                         }
-                        None => lua_return!(state),
+
+                        gmatch_state.pos = abs_end;
+
+                        let has_groups = regex.captures_len() > 1;
+                        if has_groups {
+                            for i in 1..regex.captures_len() {
+                                match captures.get(i) {
+                                    Some(m) => {
+                                        state.set(i - 1, LuaValue::from_string(m.as_bytes()));
+                                    }
+                                    None => state.set(i - 1, LuaValue::NIL),
+                                }
+                            }
+                            return Ok(
+                                u16::try_from(regex.captures_len() - 1).expect("too many captures")
+                            );
+                        }
+                        lua_return!(state; LuaValue::from_string(full_match.as_bytes()))
                     }
+                    lua_return!(state)
                 }
             }
         }
@@ -445,7 +431,7 @@ fn format(state: &mut LuaState) -> crate::Result<u16> {
                     ));
                 }
             }
-            'p' => format!("{:x}", &v as *const _ as usize),
+            'p' => format!("{v:012p}", v = &v),
             other => return Err(lua_error!("unsupported format specifier: {:?}", other)),
         };
 
@@ -477,25 +463,22 @@ fn r#match(state: &mut LuaState) -> crate::Result<u16> {
 
     let pattern = pattern_to_regex(&pattern)?;
     match pattern {
-        LuaPattern::Plain(pattern) => match s.find(&pattern) {
-            Some(start) => {
+        LuaPattern::Plain(pattern) => {
+            if let Some(start) = s.find(&pattern) {
                 lua_return!(state; LuaValue::from_string(&s[start..start + pattern.len()]))
             }
-            None => lua_return!(state),
-        },
+            lua_return!(state)
+        }
         LuaPattern::Regex(regex) => {
             let captures = regex.captures(&s);
 
-            match captures {
-                Some(captures) => {
-                    if let Some(capture) = captures.get(0) {
-                        lua_return!(state; LuaValue::from_string(capture.as_bytes()))
-                    } else {
-                        lua_return!(state; s.into())
-                    }
+            if let Some(captures) = captures {
+                if let Some(capture) = captures.get(0) {
+                    lua_return!(state; LuaValue::from_string(capture.as_bytes()))
                 }
-                None => lua_return!(state),
+                lua_return!(state; s.into())
             }
+            lua_return!(state)
         }
     }
 }
@@ -504,7 +487,7 @@ fn rep(state: &mut LuaState) -> crate::Result<u16> {
     let s = state.arg_as_string(0)?;
     let n = state.arg_as_integer(1)?;
     let sep = state.try_arg_as_string(2)?;
-    let sep = sep.as_ref().map(|s| s.as_slice()).unwrap_or(b"");
+    let sep = sep.as_ref().map_or(b"".as_slice(), |s| s.as_slice());
     if n < 1 {
         lua_return!(state; LuaValue::from_string(LuaString::new()))
     }
@@ -640,7 +623,6 @@ fn pack(state: &mut LuaState) -> crate::Result<u16> {
             PackOption::Padding => {
                 result.push(0);
             }
-            PackOption::PaddingAlign => {}
             PackOption::LittleEndian => {
                 is_little_endian = true;
             }
@@ -653,7 +635,7 @@ fn pack(state: &mut LuaState) -> crate::Result<u16> {
             PackOption::SetAlignment { value } => {
                 max_alignment = value;
             }
-            PackOption::Nop => {}
+            PackOption::PaddingAlign | PackOption::Nop => {}
             PackOption::Eof => break,
         }
     }
@@ -755,14 +737,11 @@ fn sub(state: &mut LuaState) -> crate::Result<u16> {
 fn unpack(state: &mut LuaState) -> crate::Result<u16> {
     let fmt = state.arg_as_string(0)?;
     let s = state.arg_as_string(1)?;
-    let mut pos = state
-        .try_arg_as_integer(2)?
-        .map(|n| match n.cmp(&0) {
-            Ordering::Less => s.len() as i64 + n + 1,
-            Ordering::Greater => n,
-            Ordering::Equal => 1,
-        } as usize)
-        .unwrap_or(1)
+    let mut pos = state.try_arg_as_integer(2)?.map_or(1, |n| match n.cmp(&0) {
+        Ordering::Less => s.len() as i64 + n + 1,
+        Ordering::Greater => n,
+        Ordering::Equal => 1,
+    } as usize)
         - 1;
 
     if pos > s.len() {

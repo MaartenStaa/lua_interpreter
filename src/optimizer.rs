@@ -146,13 +146,12 @@ fn optimize_expression(expression: TokenTree<Expression>) -> TokenTree<Expressio
                             }
                         ) {
                             return *parenthesized;
-                        } else {
-                            let span = parenthesized.span;
-                            Expression::PrefixExpression(TokenTree::new(
-                                PrefixExpression::Parenthesized(parenthesized),
-                                span,
-                            ))
                         }
+                        let span = parenthesized.span;
+                        Expression::PrefixExpression(TokenTree::new(
+                            PrefixExpression::Parenthesized(parenthesized),
+                            span,
+                        ))
                     }
                     other => Expression::PrefixExpression(other),
                 }
@@ -393,7 +392,12 @@ fn optimize_binary_op(
                 }),
             ) => Expression::Literal(TokenTree::new(
                 Literal::String(
-                    Vec::from_iter(lhs.to_string().into_bytes().into_iter().chain(rhs)).into(),
+                    lhs.to_string()
+                        .into_bytes()
+                        .into_iter()
+                        .chain(rhs)
+                        .collect::<Vec<_>>()
+                        .into(),
                 ),
                 span,
             )),

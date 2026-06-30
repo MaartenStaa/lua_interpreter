@@ -12,6 +12,7 @@ pub struct Parser<'name, 'source> {
 }
 
 impl<'name, 'source> Parser<'name, 'source> {
+    #[must_use]
     pub fn new(chunk_name: &'name [u8], source: &'source [u8]) -> Self {
         Self {
             chunk_name,
@@ -83,7 +84,6 @@ impl<'name, 'source> Parser<'name, 'source> {
                     match self.lexer.peek()? {
                         Some(token) if token.kind == TokenKind::Comma => {
                             self.lexer.next();
-                            continue;
                         }
                         _ => break,
                     }

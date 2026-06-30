@@ -15,7 +15,7 @@ impl From<ast::Literal> for LuaValue {
         match literal {
             ast::Literal::Nil => LuaValue::NIL,
             ast::Literal::Boolean(b) => LuaValue::from_bool(b),
-            ast::Literal::Number(n) => LuaValue::from_number(n.into()),
+            ast::Literal::Number(n) => LuaValue::from_number(LuaNumber::from(n)),
             ast::Literal::String(s) => LuaValue::from_string(s),
         }
     }

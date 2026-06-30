@@ -57,7 +57,7 @@ fn concat(state: &mut LuaState) -> crate::Result<u16> {
             match t.get(&k.into()).unwrap_or(&LuaValue::NIL) {
                 v if v.is_string() => result.extend(unsafe { v.as_string() }),
                 v if v.is_number() => {
-                    result.extend(unsafe { v.as_number() }.to_string().as_bytes())
+                    result.extend(unsafe { v.as_number() }.to_string().as_bytes());
                 }
                 v => {
                     return Err(lua_error!(

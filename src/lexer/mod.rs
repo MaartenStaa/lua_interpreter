@@ -677,12 +677,11 @@ impl<'path, 'source> Lexer<'path, 'source> {
                                 end: self.position,
                             },
                         });
-                    } else {
-                        string.push(*c);
-                        string.extend(std::iter::repeat_n(b'=', equals as usize));
-
-                        self.position += equals as usize;
                     }
+                    string.push(*c);
+                    string.extend(std::iter::repeat_n(b'=', equals as usize));
+
+                    self.position += equals as usize;
                 }
                 b'\r' | b'\n' if long_form.is_none() => {
                     return Err(self.with_source_code(*lua_error!(

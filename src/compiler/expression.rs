@@ -46,10 +46,10 @@ pub(crate) enum ExpressionResult {
 }
 
 impl ExpressionResult {
-    pub(crate) fn get_register(&self) -> u8 {
+    pub(crate) fn get_register(self) -> u8 {
         match self {
-            ExpressionResult::Single { register } => *register,
-            ExpressionResult::Multiple { from_register } => *from_register,
+            ExpressionResult::Single { register } => register,
+            ExpressionResult::Multiple { from_register } => from_register,
         }
     }
 }
@@ -66,10 +66,9 @@ pub(crate) enum ExpressionListLength {
 }
 
 impl ExpressionListLength {
-    pub(crate) fn get_register(&self) -> u8 {
+    pub(crate) fn get_register(self) -> u8 {
         match self {
-            Self::Constant { from_register } => *from_register,
-            Self::MultRes { from_register } => *from_register,
+            Self::Constant { from_register } | Self::MultRes { from_register } => from_register,
         }
     }
 }

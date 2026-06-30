@@ -271,7 +271,7 @@ impl Compiler {
         let mut chunk_upvalues: Vec<_> = (0..self.frame.upvalues.len())
             .map(|_| MaybeUninit::uninit())
             .collect();
-        for (name, upvalue) in self.frame.upvalues.iter() {
+        for (name, upvalue) in &self.frame.upvalues {
             chunk_upvalues[upvalue.index as usize].write(ChunkUpValue {
                 is_local: matches!(upvalue.source, UpvalueLocation::Local { .. }),
                 index: match upvalue.source {
@@ -299,7 +299,7 @@ impl Compiler {
 
     /// Push bytecode into the current chunk.
     fn push_bytecode(&mut self, bytecode: Bytecode, span: Option<Span>) {
-        self.chunk.push_bytecode(bytecode, span)
+        self.chunk.push_bytecode(bytecode, span);
     }
 
     /// Push bytecode into the current chunk to jump to an undecided address.
@@ -316,7 +316,7 @@ impl Compiler {
     }
 
     fn patch_addr_placeholder(&mut self, index: JumpAddr) {
-        self.chunk.patch_addr_placeholder(index)
+        self.chunk.patch_addr_placeholder(index);
     }
 
     fn push_load_nil(&mut self, span: Option<Span>) -> u8 {
@@ -367,7 +367,7 @@ impl Compiler {
 
             let is_final_statement =
                 block_is_final_statement && i == num_statements - 1 && !has_return;
-            block_result.extend(self.compile_statement(statement, &options, is_final_statement)?);
+            block_result.extend(self.compile_statement(statement, options, is_final_statement)?);
         }
 
         if let Some(return_statement) = ast.node.return_statement {
@@ -388,7 +388,7 @@ impl Compiler {
         }
 
         if options.new_scope {
-            self.end_scope()?;
+            self.end_scope();
             Ok(block_result.with_new_locals(None))
         } else {
             Ok(block_result)
@@ -398,7 +398,7 @@ impl Compiler {
     fn compile_statement(
         &mut self,
         statement: TokenTree<Statement>,
-        options: &BlockOptions,
+        options: BlockOptions,
         is_final_statement: bool,
     ) -> crate::Result<BlockResult> {
         let span = statement.span;
@@ -553,31 +553,29 @@ impl Compiler {
                                     let key_const_index =
                                         self.get_const_index(literal.node.clone().into());
 
-                                    match self.frame.resolve_name(&name.node.0) {
-                                        ResolvedName::Upvalue {
-                                            index: upval_index, ..
-                                        } => {
-                                            self.push_bytecode(
-                                                Bytecode::SetTableUpvalConstKey {
-                                                    table_upval_index: upval_index,
-                                                    key_const_index,
-                                                    value_register: current_register + index as u8,
-                                                },
-                                                Some(span),
-                                            );
-                                        }
-                                        _ => {
-                                            let target_r =
-                                                self.read_variable(name, VariableMode::Ref)?;
-                                            self.push_bytecode(
-                                                Bytecode::SetTableConstKey {
-                                                    table_register: target_r,
-                                                    key_const_index,
-                                                    value_register: current_register + index as u8,
-                                                },
-                                                Some(span),
-                                            );
-                                        }
+                                    if let ResolvedName::Upvalue {
+                                        index: upval_index, ..
+                                    } = self.frame.resolve_name(&name.node.0)
+                                    {
+                                        self.push_bytecode(
+                                            Bytecode::SetTableUpvalConstKey {
+                                                table_upval_index: upval_index,
+                                                key_const_index,
+                                                value_register: current_register + index as u8,
+                                            },
+                                            Some(span),
+                                        );
+                                    } else {
+                                        let target_r =
+                                            self.read_variable(name, VariableMode::Ref)?;
+                                        self.push_bytecode(
+                                            Bytecode::SetTableConstKey {
+                                                table_register: target_r,
+                                                key_const_index,
+                                                value_register: current_register + index as u8,
+                                            },
+                                            Some(span),
+                                        );
                                     }
                                 }
                                 (
@@ -657,10 +655,11 @@ impl Compiler {
                                             ..
                                         }),
                                     ..
-                                } => match self.frame.resolve_name(&name.node.0) {
-                                    ResolvedName::Upvalue {
+                                } => {
+                                    if let ResolvedName::Upvalue {
                                         index: upval_index, ..
-                                    } => {
+                                    } = self.frame.resolve_name(&name.node.0)
+                                    {
                                         self.push_bytecode(
                                             Bytecode::SetTableUpvalConstKey {
                                                 table_upval_index: upval_index,
@@ -669,8 +668,7 @@ impl Compiler {
                                             },
                                             Some(span),
                                         );
-                                    }
-                                    _ => {
+                                    } else {
                                         let target_r =
                                             self.read_variable(name, VariableMode::Ref)?;
 
@@ -683,7 +681,7 @@ impl Compiler {
                                             Some(span),
                                         );
                                     }
-                                },
+                                }
                                 target => {
                                     let target_r = self
                                         .compile_prefix_expression(
@@ -806,10 +804,10 @@ impl Compiler {
                             new_scope: true,
                         },
                     )?);
-                    if !block_has_return {
-                        Some(self.push_undecided_jump(JumpToUndecidedAddress::Jmp, None))
-                    } else {
+                    if block_has_return {
                         None
+                    } else {
+                        Some(self.push_undecided_jump(JumpToUndecidedAddress::Jmp, None))
                     }
                 } else {
                     None
@@ -883,7 +881,7 @@ impl Compiler {
                     None,
                 );
 
-                self.end_scope()?;
+                self.end_scope();
 
                 for break_ in block_result.breaks {
                     self.patch_addr_placeholder(break_.addr);
@@ -918,7 +916,7 @@ impl Compiler {
                         new_scope: false,
                     },
                 )?;
-                self.end_scope()?;
+                self.end_scope();
 
                 self.push_bytecode(
                     Bytecode::Jmp {
@@ -1266,7 +1264,7 @@ impl Compiler {
                 // Patch the false condition jump
                 self.patch_addr_placeholder(jmp_exit_loop_addr);
 
-                self.end_scope()?;
+                self.end_scope();
 
                 // Patch any break jumps
                 for jump in block_result.breaks {
@@ -1286,34 +1284,30 @@ impl Compiler {
             )?,
             Statement::Goto(name) => {
                 let label = self.labels.get(&name.node.0);
-                match label {
-                    Some(label) => {
-                        self.push_bytecode(
-                            Bytecode::JmpClose {
-                                address: label.addr,
-                                close_from_register: label.current_register,
-                            },
-                            Some(span),
-                        );
-                    }
-                    None => {
-                        // Add to frame to resolve the jump later
-                        // Note that we don't use JmpClose, since we might jump forward into the
-                        // same scope, so the to-be-closed variables should still be valid in that
-                        // case.
-                        let addr =
-                            self.push_undecided_jump(JumpToUndecidedAddress::Jmp, Some(span));
+                if let Some(label) = label {
+                    self.push_bytecode(
+                        Bytecode::JmpClose {
+                            address: label.addr,
+                            close_from_register: label.current_register,
+                        },
+                        Some(span),
+                    );
+                } else {
+                    // Add to frame to resolve the jump later
+                    // Note that we don't use JmpClose, since we might jump forward into the
+                    // same scope, so the to-be-closed variables should still be valid in that
+                    // case.
+                    let addr = self.push_undecided_jump(JumpToUndecidedAddress::Jmp, Some(span));
 
-                        let scope_id = self.scope_id();
-                        let goto = Goto {
-                            addr,
-                            span,
-                            depth: self.scope_depth,
-                            current_register: self.register_index,
-                            scope_id,
-                        };
-                        self.gotos.entry(name.node.0).or_default().push(goto);
-                    }
+                    let scope_id = self.scope_id();
+                    let goto = Goto {
+                        addr,
+                        span,
+                        depth: self.scope_depth,
+                        current_register: self.register_index,
+                        scope_id,
+                    };
+                    self.gotos.entry(name.node.0).or_default().push(goto);
                 }
 
                 BlockResult::new()
@@ -1602,14 +1596,13 @@ impl Compiler {
         // Compile the function definition as a new chunk.
         let function_chunk = Compiler::new_sub(
             Arc::clone(&self.global_state),
-            function_def
-                .node
-                .name
-                .map(|mut name| {
+            function_def.node.name.map_or_else(
+                || b"<anonymous>()".into(),
+                |mut name| {
                     name.extend(b"()");
                     name
-                })
-                .unwrap_or_else(|| b"<anonymous>()".into()),
+                },
+            ),
             self.chunk.filename.as_ref(),
             function_def.node.method_name.clone(),
             Arc::clone(&self.chunk.source),
@@ -2012,12 +2005,13 @@ impl Compiler {
         // Optimization: if all of the fields are literals, we can just create the table here and
         // load it as a constant.
         if table.node.fields.iter().all(|field| match &field.node {
-            Field::Named(_, value) => matches!(value.node, Expression::Literal(_)),
             Field::Indexed(index, value) => {
                 matches!(index.node, Expression::Literal(_))
                     && matches!(value.node, Expression::Literal(_))
             }
-            Field::Value(value) => matches!(value.node, Expression::Literal(_)),
+            Field::Named(_, value) | Field::Value(value) => {
+                matches!(value.node, Expression::Literal(_))
+            }
         }) {
             let mut new_table = LuaTable::new();
             for fields in table.node.fields {
@@ -2080,13 +2074,13 @@ impl Compiler {
                 // TODO: Do we specify the starting register here for the values? Or is it ALWAYS
                 // table_r + 1?
                 self.push_bytecode(
-                    if !previous_was_multires {
-                        Bytecode::AppendToTable {
+                    if previous_was_multires {
+                        Bytecode::AppendToTableM {
                             table_register: table_r,
                             num_values,
                         }
                     } else {
-                        Bytecode::AppendToTableM {
+                        Bytecode::AppendToTable {
                             table_register: table_r,
                             num_values,
                         }
@@ -2178,13 +2172,13 @@ impl Compiler {
 
         if previous_was_value_field {
             self.push_bytecode(
-                if !previous_was_multires {
-                    Bytecode::AppendToTable {
+                if previous_was_multires {
+                    Bytecode::AppendToTableM {
                         table_register: table_r,
                         num_values,
                     }
                 } else {
-                    Bytecode::AppendToTableM {
+                    Bytecode::AppendToTable {
                         table_register: table_r,
                         num_values,
                     }
@@ -2205,8 +2199,8 @@ impl Compiler {
             Literal::Boolean(b) => self.get_const_index(LuaConst::Boolean(b)),
             Literal::Number(Number::Float(f)) => {
                 if let Ok(i) = f.integer_repr()
-                    && i >= i16::MIN as _
-                    && i <= i16::MAX as _
+                    && i >= i16::MIN.into()
+                    && i <= i16::MAX.into()
                 {
                     let short = i as i16;
                     self.push_bytecode(
@@ -2222,7 +2216,7 @@ impl Compiler {
 
                 self.get_const_index(LuaConst::Number(LuaNumber::Float(f)))
             }
-            Literal::Number(Number::Integer(i)) if i >= i16::MIN as _ && i <= i16::MAX as _ => {
+            Literal::Number(Number::Integer(i)) if i >= i16::MIN.into() && i <= i16::MAX.into() => {
                 let short = i as i16;
                 self.push_bytecode(
                     Bytecode::LoadShort {
@@ -2586,7 +2580,7 @@ impl Compiler {
         self.scope_depth
     }
 
-    fn end_scope(&mut self) -> crate::Result {
+    fn end_scope(&mut self) {
         let scope_id = self.scope_id();
         self.scope_ids.pop();
         let parent_scope_id = self.scope_id();
@@ -2628,7 +2622,7 @@ impl Compiler {
 
             if !gotos_with_to_close.is_empty() {
                 // Let those gotos close their values, and then jump onwards
-                for goto in gotos_with_to_close.iter() {
+                for goto in &gotos_with_to_close {
                     self.chunk.patch_addr_placeholder(goto.addr);
                 }
 
@@ -2666,8 +2660,6 @@ impl Compiler {
         // Remove any labels that are no longer in scope
         self.labels
             .retain(|_, label| label.depth <= self.scope_depth);
-
-        Ok(())
     }
 
     fn add_local(&mut self, name: LuaString, register: u8, attributes: u8, span: Option<Span>) {

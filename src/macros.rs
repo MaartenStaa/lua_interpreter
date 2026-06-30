@@ -321,7 +321,9 @@ macro_rules! require_userdata_type {
                 data: $value,
                 metatable: $metatable,
                 type_name,
-            } => {
+            } =>
+            {
+                #[allow(clippy::redundant_else)]
                 if let Some($value) = $value.read().unwrap().downcast_ref::<$type>() {
                     $tt
                 } else {
@@ -350,7 +352,9 @@ macro_rules! require_userdata_type {
                 data: $value,
                 metatable: $metatable,
                 type_name,
-            } => {
+            } =>
+            {
+                #[allow(clippy::redundant_else)]
                 if let Some($value) = $value.write().unwrap().downcast_mut::<$type>() {
                     $tt
                 } else {

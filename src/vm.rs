@@ -13,7 +13,7 @@ use crate::{
     macros::{assert_closure, assert_table},
     state::LuaState,
     value::{
-        LuaClosure, LuaConst, LuaObject, LuaString, LuaValue, NativeLuaFunction, UpValue,
+        LuaClosure, LuaConst, LuaObject, LuaString, LuaTable, LuaValue, NativeLuaFunction, UpValue,
         callable::{Callable, Method},
         metatables::{self, INDEX_KEY, NEWINDEX_KEY},
     },
@@ -35,6 +35,7 @@ pub type ConstIndex = u8;
 pub type ChunkIndex = u16;
 
 impl LuaState {
+    #[must_use]
     pub fn get_global_env(&self) -> Arc<RwLock<UpValue>> {
         self.global.read().unwrap().get_global_env()
     }
@@ -48,6 +49,7 @@ impl LuaState {
         global.chunks.get(index as usize).map(f)
     }
 
+    #[must_use]
     pub fn get_current_chunk_name(&self) -> Option<LuaString> {
         match self.call_frame().kind {
             CallFrameKind::Lua { chunk, .. } => self.with_chunk(chunk, |c| c.name.clone()),
@@ -55,6 +57,7 @@ impl LuaState {
         }
     }
 
+    #[must_use]
     pub fn get_chunk_name(&self, chunk: ChunkIndex) -> Option<LuaString> {
         self.with_chunk(chunk, |c| c.name.clone())
     }
@@ -136,6 +139,7 @@ impl LuaState {
         self.stack[frame_pointer + register.into()] = value;
     }
 
+    #[allow(clippy::inline_always)]
     #[inline(always)]
     pub(crate) fn call_frame(&self) -> &CallFrame {
         debug_assert!(self.call_stack_index > 0, "no call frame available");
@@ -143,6 +147,7 @@ impl LuaState {
         &self.call_stack[self.call_stack_index - 1]
     }
 
+    #[allow(clippy::inline_always)]
     #[inline(always)]
     pub(crate) fn call_frame_mut(&mut self) -> &mut CallFrame {
         debug_assert!(self.call_stack_index > 0, "no call frame available");
@@ -194,7 +199,7 @@ impl LuaState {
                 .upvalues
                 .as_mut()
                 .unwrap();
-            for (i, upvalue) in upvalues.into_iter() {
+            for (i, upvalue) in upvalues {
                 frame_upvalues.insert(i, upvalue);
             }
         }
@@ -375,7 +380,7 @@ impl LuaState {
 
     pub(crate) fn run_closure(
         &mut self,
-        value: LuaClosure,
+        value: &LuaClosure,
         args_r: u8,
         num_args: u16,
     ) -> crate::Result<ExecutionResult> {
@@ -386,7 +391,7 @@ impl LuaState {
             .with_chunk(value.chunk, |chunk| {
                 (
                     chunk.max_registers,
-                    chunk.num_params as u16,
+                    u16::from(chunk.num_params),
                     chunk.has_varargs,
                 )
             })
@@ -405,7 +410,6 @@ impl LuaState {
             has_varargs,
             false,
         )?;
-
 
         // TODO: Move this responsibility out of here so we can get it set up right before even
         // putting the values on the stack?
@@ -427,10 +431,8 @@ impl LuaState {
             .with_chunk(value.chunk, |c| c.name.to_string())
             .unwrap();
         assert_eq!(
-            original_call_stack_index,
-            self.call_stack_index,
-            "unbalanced call stack after closure call '{name}'",
-            name = chunk_name
+            original_call_stack_index, self.call_stack_index,
+            "unbalanced call stack after closure call '{chunk_name}'",
         );
 
         result
@@ -441,14 +443,14 @@ impl LuaState {
         frame_pointer: usize,
         return_addr: usize,
         return_value_register: u8,
-        closure: LuaClosure,
+        closure: &LuaClosure,
         num_passed_params: impl Into<usize>,
     ) -> crate::Result {
         let (max_registers, num_params, has_varargs) = self
             .with_chunk(closure.chunk, |chunk| {
                 (
                     chunk.max_registers,
-                    chunk.num_params as u16,
+                    u16::from(chunk.num_params),
                     chunk.has_varargs,
                 )
             })
@@ -518,7 +520,7 @@ impl LuaState {
     ///
     /// The stack is assumed to be in a correct state before the call. This means that:
     /// - `args_r` is valid, and is an offset from the parent frame pointer.
-    /// - The actual <num_args> arguments sit at `stack[args_r + 1], stack[args_r + 2], ...,
+    /// - The actual `num_args` arguments sit at `stack[args_r + 1], stack[args_r + 2], ...,
     ///   stack[args_r + num_args]`.
     /// - The invoked function _may_ be at `stack[args_r]`, but this is not a requirement.
     /// - The _return values_ of the native function will be placed starting at `stack[args_r]`.
@@ -839,52 +841,52 @@ impl LuaState {
                     let register = instruction.a();
                     let int_value = instruction.bc();
                     let int_value = u16::cast_signed(int_value);
-                    self.set(register, LuaValue::from_integer(int_value as _));
+                    self.set(register, LuaValue::from_integer(int_value.into()));
                 }
                 OpCode::LoadShortFloat => {
                     let register = instruction.a();
                     let int_value = instruction.bc();
                     let int_value = u16::cast_signed(int_value);
-                    self.set(register, LuaValue::from_float(int_value as _));
+                    self.set(register, LuaValue::from_float(int_value.into()));
                 }
 
                 // Binary operations
                 // Arithmetic
                 OpCode::Add => {
-                    binary_op_num!(op = +, ADD_KEY, "add")
+                    binary_op_num!(op = +, ADD_KEY, "add");
                 }
                 OpCode::Sub => {
-                    binary_op_num!(op = -, SUB_KEY, "subtract")
+                    binary_op_num!(op = -, SUB_KEY, "subtract");
                 }
                 OpCode::Mul => {
-                    binary_op_num!(op = *, MUL_KEY, "multiply")
+                    binary_op_num!(op = *, MUL_KEY, "multiply");
                 }
                 OpCode::Div => {
-                    binary_op_num!(op = /, DIV_KEY, "divide")
+                    binary_op_num!(op = /, DIV_KEY, "divide");
                 }
                 OpCode::Mod => {
-                    binary_op_num!(op = %, MOD_KEY, "modulo")
+                    binary_op_num!(op = %, MOD_KEY, "modulo");
                 }
                 OpCode::Pow => {
-                    binary_op_num!(method = pow, POW_KEY, "power")
+                    binary_op_num!(method = pow, POW_KEY, "power");
                 }
                 OpCode::IDiv => {
-                    binary_op_num!(method = idiv, IDIV_KEY, "integer divide")
+                    binary_op_num!(method = idiv, IDIV_KEY, "integer divide");
                 }
                 OpCode::Band => {
-                    binary_op_num!(fallible_op = &, BAND_KEY, "bitwise and")
+                    binary_op_num!(fallible_op = &, BAND_KEY, "bitwise and");
                 }
                 OpCode::Bor => {
-                    binary_op_num!(fallible_op = |, BOR_KEY, "bitwise or")
+                    binary_op_num!(fallible_op = |, BOR_KEY, "bitwise or");
                 }
                 OpCode::Bxor => {
-                    binary_op_num!(fallible_op = ^, BXOR_KEY, "bitwise xor")
+                    binary_op_num!(fallible_op = ^, BXOR_KEY, "bitwise xor");
                 }
                 OpCode::Shl => {
-                    binary_op_num!(fallible_op = <<, SHL_KEY, "shift left")
+                    binary_op_num!(fallible_op = <<, SHL_KEY, "shift left");
                 }
                 OpCode::Shr => {
-                    binary_op_num!(fallible_op = >>, SHR_KEY, "shift left")
+                    binary_op_num!(fallible_op = >>, SHR_KEY, "shift left");
                 }
 
                 // Comparison
@@ -940,10 +942,10 @@ impl LuaState {
                     self.set(dest_r, (!value).into());
                 }
                 OpCode::Lt => {
-                    binary_op_num!(op_bool_result = <, LT_KEY, "compare")
+                    binary_op_num!(op_bool_result = <, LT_KEY, "compare");
                 }
                 OpCode::Le => {
-                    binary_op_num!(op_bool_result = <=, LE_KEY, "compare")
+                    binary_op_num!(op_bool_result = <=, LE_KEY, "compare");
                 }
 
                 // Concatenation
@@ -976,7 +978,7 @@ impl LuaState {
 
                 // Unary operations
                 OpCode::Neg => {
-                    unary_op_num!(op = -, UNM_KEY, "negate")
+                    unary_op_num!(op = -, UNM_KEY, "negate");
                 }
                 OpCode::Not => {
                     // NOTE: There is no metamethod for `not` in Lua
@@ -995,28 +997,29 @@ impl LuaState {
                         (unsafe { value.as_string() }.len() as i64).into()
                     } else {
                         let value = value.into_owned();
-                        match metatables::handle(self, &metatables::LEN_KEY, vec![value]) {
-                            Some(result) => handle_execution_result!(result?, dest_r),
-                            None => {
-                                // If the value is a table (but it didn't have a __len
-                                // metamethod), return the length of the array part
-                                let value = self.get_ref(val_r);
-                                if value.is_object()
-                                    && let obj = unsafe { value.as_object() }
-                                    && let obj = &*obj.read().unwrap()
-                                    && let LuaObject::Table(table) = obj
-                                {
-                                    (table.len() as i64).into()
-                                } else {
-                                    return Err(self.op_err("length", &value, None));
-                                }
+                        if let Some(result) =
+                            metatables::handle(self, &metatables::LEN_KEY, vec![value])
+                        {
+                            handle_execution_result!(result?, dest_r)
+                        } else {
+                            // If the value is a table (but it didn't have a __len
+                            // metamethod), return the length of the array part
+                            let value = self.get_ref(val_r);
+                            if value.is_object()
+                                && let obj = unsafe { value.as_object() }
+                                && let obj = &*obj.read().unwrap()
+                                && let LuaObject::Table(table) = obj
+                            {
+                                (table.len() as i64).into()
+                            } else {
+                                return Err(self.op_err("length", &value, None));
                             }
                         }
                     };
                     self.set(dest_r, result);
                 }
                 OpCode::BNot => {
-                    unary_op_num!(fallible_op = !, BNOT_KEY, "bitwise not")
+                    unary_op_num!(fallible_op = !, BNOT_KEY, "bitwise not");
                 }
 
                 // Variables
@@ -1095,13 +1098,13 @@ impl LuaState {
                 // Table
                 OpCode::NewTable => {
                     let register = instruction.a();
-                    let table = LuaObject::Table(Default::default());
+                    let table = LuaObject::Table(LuaTable::default());
                     self.set(register, table.into());
                 }
-                instr @ OpCode::SetTable
-                | instr @ OpCode::SetTableConstKey
-                | instr @ OpCode::SetTableUpval
-                | instr @ OpCode::SetTableUpvalConstKey => {
+                instr @ (OpCode::SetTable
+                | OpCode::SetTableConstKey
+                | OpCode::SetTableUpval
+                | OpCode::SetTableUpvalConstKey) => {
                     let (table, key, value_r) = match instr {
                         OpCode::SetTable => {
                             let table_r = instruction.a();
@@ -1160,9 +1163,9 @@ impl LuaState {
                                 t.insert(key, value);
                                 handled = true;
                                 break;
-                            } else {
-                                is_table_with_missing_key = true;
                             }
+
+                            is_table_with_missing_key = true;
                         }
 
                         if let Some(__newindex) = target.get_metavalue(&NEWINDEX_KEY) {
@@ -1188,7 +1191,7 @@ impl LuaState {
                                             self.call_frame().frame_pointer + args_r as usize,
                                             ip + 1,
                                             args_r,
-                                            closure,
+                                            &closure,
                                             3usize,
                                         )?;
                                         continue 'main;
@@ -1263,10 +1266,10 @@ impl LuaState {
                         return Err(lua_error!("attempt to index a non-table"));
                     }
                 }
-                instr @ OpCode::GetTable
-                | instr @ OpCode::GetTableConstKey
-                | instr @ OpCode::GetTableUpval
-                | instr @ OpCode::GetTableUpvalConstKey => {
+                instr @ (OpCode::GetTable
+                | OpCode::GetTableConstKey
+                | OpCode::GetTableUpval
+                | OpCode::GetTableUpvalConstKey) => {
                     let dest_r = instruction.a();
 
                     let (table, key) = match instr {
@@ -1345,7 +1348,7 @@ impl LuaState {
                                             parent_frame_pointer + args_r as usize,
                                             ip + 1,
                                             dest_r,
-                                            closure,
+                                            &closure,
                                             2usize,
                                         )?;
                                         continue 'main;
@@ -1416,7 +1419,7 @@ impl LuaState {
                         }
                     }
                 }
-                instr @ OpCode::AppendToTable | instr @ OpCode::AppendToTableM => {
+                instr @ (OpCode::AppendToTable | OpCode::AppendToTableM) => {
                     // Append each value to the table at the stack right before the values
                     let table_r = instruction.a();
                     let mut num_values = instruction.b() as usize;
@@ -1441,7 +1444,7 @@ impl LuaState {
                 }
 
                 // Function
-                instr @ OpCode::Call | instr @ OpCode::CallM => {
+                instr @ (OpCode::Call | OpCode::CallM) => {
                     let func_r = instruction.a();
                     let is_single_return = instruction.b() == 1;
                     let mut num_args = instruction.c() as usize;
@@ -1501,7 +1504,7 @@ impl LuaState {
                                 ip + 1,
                                 func_r,
                                 Some(closure.upvalues.clone()),
-                                num_params as u16,
+                                num_params.into(),
                                 has_varargs,
                                 !is_single_return,
                             )?;
@@ -1549,7 +1552,7 @@ impl LuaState {
                         }
                     }
                 }
-                instr @ OpCode::CallT | instr @ OpCode::CallTM => {
+                instr @ (OpCode::CallT | OpCode::CallTM) => {
                     let args_r = instruction.a();
                     // let is_single_return = instruction.b() == 1;
                     let mut num_passed_args = instruction.c() as usize;
@@ -1579,10 +1582,7 @@ impl LuaState {
                     self.call_frame_mut().set_ip(0);
                     continue;
                 }
-                instr @ OpCode::Return
-                | instr @ OpCode::Return0
-                | instr @ OpCode::Return1
-                | instr @ OpCode::ReturnM => {
+                instr @ (OpCode::Return | OpCode::Return0 | OpCode::Return1 | OpCode::ReturnM) => {
                     // Find the marker indicating the start of the return values
                     let (values_starting_register, num_return_values) = match instr {
                         OpCode::Return => (instruction.a(), instruction.b() as usize),
@@ -1693,7 +1693,7 @@ impl LuaState {
                     let error_type = instruction.a();
                     return Err(RuntimeError::try_from(error_type)?).into_lua_error();
                 }
-            };
+            }
 
             self.call_frame_mut().inc_ip();
         }

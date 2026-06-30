@@ -32,16 +32,16 @@ impl PartialEq for LuaObject {
 
 impl Hash for LuaObject {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        (self as *const Self).hash(state);
+        std::ptr::from_ref(self).hash(state);
     }
 }
 
 impl LuaObject {
+    #[must_use]
     pub fn type_name(&self) -> &'static str {
         match self {
             LuaObject::Table(_) => "table",
-            LuaObject::Closure(LuaClosure { .. }) => "function",
-            LuaObject::NativeFunction(_, _) => "function",
+            LuaObject::Closure(LuaClosure { .. }) | LuaObject::NativeFunction(_, _) => "function",
             LuaObject::UserData(_) => "userdata",
             LuaObject::Thread(_) => "thread",
         }
@@ -63,7 +63,7 @@ impl Display for LuaObject {
                 write!(f, "function: {func:012p} ({name})")
             }
             LuaObject::UserData(u) => {
-                write!(f, "{}", u)
+                write!(f, "{u}")
             }
             LuaObject::Thread(_) => write!(f, "thread: {self:012p}"),
         }

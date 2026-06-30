@@ -40,8 +40,7 @@ impl Deref for UserData {
 
     fn deref(&self) -> &Self::Target {
         match self {
-            UserData::Light(data) => data,
-            UserData::Full { data, .. } => data,
+            UserData::Light(data) | UserData::Full { data, .. } => data,
         }
     }
 }
@@ -49,8 +48,8 @@ impl Deref for UserData {
 impl PartialEq for UserData {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (UserData::Light(a), UserData::Light(b)) => Arc::ptr_eq(a, b),
-            (UserData::Full { data: a, .. }, UserData::Full { data: b, .. }) => Arc::ptr_eq(a, b),
+            (UserData::Light(a), UserData::Light(b))
+            | (UserData::Full { data: a, .. }, UserData::Full { data: b, .. }) => Arc::ptr_eq(a, b),
             _ => false,
         }
     }
@@ -63,7 +62,7 @@ impl Display for UserData {
             UserData::Full {
                 data, type_name, ..
             } => {
-                write!(f, "{} ({data:010p})", type_name)
+                write!(f, "{type_name} ({data:012p})")
             }
         }
     }

@@ -174,9 +174,10 @@ fn file_read(state: &mut LuaState) -> crate::Result<u16> {
         require_userdata_type!(write, userdata, "file:read", 0, File, file, _metatable, {
             let mut result = Vec::new();
             if state.num_args() == 1 {
-                result.push(match file.handle.read(ReadFormat::Line) {
-                    Ok(s) => s,
-                    Err(_) => lua_return!(state),
+                result.push(if let Ok(s) = file.handle.read(ReadFormat::Line) {
+                    s
+                } else {
+                    lua_return!(state)
                 });
             } else {
                 for (i, value) in state.args_ref().iter().enumerate().skip(1) {
@@ -184,7 +185,7 @@ fn file_read(state: &mut LuaState) -> crate::Result<u16> {
                         v if v.is_string() => {
                             let s = unsafe { v.as_string() };
                             result.push(
-                                match file.handle.read(match s.as_slice() {
+                                if let Ok(s) = file.handle.read(match s.as_slice() {
                                     b"n" => ReadFormat::Numeral,
                                     b"a" => ReadFormat::All,
                                     b"l" => ReadFormat::Line,
@@ -197,17 +198,21 @@ fn file_read(state: &mut LuaState) -> crate::Result<u16> {
                                         ));
                                     }
                                 }) {
-                                    Ok(s) => s,
-                                    Err(_) => lua_return!(state),
+                                    s
+                                } else {
+                                    lua_return!(state)
                                 },
                             );
                         }
                         v if v.is_number() => {
                             let n = unsafe { v.as_number() };
                             result.push(
-                                match file.handle.read(ReadFormat::N(n.integer_repr()? as usize)) {
-                                    Ok(s) => s,
-                                    Err(_) => lua_return!(state),
+                                if let Ok(s) =
+                                    file.handle.read(ReadFormat::N(n.integer_repr()? as usize))
+                                {
+                                    s
+                                } else {
+                                    lua_return!(state)
                                 },
                             );
                         }
@@ -348,7 +353,7 @@ fn open(state: &mut LuaState) -> crate::Result<u16> {
         Err(e) => {
             lua_return!(state;
                 LuaValue::NIL,
-                format!("{}: No such file or directory", e).into(),
+                format!("{e}: No such file or directory").into(),
                 // TODO: What is this value??
                 2.into(),
             );
@@ -408,12 +413,7 @@ fn read(state: &mut LuaState) -> crate::Result<u16> {
     args.extend(state.args());
     let f = native_function!(file_read);
     let args_r = state.extend_stack(f, args);
-    state.run_native_function(
-        "file_read",
-        file_read,
-        args_r,
-        u16::try_from(state.num_args()).expect("too many args") + 1,
-    )
+    state.run_native_function("file_read", file_read, args_r, state.num_args() + 1)
 }
 
 fn r#type(state: &mut LuaState) -> crate::Result<u16> {
@@ -429,7 +429,7 @@ fn r#type(state: &mut LuaState) -> crate::Result<u16> {
                     LuaValue::NIL
                 }
             }
-            _ => LuaValue::NIL,
+            UserData::Light(_) => LuaValue::NIL,
         })
     })?;
 
@@ -442,10 +442,5 @@ fn write(state: &mut LuaState) -> crate::Result<u16> {
     args.extend(state.args());
     let f = native_function!(file_write);
     let args_r = state.extend_stack(f, args);
-    state.run_native_function(
-        "file:write",
-        file_write,
-        args_r,
-        u16::try_from(state.num_args()).expect("too many args") + 1,
-    )
+    state.run_native_function("file:write", file_write, args_r, state.num_args() + 1)
 }
