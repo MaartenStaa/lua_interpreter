@@ -4,8 +4,14 @@ macro_rules! lua_return {
         lua_return!(_handle; $state; 0usize; $crate::value::LuaValue::NIL)
     };
     ($state:ident; from = $iterable:expr) => {{
+        let iter = $iterable.into_iter();
+        let (lower, upper) = iter.size_hint();
+        $state.ensure_stack_space(upper.unwrap_or(lower).max(1));
         let mut num = 0;
-        for (i, v) in $iterable.into_iter().enumerate() {
+        for (i, v) in iter.enumerate() {
+            if i >= lower {
+                $state.ensure_stack_space(i + 1);
+            }
             num += 1;
             $state.set(i, v);
         }
@@ -16,9 +22,10 @@ macro_rules! lua_return {
             Ok(num)
         }
     }};
-    ($state:ident; $($value:expr),* $(,)?) => {
+    ($state:ident; $($value:expr),* $(,)?) => {{
+        $state.ensure_stack_space(<[()]>::len(&[$(lua_return!(@unit $value)),*]));
         lua_return!(_handle; $state; 0usize; $($value),*)
-    };
+    }};
     // Terminal case: encountered a value, and there are no more values remaining
     (_handle; $state:ident; $index:expr; $value:expr) => {{
         $state.set($index, $value);
@@ -29,6 +36,8 @@ macro_rules! lua_return {
         $state.set($index, $value);
         lua_return!(_handle; $state; $index + 1; $($other_values),*)
     }};
+    // Helper used for counting values in the macro invocation
+    (@unit $e:expr) => { () };
 }
 
 macro_rules! native_function {
