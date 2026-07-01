@@ -45,7 +45,7 @@ pub static MATH: LazyLock<LuaValue> = LazyLock::new(|| {
     math.into()
 });
 
-fn abs(state: &mut LuaState) -> crate::Result<u16> {
+fn abs(state: &mut LuaState) -> crate::Result<usize> {
     let value = state.arg_as_number(0)?;
 
     lua_return!(state; match value {
@@ -54,7 +54,7 @@ fn abs(state: &mut LuaState) -> crate::Result<u16> {
     })
 }
 
-fn acos(state: &mut LuaState) -> crate::Result<u16> {
+fn acos(state: &mut LuaState) -> crate::Result<usize> {
     let value = state.arg_as_number(0)?;
 
     lua_return!(state; match value {
@@ -63,7 +63,7 @@ fn acos(state: &mut LuaState) -> crate::Result<u16> {
     })
 }
 
-fn asin(state: &mut LuaState) -> crate::Result<u16> {
+fn asin(state: &mut LuaState) -> crate::Result<usize> {
     let value = state.arg_as_number(0)?;
 
     lua_return!(state; match value {
@@ -72,12 +72,12 @@ fn asin(state: &mut LuaState) -> crate::Result<u16> {
     })
 }
 
-fn atan(state: &mut LuaState) -> crate::Result<u16> {
+fn atan(state: &mut LuaState) -> crate::Result<usize> {
     let _ = state.arg_as_number(0)?;
     todo!("implement atan")
 }
 
-fn ceil(state: &mut LuaState) -> crate::Result<u16> {
+fn ceil(state: &mut LuaState) -> crate::Result<usize> {
     let value = state.arg_as_number(0)?;
 
     lua_return!(state; match value {
@@ -86,7 +86,7 @@ fn ceil(state: &mut LuaState) -> crate::Result<u16> {
     })
 }
 
-fn cos(state: &mut LuaState) -> crate::Result<u16> {
+fn cos(state: &mut LuaState) -> crate::Result<usize> {
     let value = state.arg_as_number(0)?;
 
     lua_return!(state; match value {
@@ -95,7 +95,7 @@ fn cos(state: &mut LuaState) -> crate::Result<u16> {
     })
 }
 
-fn deg(state: &mut LuaState) -> crate::Result<u16> {
+fn deg(state: &mut LuaState) -> crate::Result<usize> {
     let value = state.arg_as_number(0)?;
 
     lua_return!(state; match value {
@@ -104,7 +104,7 @@ fn deg(state: &mut LuaState) -> crate::Result<u16> {
     })
 }
 
-fn exp(state: &mut LuaState) -> crate::Result<u16> {
+fn exp(state: &mut LuaState) -> crate::Result<usize> {
     let value = state.arg_as_number(0)?;
 
     lua_return!(state; match value {
@@ -113,7 +113,7 @@ fn exp(state: &mut LuaState) -> crate::Result<u16> {
     })
 }
 
-fn floor(state: &mut LuaState) -> crate::Result<u16> {
+fn floor(state: &mut LuaState) -> crate::Result<usize> {
     let value = state.arg_as_number(0)?;
 
     lua_return!(state; match value {
@@ -122,11 +122,11 @@ fn floor(state: &mut LuaState) -> crate::Result<u16> {
     })
 }
 
-fn fmod(_: &mut LuaState) -> crate::Result<u16> {
+fn fmod(_: &mut LuaState) -> crate::Result<usize> {
     todo!("implement fmod")
 }
 
-fn log(state: &mut LuaState) -> crate::Result<u16> {
+fn log(state: &mut LuaState) -> crate::Result<usize> {
     let x = state.arg_as_number(0)?;
     let base = state
         .try_arg_as_number(1)?
@@ -144,11 +144,11 @@ fn log(state: &mut LuaState) -> crate::Result<u16> {
     })
 }
 
-fn max(state: &mut LuaState) -> crate::Result<u16> {
+fn max(state: &mut LuaState) -> crate::Result<usize> {
     let mut max = state.arg_as_number(0)?;
 
     for i in 1..state.num_args() {
-        let number = state.arg_as_number(i as usize)?;
+        let number = state.arg_as_number(i)?;
         if number > max {
             max = number;
         }
@@ -157,11 +157,11 @@ fn max(state: &mut LuaState) -> crate::Result<u16> {
     lua_return!(state; LuaValue::from_number(max))
 }
 
-fn min(state: &mut LuaState) -> crate::Result<u16> {
+fn min(state: &mut LuaState) -> crate::Result<usize> {
     let mut min = state.arg_as_number(0)?;
 
     for i in 1..state.num_args() {
-        let number = state.arg_as_number(i as usize)?;
+        let number = state.arg_as_number(i)?;
         if number < min {
             min = number;
         }
@@ -170,7 +170,7 @@ fn min(state: &mut LuaState) -> crate::Result<u16> {
     lua_return!(state; LuaValue::from_number(min))
 }
 
-fn modf(state: &mut LuaState) -> crate::Result<u16> {
+fn modf(state: &mut LuaState) -> crate::Result<usize> {
     let value = state.arg_as_number(0)?;
 
     match value {
@@ -194,7 +194,7 @@ fn modf(state: &mut LuaState) -> crate::Result<u16> {
     }
 }
 
-fn rad(state: &mut LuaState) -> crate::Result<u16> {
+fn rad(state: &mut LuaState) -> crate::Result<usize> {
     let value = state.arg_as_number(0)?;
 
     lua_return!(state; match value {
@@ -206,7 +206,7 @@ fn rad(state: &mut LuaState) -> crate::Result<u16> {
 static RANDOM: LazyLock<RwLock<StdRng>> =
     LazyLock::new(|| RwLock::new(StdRng::from_rng(&mut rng())));
 
-fn random(state: &mut LuaState) -> crate::Result<u16> {
+fn random(state: &mut LuaState) -> crate::Result<usize> {
     if state.num_args() == 0 {
         lua_return!(state; LuaValue::from_float(
             RANDOM.write().unwrap().random_range(0f64..1f64),
@@ -243,7 +243,7 @@ fn random(state: &mut LuaState) -> crate::Result<u16> {
     ))
 }
 
-fn randomseed(state: &mut LuaState) -> crate::Result<u16> {
+fn randomseed(state: &mut LuaState) -> crate::Result<usize> {
     let x = state.try_arg_as_number(0)?.unwrap_or_else(|| {
         LuaNumber::Integer(i64::from_le_bytes(
             RANDOM.write().unwrap().next_u64().to_le_bytes(),
@@ -272,7 +272,7 @@ fn randomseed(state: &mut LuaState) -> crate::Result<u16> {
     lua_return!(state; LuaValue::from_number(x), LuaValue::from_number(y))
 }
 
-fn sin(state: &mut LuaState) -> crate::Result<u16> {
+fn sin(state: &mut LuaState) -> crate::Result<usize> {
     let value = state.arg_as_number(0)?;
 
     lua_return!(state; match value {
@@ -281,7 +281,7 @@ fn sin(state: &mut LuaState) -> crate::Result<u16> {
     })
 }
 
-fn sqrt(state: &mut LuaState) -> crate::Result<u16> {
+fn sqrt(state: &mut LuaState) -> crate::Result<usize> {
     let value = state.arg_as_number(0)?;
 
     lua_return!(state; match value {
@@ -290,7 +290,7 @@ fn sqrt(state: &mut LuaState) -> crate::Result<u16> {
     })
 }
 
-fn tan(state: &mut LuaState) -> crate::Result<u16> {
+fn tan(state: &mut LuaState) -> crate::Result<usize> {
     let value = state.arg_as_number(0)?;
 
     lua_return!(state; match value {
@@ -299,7 +299,7 @@ fn tan(state: &mut LuaState) -> crate::Result<u16> {
     })
 }
 
-fn tointeger(state: &mut LuaState) -> crate::Result<u16> {
+fn tointeger(state: &mut LuaState) -> crate::Result<usize> {
     match state.try_arg(0) {
         Some(v) if v.is_integer() => lua_return!(state; v.clone()),
         Some(v) if v.is_float() && unsafe { v.as_float() }.fract() == 0.0 => {
@@ -316,7 +316,7 @@ fn tointeger(state: &mut LuaState) -> crate::Result<u16> {
     }
 }
 
-fn r#type(state: &mut LuaState) -> crate::Result<u16> {
+fn r#type(state: &mut LuaState) -> crate::Result<usize> {
     match state.arg(0) {
         v if v.is_integer() => lua_return!(state; "integer".into()),
         v if v.is_float() => lua_return!(state; "float".into()),
@@ -325,7 +325,7 @@ fn r#type(state: &mut LuaState) -> crate::Result<u16> {
 }
 
 // Returns a boolean, true if and only if integer m is below integer n when they are compared as unsigned integers.
-fn ult(state: &mut LuaState) -> crate::Result<u16> {
+fn ult(state: &mut LuaState) -> crate::Result<usize> {
     let a = state.arg_as_number(0)?;
     let b = state.arg_as_number(1)?;
 

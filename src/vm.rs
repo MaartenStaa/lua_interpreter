@@ -165,7 +165,7 @@ impl LuaState {
         return_addr: usize,
         return_value_register: u8,
         upvalues: Option<HashMap<usize, Arc<RwLock<UpValue>>>>,
-        num_args: u16,
+        num_args: usize,
         takes_varargs: bool,
         allow_multi_return_values: bool,
     ) -> crate::Result {
@@ -382,7 +382,7 @@ impl LuaState {
         &mut self,
         value: &LuaClosure,
         args_r: u8,
-        num_args: u16,
+        num_args: usize,
     ) -> crate::Result<ExecutionResult> {
         let original_call_stack_index = self.call_stack_index;
         let frame_pointer = self.call_frame().frame_pointer + args_r as usize;
@@ -406,7 +406,7 @@ impl LuaState {
             0,
             0,
             Some(value.upvalues.clone()),
-            num_params,
+            num_params.into(),
             has_varargs,
             false,
         )?;
@@ -464,7 +464,7 @@ impl LuaState {
             return_addr,
             return_value_register,
             Some(closure.upvalues.clone()),
-            num_params,
+            num_params.into(),
             has_varargs,
             false,
         )?;
@@ -531,8 +531,8 @@ impl LuaState {
         name: &'static str,
         function: NativeLuaFunction,
         args_r: u8,
-        num_args: u16,
-    ) -> crate::Result<u16> {
+        num_args: usize,
+    ) -> crate::Result<usize> {
         let original_call_stack_index = self.call_stack_index;
         let parent_frame_pointer = if self.call_stack_index > 0 {
             self.call_frame().frame_pointer
@@ -546,7 +546,7 @@ impl LuaState {
             &self.stack[parent_frame_pointer..]
         );
         debug_assert!(
-            (parent_frame_pointer + args_r as usize + num_args as usize) <= self.stack.len(),
+            (parent_frame_pointer + args_r as usize + num_args) <= self.stack.len(),
             "native function args run beyond the stack!\nfn = {name}\nargs_r = {args_r}, num_args = {num_args}\nstack = {:?}",
             &self.stack[parent_frame_pointer + args_r as usize..]
         );
@@ -1517,7 +1517,7 @@ impl LuaState {
                                 name,
                                 f,
                                 func_r,
-                                num_args.try_into().expect("too many args"),
+                                num_args,
                             )?;
 
                             // Check if the native function yielded

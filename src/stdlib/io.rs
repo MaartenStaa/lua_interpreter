@@ -147,7 +147,7 @@ fn create_file(handle: FileHandle) -> Arc<RwLock<LuaObject>> {
     ))
 }
 
-fn file_close(state: &mut LuaState) -> crate::Result<u16> {
+fn file_close(state: &mut LuaState) -> crate::Result<usize> {
     require_userdata!(write, state.try_arg(0), "file:write", 0, userdata, {
         require_userdata_type!(write, userdata, "file:write", 0, File, file, _metatable, {
             file.handle.close()?;
@@ -156,7 +156,7 @@ fn file_close(state: &mut LuaState) -> crate::Result<u16> {
     })
 }
 
-fn file_index(state: &mut LuaState) -> crate::Result<u16> {
+fn file_index(state: &mut LuaState) -> crate::Result<usize> {
     require_userdata!(state.try_arg(0), "file:__index", 0, userdata, {
         require_userdata_type!(userdata, "file:__index", 0, File, file, _metatable, {
             lua_return!(state;
@@ -169,7 +169,7 @@ fn file_index(state: &mut LuaState) -> crate::Result<u16> {
     })
 }
 
-fn file_read(state: &mut LuaState) -> crate::Result<u16> {
+fn file_read(state: &mut LuaState) -> crate::Result<usize> {
     require_userdata!(write, state.try_arg(0), "file:read", 0, userdata, {
         require_userdata_type!(write, userdata, "file:read", 0, File, file, _metatable, {
             let mut result = Vec::new();
@@ -232,7 +232,7 @@ fn file_read(state: &mut LuaState) -> crate::Result<u16> {
     })
 }
 
-fn file_write(state: &mut LuaState) -> crate::Result<u16> {
+fn file_write(state: &mut LuaState) -> crate::Result<usize> {
     require_userdata!(write, state.try_arg(0), "file:write", 0, userdata, {
         require_userdata_type!(write, userdata, "file:write", 0, File, file, _metatable, {
             for (i, value) in state.args().iter().enumerate().skip(1) {
@@ -256,7 +256,7 @@ fn file_write(state: &mut LuaState) -> crate::Result<u16> {
     })
 }
 
-fn close(state: &mut LuaState) -> crate::Result<u16> {
+fn close(state: &mut LuaState) -> crate::Result<usize> {
     if state
         .try_with_arg_as_mut_user_data(0, |userdata| {
             require_userdata_type!(write, userdata, "io.close", 0, File, file, _metatable, {
@@ -286,7 +286,7 @@ fn close(state: &mut LuaState) -> crate::Result<u16> {
     )
 }
 
-fn input(state: &mut LuaState) -> crate::Result<u16> {
+fn input(state: &mut LuaState) -> crate::Result<usize> {
     let result = match state.arg(0) {
         v if v.is_nil() => LuaValue::from_object((*DEFAULT_INPUT.read().unwrap()).clone()),
         v if v.is_object() => {
@@ -315,7 +315,7 @@ fn input(state: &mut LuaState) -> crate::Result<u16> {
     lua_return!(state; result)
 }
 
-fn open(state: &mut LuaState) -> crate::Result<u16> {
+fn open(state: &mut LuaState) -> crate::Result<usize> {
     let filename = state.arg_as_string(0)?;
     let mode = state.try_arg_as_string(1)?.unwrap_or(b"r".into());
 
@@ -363,7 +363,7 @@ fn open(state: &mut LuaState) -> crate::Result<u16> {
     lua_return!(state; LuaValue::from_object(create_file(FileHandle::File(file))))
 }
 
-fn output(state: &mut LuaState) -> crate::Result<u16> {
+fn output(state: &mut LuaState) -> crate::Result<usize> {
     let result = match state.arg(0) {
         v if v.is_nil() => LuaValue::from_object((*DEFAULT_OUTPUT.read().unwrap()).clone()),
         v if v.is_string() => {
@@ -405,7 +405,7 @@ fn output(state: &mut LuaState) -> crate::Result<u16> {
     lua_return!(state; result)
 }
 
-fn read(state: &mut LuaState) -> crate::Result<u16> {
+fn read(state: &mut LuaState) -> crate::Result<usize> {
     // Equivalent to `io.input():read(...)`
     let file = LuaValue::from_object((*DEFAULT_INPUT.write().unwrap()).clone());
     // TODO: Should we navigate through the metatable lookup?
@@ -416,7 +416,7 @@ fn read(state: &mut LuaState) -> crate::Result<u16> {
     state.run_native_function("file_read", file_read, args_r, state.num_args() + 1)
 }
 
-fn r#type(state: &mut LuaState) -> crate::Result<u16> {
+fn r#type(state: &mut LuaState) -> crate::Result<usize> {
     let result = state.with_arg_as_user_data(0, |u| {
         Ok(match u {
             UserData::Full { data, .. } => {
@@ -436,7 +436,7 @@ fn r#type(state: &mut LuaState) -> crate::Result<u16> {
     lua_return!(state; result)
 }
 
-fn write(state: &mut LuaState) -> crate::Result<u16> {
+fn write(state: &mut LuaState) -> crate::Result<usize> {
     let default = LuaValue::from_object(DEFAULT_OUTPUT.read().unwrap().clone());
     let mut args = vec![default];
     args.extend(state.args());

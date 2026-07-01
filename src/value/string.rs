@@ -191,43 +191,43 @@ fn value_numbers(state: &mut LuaState) -> crate::Result<(LuaNumber, LuaNumber)> 
     Ok((a, b))
 }
 
-fn add(state: &mut LuaState) -> crate::Result<u16> {
+fn add(state: &mut LuaState) -> crate::Result<usize> {
     let (a, b) = value_numbers(state)?;
 
     lua_return!(state; LuaValue::from_number(a + b))
 }
 
-fn sub(state: &mut LuaState) -> crate::Result<u16> {
+fn sub(state: &mut LuaState) -> crate::Result<usize> {
     let (a, b) = value_numbers(state)?;
 
     lua_return!(state; LuaValue::from_number(a - b))
 }
 
-fn mul(state: &mut LuaState) -> crate::Result<u16> {
+fn mul(state: &mut LuaState) -> crate::Result<usize> {
     let (a, b) = value_numbers(state)?;
 
     lua_return!(state; LuaValue::from_number(a * b))
 }
 
-fn div(state: &mut LuaState) -> crate::Result<u16> {
+fn div(state: &mut LuaState) -> crate::Result<usize> {
     let (a, b) = value_numbers(state)?;
 
     lua_return!(state; LuaValue::from_number(a / b))
 }
 
-fn mod_(state: &mut LuaState) -> crate::Result<u16> {
+fn mod_(state: &mut LuaState) -> crate::Result<usize> {
     let (a, b) = value_numbers(state)?;
 
     lua_return!(state; LuaValue::from_number(a % b))
 }
 
-fn pow(state: &mut LuaState) -> crate::Result<u16> {
+fn pow(state: &mut LuaState) -> crate::Result<usize> {
     let (a, b) = value_numbers(state)?;
 
     lua_return!(state; LuaValue::from_number(a.pow(&b)))
 }
 
-fn unm(state: &mut LuaState) -> crate::Result<u16> {
+fn unm(state: &mut LuaState) -> crate::Result<usize> {
     if state.num_args() != 1 {
         return Err(lua_error!("__unm expects 1 argument"));
     }
@@ -237,25 +237,25 @@ fn unm(state: &mut LuaState) -> crate::Result<u16> {
     lua_return!(state; LuaValue::from_number(-a))
 }
 
-fn idiv(state: &mut LuaState) -> crate::Result<u16> {
+fn idiv(state: &mut LuaState) -> crate::Result<usize> {
     let (a, b) = value_numbers(state)?;
 
     lua_return!(state; LuaValue::from_number(a.idiv(&b)))
 }
 
-fn band(state: &mut LuaState) -> crate::Result<u16> {
+fn band(state: &mut LuaState) -> crate::Result<usize> {
     let (a, b) = value_numbers(state)?;
 
     lua_return!(state; LuaValue::from_number((a & b)?))
 }
 
-fn bor(state: &mut LuaState) -> crate::Result<u16> {
+fn bor(state: &mut LuaState) -> crate::Result<usize> {
     let (a, b) = value_numbers(state)?;
 
     lua_return!(state; LuaValue::from_number((a | b)?))
 }
 
-fn bxor(state: &mut LuaState) -> crate::Result<u16> {
+fn bxor(state: &mut LuaState) -> crate::Result<usize> {
     let (a, b) = value_numbers(state)?;
 
     lua_return!(state; LuaValue::from_number((a ^ b)?))

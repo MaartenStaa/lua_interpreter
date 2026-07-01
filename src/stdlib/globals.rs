@@ -29,7 +29,7 @@ use super::{
 
 pub const _VERSION: &str = "Lua 5.4";
 
-pub(crate) fn assert(state: &mut LuaState) -> crate::Result<u16> {
+pub(crate) fn assert(state: &mut LuaState) -> crate::Result<usize> {
     let Some(value) = state.try_arg(0) else {
         return Err(lua_error!("bad argument #1 to 'assert' (value expected)"));
     };
@@ -63,7 +63,7 @@ static GC_STEP_MULTIPLIER: LazyLock<AtomicUsize> = LazyLock::new(|| AtomicUsize:
 const GC_PAUSE_MAX: usize = 1020;
 const GC_STEP_MULTIPLIER_MAX: usize = 572;
 
-pub(crate) fn collectgarbage(state: &mut LuaState) -> crate::Result<u16> {
+pub(crate) fn collectgarbage(state: &mut LuaState) -> crate::Result<usize> {
     let Some(operation) = state.try_arg_as_string(0)? else {
         lua_return!(state)
     };
@@ -152,7 +152,7 @@ pub(crate) fn collectgarbage(state: &mut LuaState) -> crate::Result<u16> {
     }
 }
 
-pub(crate) fn dofile(state: &mut LuaState) -> crate::Result<u16> {
+pub(crate) fn dofile(state: &mut LuaState) -> crate::Result<usize> {
     let (name, path, source) = if let Some(s) = state.try_arg_as_string(0)? {
         // This is a file path. Read the file and execute it as a chunk.
         let str = s.as_str();
@@ -192,12 +192,10 @@ pub(crate) fn dofile(state: &mut LuaState) -> crate::Result<u16> {
         state.set(i, value);
     }
 
-    Ok(num_return_values
-        .try_into()
-        .expect("too many return values"))
+    Ok(num_return_values)
 }
 
-pub(crate) fn error(state: &mut LuaState) -> crate::Result<u16> {
+pub(crate) fn error(state: &mut LuaState) -> crate::Result<usize> {
     // TODO: You can call error with no arguments, in which case the error value is nil. How can we
     // do that with miette?
     let message = state.arg_as_string(0)?;
@@ -209,7 +207,7 @@ pub(crate) fn error(state: &mut LuaState) -> crate::Result<u16> {
     Err(lua_error!("{}", message.to_string()))
 }
 
-pub(crate) fn getmetatable(state: &mut LuaState) -> crate::Result<u16> {
+pub(crate) fn getmetatable(state: &mut LuaState) -> crate::Result<usize> {
     let Some(value) = state.try_arg(0) else {
         return state.arg_err(0, "value expected");
     };
@@ -231,7 +229,7 @@ pub(crate) fn getmetatable(state: &mut LuaState) -> crate::Result<u16> {
     lua_return!(state; metatable.unwrap_or(LuaValue::NIL))
 }
 
-fn iter(state: &mut LuaState) -> crate::Result<u16> {
+fn iter(state: &mut LuaState) -> crate::Result<usize> {
     let Some(a) = state.try_arg(0) else {
         return state.arg_err(0, "value expected");
     };
@@ -258,7 +256,7 @@ fn iter(state: &mut LuaState) -> crate::Result<u16> {
     }
 }
 
-pub(crate) fn ipairs(state: &mut LuaState) -> crate::Result<u16> {
+pub(crate) fn ipairs(state: &mut LuaState) -> crate::Result<usize> {
     let value = state.ensure_arg(0)?;
 
     // Return three values: the iterator function, the target value, and the initial index
@@ -269,7 +267,7 @@ pub(crate) fn ipairs(state: &mut LuaState) -> crate::Result<u16> {
     )
 }
 
-pub(crate) fn load(state: &mut LuaState) -> crate::Result<u16> {
+pub(crate) fn load(state: &mut LuaState) -> crate::Result<usize> {
     let mut load_from_closure = false;
     let source: Vec<u8> = match state.try_arg(0) {
         Some(v) if v.is_string() => unsafe { v.as_string() }.clone().into(),
@@ -384,7 +382,7 @@ pub(crate) fn load(state: &mut LuaState) -> crate::Result<u16> {
     lua_return!(state; closure.into())
 }
 
-pub(crate) fn next(state: &mut LuaState) -> crate::Result<u16> {
+pub(crate) fn next(state: &mut LuaState) -> crate::Result<usize> {
     require_table!(read, state.try_arg(0), "next", 0, table, {
         let start_index = match state.arg(1) {
             v if v.is_nil() => 0,
@@ -411,7 +409,7 @@ pub(crate) fn next(state: &mut LuaState) -> crate::Result<u16> {
     })
 }
 
-pub(crate) fn pairs(state: &mut LuaState) -> crate::Result<u16> {
+pub(crate) fn pairs(state: &mut LuaState) -> crate::Result<usize> {
     let t = state.ensure_arg(0)?;
 
     // If t has a metamethod __pairs, calls it with t as argument and returns the first three results from the call.
@@ -448,7 +446,7 @@ pub(crate) fn pairs(state: &mut LuaState) -> crate::Result<u16> {
     )
 }
 
-pub(crate) fn pcall(state: &mut LuaState) -> crate::Result<u16> {
+pub(crate) fn pcall(state: &mut LuaState) -> crate::Result<usize> {
     enum ResultKind {
         Vector(Vec<LuaValue>),
         Register { r: u8, num_values: usize },
@@ -466,14 +464,14 @@ pub(crate) fn pcall(state: &mut LuaState) -> crate::Result<u16> {
 
     let result = match callable_function.method {
         Method::Closure(closure) => {
-            let args: Vec<_> = (u16::from(!callable_function.is_metamethod)..state.num_args())
-                .map(|i| state.arg(i as usize))
+            let args: Vec<_> = (usize::from(!callable_function.is_metamethod)..state.num_args())
+                .map(|i| state.arg(i))
                 .collect();
             let num_args = args.len();
             // TODO: Is this okay?
             let args_r = state.extend_stack(LuaValue::NIL, args);
             state
-                .run_closure(&closure, args_r, num_args as u16)
+                .run_closure(&closure, args_r, num_args)
                 .map(ExecutionResult::unwrap_completed)
                 .map(ResultKind::Vector)
         }
@@ -484,10 +482,10 @@ pub(crate) fn pcall(state: &mut LuaState) -> crate::Result<u16> {
                 (1, state.num_args() - 1)
             };
             state
-                .run_native_function(name, f, args_r, num_args as u16)
+                .run_native_function(name, f, args_r, num_args)
                 .map(|num_values| ResultKind::Register {
                     r: args_r,
-                    num_values: num_values as usize,
+                    num_values,
                 })
         }
     };
@@ -506,7 +504,7 @@ pub(crate) fn pcall(state: &mut LuaState) -> crate::Result<u16> {
                 state.set(i + 1, value);
             }
             state.set(0usize, LuaValue::from_bool(true));
-            Ok(u16::try_from(num_values + 1).expect("too many return values from pcall"))
+            Ok(num_values + 1)
         }
         Err(e) => lua_return!(state;
             LuaValue::from_bool(false),
@@ -515,7 +513,7 @@ pub(crate) fn pcall(state: &mut LuaState) -> crate::Result<u16> {
     }
 }
 
-pub(crate) fn print(state: &mut LuaState) -> crate::Result<u16> {
+pub(crate) fn print(state: &mut LuaState) -> crate::Result<usize> {
     let mut output = std::io::stdout();
 
     for (i, value) in state.args().into_iter().enumerate() {
@@ -533,14 +531,14 @@ pub(crate) fn print(state: &mut LuaState) -> crate::Result<u16> {
     lua_return!(state)
 }
 
-pub(crate) fn rawequal(state: &mut LuaState) -> crate::Result<u16> {
+pub(crate) fn rawequal(state: &mut LuaState) -> crate::Result<usize> {
     let lhs = state.ensure_arg(0)?;
     let rhs = state.ensure_arg(1)?;
 
     lua_return!(state; LuaValue::from_bool(lhs == rhs))
 }
 
-pub(crate) fn rawget(state: &mut LuaState) -> crate::Result<u16> {
+pub(crate) fn rawget(state: &mut LuaState) -> crate::Result<usize> {
     require_table!(state.try_arg(0), "rawget", 0, table, {
         let key = state.ensure_arg(1)?;
         let value = table.get(&key).cloned().unwrap_or(LuaValue::NIL);
@@ -549,7 +547,7 @@ pub(crate) fn rawget(state: &mut LuaState) -> crate::Result<u16> {
     })
 }
 
-pub(crate) fn rawlen(state: &mut LuaState) -> crate::Result<u16> {
+pub(crate) fn rawlen(state: &mut LuaState) -> crate::Result<usize> {
     let result = match state.try_arg(0) {
         Some(v) if v.is_object() => match &*unsafe { v.as_object() }.read().unwrap() {
             LuaObject::Table(t) => t.len(),
@@ -577,7 +575,7 @@ pub(crate) fn rawlen(state: &mut LuaState) -> crate::Result<u16> {
     lua_return!(state; result.into())
 }
 
-pub(crate) fn rawset(state: &mut LuaState) -> crate::Result<u16> {
+pub(crate) fn rawset(state: &mut LuaState) -> crate::Result<usize> {
     let key = state.ensure_arg(1)?;
     if key.is_nil() {
         return Err(lua_error!("bad argument #2 to 'rawset' (value expected)"));
@@ -597,7 +595,7 @@ pub(crate) fn rawset(state: &mut LuaState) -> crate::Result<u16> {
     lua_return!(state; state.ensure_arg(0)?)
 }
 
-pub(crate) fn require(state: &mut LuaState) -> crate::Result<u16> {
+pub(crate) fn require(state: &mut LuaState) -> crate::Result<usize> {
     let name = state.arg_as_string(0)?;
 
     // Allow loading stdlib modules via `require`
@@ -739,7 +737,7 @@ pub(crate) fn require(state: &mut LuaState) -> crate::Result<u16> {
     Err(lua_error!("module '{name}' not found"))
 }
 
-pub(crate) fn select(state: &mut LuaState) -> crate::Result<u16> {
+pub(crate) fn select(state: &mut LuaState) -> crate::Result<usize> {
     let index = match state.try_arg(0) {
         Some(value) if value.is_number() => unsafe { value.as_number() },
         Some(value) if value.is_string() => {
@@ -775,7 +773,7 @@ pub(crate) fn select(state: &mut LuaState) -> crate::Result<u16> {
     lua_return!(state; from = state.args().into_iter().skip(index as usize))
 }
 
-pub(crate) fn setmetatable(state: &mut LuaState) -> crate::Result<u16> {
+pub(crate) fn setmetatable(state: &mut LuaState) -> crate::Result<usize> {
     match (state.try_arg(0), state.try_arg(1)) {
         (Some(target), Some(metatable)) if target.is_object() && metatable.is_object() => {
             let metatable = unsafe { metatable.into_object() };
@@ -833,7 +831,7 @@ pub(crate) fn setmetatable(state: &mut LuaState) -> crate::Result<u16> {
     lua_return!(state; state.arg(0))
 }
 
-pub(crate) fn tonumber(state: &mut LuaState) -> crate::Result<u16> {
+pub(crate) fn tonumber(state: &mut LuaState) -> crate::Result<usize> {
     let value = match state.ensure_arg(0)? {
         n if n.is_number() => n.clone(),
         v if v.is_string() => {
@@ -853,14 +851,14 @@ pub(crate) fn tonumber(state: &mut LuaState) -> crate::Result<u16> {
     lua_return!(state; value)
 }
 
-pub(crate) fn tostring(state: &mut LuaState) -> crate::Result<u16> {
+pub(crate) fn tostring(state: &mut LuaState) -> crate::Result<usize> {
     let value = state.arg(0);
     let result = LuaValue::from_string(value.cast_to_string(state)?);
 
     lua_return!(state; result)
 }
 
-pub(crate) fn r#type(state: &mut LuaState) -> crate::Result<u16> {
+pub(crate) fn r#type(state: &mut LuaState) -> crate::Result<usize> {
     let value = state.ensure_arg(0)?;
 
     lua_return!(state; LuaValue::from_string(value.type_name().bytes().collect::<Vec<_>>()))
@@ -868,7 +866,7 @@ pub(crate) fn r#type(state: &mut LuaState) -> crate::Result<u16> {
 
 static CONTROL_MESSAGES_ENABLED: AtomicBool = AtomicBool::new(false);
 
-pub(crate) fn warn(state: &mut LuaState) -> crate::Result<u16> {
+pub(crate) fn warn(state: &mut LuaState) -> crate::Result<usize> {
     let strings: Vec<_> = state
         .args_ref()
         .iter()
@@ -912,7 +910,7 @@ pub(crate) fn warn(state: &mut LuaState) -> crate::Result<u16> {
     lua_return!(state)
 }
 
-pub(crate) fn xpcall(state: &mut LuaState) -> crate::Result<u16> {
+pub(crate) fn xpcall(state: &mut LuaState) -> crate::Result<usize> {
     enum ResultKind {
         Vector(Vec<LuaValue>),
         Register { r: u8, num_values: usize },
@@ -938,30 +936,30 @@ pub(crate) fn xpcall(state: &mut LuaState) -> crate::Result<u16> {
     let mut result = match function_callable.method {
         Method::Closure(closure) => {
             let mut args = vec![function];
-            args.extend((2..state.num_args()).map(|i| state.arg(i as usize)));
+            args.extend((2..state.num_args()).map(|i| state.arg(i)));
             let num_args = args.len();
             let args_r = state.extend_stack(closure.clone(), args);
             state
-                .run_closure(&closure, args_r, num_args as u16)
+                .run_closure(&closure, args_r, num_args)
                 .map(ExecutionResult::unwrap_completed)
                 .map(ResultKind::Vector)
         }
         nf @ Method::NativeFunction(name, f) => {
             let (args_r, num_args) = if function_callable.is_metamethod {
                 let mut args = vec![function];
-                args.extend((2..state.num_args()).map(|i| state.arg(i as usize)));
+                args.extend((2..state.num_args()).map(|i| state.arg(i)));
                 let num_args = args.len();
                 let args_r = state.extend_stack(nf, args);
-                (args_r, u16::try_from(num_args).expect("too many args"))
+                (args_r, num_args)
             } else {
                 (1, state.num_args() - 1)
             };
 
             state
-                .run_native_function(name, f, args_r, num_args as u16)
+                .run_native_function(name, f, args_r, num_args)
                 .map(|num_values| ResultKind::Register {
                     r: args_r,
-                    num_values: num_values as usize,
+                    num_values,
                 })
         }
     };
@@ -991,7 +989,7 @@ pub(crate) fn xpcall(state: &mut LuaState) -> crate::Result<u16> {
                             .run_native_function(name, *f, args_r, 1)
                             .map(|num_values| ResultKind::Register {
                                 r: args_r,
-                                num_values: num_values as usize,
+                                num_values,
                             })
                     }
                 };
@@ -1011,7 +1009,7 @@ pub(crate) fn xpcall(state: &mut LuaState) -> crate::Result<u16> {
                 let value = state.get(r as usize + i);
                 state.set(i + 1, value);
             }
-            Ok(u16::try_from(num_values + 1).expect("too many return values"))
+            Ok(num_values + 1)
         }
         Err(e) => lua_return!(state;
             LuaValue::from_bool(false),

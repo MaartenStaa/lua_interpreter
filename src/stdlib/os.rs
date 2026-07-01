@@ -24,11 +24,11 @@ pub static OS: LazyLock<LuaValue> = LazyLock::new(|| {
 
 pub static CLOCK_START: LazyLock<ProcessTime> = LazyLock::new(ProcessTime::now);
 
-fn clock(state: &mut LuaState) -> crate::Result<u16> {
+fn clock(state: &mut LuaState) -> crate::Result<usize> {
     lua_return!(state; CLOCK_START.elapsed().as_secs_f64().into())
 }
 
-fn getenv(state: &mut LuaState) -> crate::Result<u16> {
+fn getenv(state: &mut LuaState) -> crate::Result<usize> {
     let name = state.arg_as_string(0)?;
     let name_os_str = OsString::from(String::from_utf8_lossy(name.as_slice()).to_string());
 
@@ -38,11 +38,11 @@ fn getenv(state: &mut LuaState) -> crate::Result<u16> {
     lua_return!(state)
 }
 
-fn setlocale(state: &mut LuaState) -> crate::Result<u16> {
+fn setlocale(state: &mut LuaState) -> crate::Result<usize> {
     lua_return!(state)
 }
 
-fn time(state: &mut LuaState) -> crate::Result<u16> {
+fn time(state: &mut LuaState) -> crate::Result<usize> {
     if state.num_args() > 0 {
         return Err(lua_error!(
             "passing arguments to 'os.time' is not yet supported"
@@ -55,7 +55,7 @@ fn time(state: &mut LuaState) -> crate::Result<u16> {
     lua_return!(state; (now - epoch).num_seconds().into())
 }
 
-fn tmpname(state: &mut LuaState) -> crate::Result<u16> {
+fn tmpname(state: &mut LuaState) -> crate::Result<usize> {
     let rng = rand::rng();
     let random_string: String = rng
         .sample_iter(distr::Alphanumeric)

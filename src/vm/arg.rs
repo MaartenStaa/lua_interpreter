@@ -16,26 +16,26 @@ use crate::{
 /// Utility functions for working with function arguments in the Lua state.
 impl LuaState {
     /// Get the number of arguments passed to the current function call.
-    pub fn num_args(&self) -> u16 {
+    pub fn num_args(&self) -> usize {
         self.call_frame().num_args
     }
 
     /// Get all arguments for the current function call.
     pub fn args(&self) -> Vec<LuaValue> {
-        let num_args = self.call_frame().num_args as usize;
+        let num_args = self.call_frame().num_args;
         (0..num_args).map(|i| self.get(i + 1)).collect()
     }
 
     /// Get references to all arguments for the current function call.
     pub fn args_ref(&self) -> Vec<Cow<'_, LuaValue>> {
-        let num_args = self.call_frame().num_args as usize;
+        let num_args = self.call_frame().num_args;
         (0..num_args).map(|i| self.get_ref(i + 1)).collect()
     }
 
     /// Get the argument at the given index for the current function call. Returns
     /// [`LuaValue::NIL`] if the index is out of bounds (>= the number of passed arguments).
     pub fn arg(&self, index: usize) -> LuaValue {
-        let num_args = self.call_frame().num_args as usize;
+        let num_args = self.call_frame().num_args;
         if index >= num_args {
             return LuaValue::NIL;
         }
@@ -46,7 +46,7 @@ impl LuaState {
     /// Try to get the argument at the given index for the current function call. Returns
     /// [`Option::None`] if the index is out of bounds (>= the number of passed arguments).
     pub fn try_arg(&self, index: usize) -> Option<LuaValue> {
-        let num_args = self.call_frame().num_args as usize;
+        let num_args = self.call_frame().num_args;
         if index >= num_args {
             return None;
         }
@@ -57,7 +57,7 @@ impl LuaState {
     /// Ensure that the argument at the given index for the current function call exists. Like
     /// [`Self::arg`], but returns an error if the index is out of bounds.
     pub fn ensure_arg(&self, index: usize) -> crate::Result<LuaValue> {
-        let num_args = self.call_frame().num_args as usize;
+        let num_args = self.call_frame().num_args;
         if index >= num_args {
             return self.arg_err(index, "value expected");
         }
@@ -68,7 +68,7 @@ impl LuaState {
     /// Get a reference to the argument at the given index for the current function call. Like
     /// [`Self::arg`], returns [`LuaValue::NIL`] if the index is out of bounds.
     pub fn arg_ref(&self, index: usize) -> Cow<'_, LuaValue> {
-        let num_args = self.call_frame().num_args as usize;
+        let num_args = self.call_frame().num_args;
         if index >= num_args {
             return std::borrow::Cow::Owned(LuaValue::NIL);
         }

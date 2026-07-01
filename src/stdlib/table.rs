@@ -18,7 +18,7 @@ pub static TABLE: LazyLock<LuaValue> = LazyLock::new(|| {
     table.into()
 });
 
-fn concat(state: &mut LuaState) -> crate::Result<u16> {
+fn concat(state: &mut LuaState) -> crate::Result<usize> {
     // Temporary storage for number conversion, avoids needing to clone a string separator to match
     // the Vec<u8> type.
     let temp;
@@ -73,7 +73,7 @@ fn concat(state: &mut LuaState) -> crate::Result<u16> {
     lua_return!(state; result.into())
 }
 
-fn insert(state: &mut LuaState) -> crate::Result<u16> {
+fn insert(state: &mut LuaState) -> crate::Result<usize> {
     require_table!(write, state.try_arg(0), "table.insert", 0, table, {
         let len = table.len() as i64;
 
@@ -106,12 +106,12 @@ fn insert(state: &mut LuaState) -> crate::Result<u16> {
     })
 }
 
-fn pack(state: &mut LuaState) -> crate::Result<u16> {
+fn pack(state: &mut LuaState) -> crate::Result<usize> {
     let mut result = LuaTable::new();
 
     let len = state.num_args();
     for i in 0..len {
-        let v = state.arg(i as usize);
+        let v = state.arg(i);
         result.insert((i as i64 + 1).into(), v);
     }
 
@@ -120,7 +120,7 @@ fn pack(state: &mut LuaState) -> crate::Result<u16> {
     lua_return!(state; result.into())
 }
 
-fn unpack(state: &mut LuaState) -> crate::Result<u16> {
+fn unpack(state: &mut LuaState) -> crate::Result<usize> {
     require_table!(read, state.try_arg(0), "table.unpack", 0, table, {
         let i = state.try_arg_as_integer(1)?.unwrap_or(1);
         let j = state.try_arg_as_integer(2)?.unwrap_or(table.len() as i64);
@@ -134,6 +134,6 @@ fn unpack(state: &mut LuaState) -> crate::Result<u16> {
             );
         }
 
-        Ok(u16::try_from(num_values).expect("too many values to unpack"))
+        Ok(num_values)
     })
 }

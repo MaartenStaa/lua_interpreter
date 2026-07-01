@@ -1,7 +1,7 @@
 macro_rules! lua_return {
     // Must always return one value
     ($state:ident) => {
-        lua_return!(_handle; $state; 0u16; $crate::value::LuaValue::NIL)
+        lua_return!(_handle; $state; 0usize; $crate::value::LuaValue::NIL)
     };
     ($state:ident; from = $iterable:expr) => {{
         let mut num = 0;
@@ -17,7 +17,7 @@ macro_rules! lua_return {
         }
     }};
     ($state:ident; $($value:expr),* $(,)?) => {
-        lua_return!(_handle; $state; 0u16; $($value),*)
+        lua_return!(_handle; $state; 0usize; $($value),*)
     };
     // Terminal case: encountered a value, and there are no more values remaining
     (_handle; $state:ident; $index:expr; $value:expr) => {{

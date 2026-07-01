@@ -21,7 +21,7 @@ pub static COROUTINE: LazyLock<LuaValue> = LazyLock::new(|| {
     coroutine.into()
 });
 
-fn create(state: &mut LuaState) -> crate::Result<u16> {
+fn create(state: &mut LuaState) -> crate::Result<usize> {
     let callable = state.arg_as_callable(0)?;
 
     // Native functions cannot be used as coroutines directly
@@ -42,7 +42,7 @@ fn create(state: &mut LuaState) -> crate::Result<u16> {
     Ok(1)
 }
 
-fn resume(state: &mut LuaState) -> crate::Result<u16> {
+fn resume(state: &mut LuaState) -> crate::Result<usize> {
     let mut args = state.args();
     args.remove(0); // remove the thread argument
 
@@ -53,7 +53,7 @@ fn resume(state: &mut LuaState) -> crate::Result<u16> {
             for (i, value) in result.into_iter().enumerate() {
                 state.set(i + 1, value);
             }
-            Ok(u16::try_from(num_results + 1).expect("too many results from coroutine"))
+            Ok(num_results + 1)
         }
         Err(e) => {
             let msg = e.message.into_bytes();
@@ -62,7 +62,7 @@ fn resume(state: &mut LuaState) -> crate::Result<u16> {
     }
 }
 
-fn wrap(state: &mut LuaState) -> crate::Result<u16> {
+fn wrap(state: &mut LuaState) -> crate::Result<usize> {
     let callable = state.arg_as_callable(0)?;
 
     if matches!(
@@ -88,7 +88,7 @@ fn wrap(state: &mut LuaState) -> crate::Result<u16> {
     lua_return!(state; holder.into())
 }
 
-fn wrap_resume(state: &mut LuaState) -> crate::Result<u16> {
+fn wrap_resume(state: &mut LuaState) -> crate::Result<usize> {
     let mut args = state.args();
     args.remove(0); // remove self (the table)
 
@@ -111,7 +111,7 @@ fn wrap_resume(state: &mut LuaState) -> crate::Result<u16> {
     lua_return!(state; from = result)
 }
 
-fn yield_fn(state: &mut LuaState) -> crate::Result<u16> {
+fn yield_fn(state: &mut LuaState) -> crate::Result<usize> {
     if state.is_main_thread {
         return Err(crate::error::lua_error!(
             "attempt to yield from outside a coroutine"

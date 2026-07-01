@@ -158,7 +158,7 @@ fn pattern_to_regex(pattern: &[u8]) -> crate::Result<LuaPattern> {
     }
 }
 
-fn byte(state: &mut LuaState) -> crate::Result<u16> {
+fn byte(state: &mut LuaState) -> crate::Result<usize> {
     let s = state.arg_as_string(0)?;
     let i = state.try_arg_as_integer(1)?.unwrap_or(1);
     let j = state.try_arg_as_integer(2)?.unwrap_or(i);
@@ -188,13 +188,13 @@ fn byte(state: &mut LuaState) -> crate::Result<u16> {
     for (r, i) in (i..=j).enumerate() {
         state.set(r, (s[i as usize - 1] as i64).into());
     }
-    Ok((j - i + 1) as u16)
+    Ok((j - i + 1) as usize)
 }
 
-fn char(state: &mut LuaState) -> crate::Result<u16> {
-    let mut str = Vec::with_capacity(state.num_args() as usize);
+fn char(state: &mut LuaState) -> crate::Result<usize> {
+    let mut str = Vec::with_capacity(state.num_args());
     for i in 0..state.num_args() {
-        let i = state.arg_as_integer(i as usize)?;
+        let i = state.arg_as_integer(i)?;
         if i < i64::from(u8::MIN) || i > i64::from(u8::MAX) {
             return Err(lua_error!(
                 "bad argument #{i} to 'string.char' (value out of range)",
@@ -208,7 +208,7 @@ fn char(state: &mut LuaState) -> crate::Result<u16> {
     lua_return!(state; LuaValue::from_string(str))
 }
 
-fn find(state: &mut LuaState) -> crate::Result<u16> {
+fn find(state: &mut LuaState) -> crate::Result<usize> {
     let s = state.arg_as_string(0)?;
     let pattern = state.arg_as_string(1)?;
     let init = match state.arg(2) {
@@ -266,7 +266,7 @@ struct GmatchState {
     last_match_empty: bool,
 }
 
-fn gmatch(state: &mut LuaState) -> crate::Result<u16> {
+fn gmatch(state: &mut LuaState) -> crate::Result<usize> {
     let s = state.arg_as_string(0)?;
     let pattern_str = state.arg_as_string(1)?;
     let init = match state.arg(2) {
@@ -308,7 +308,7 @@ fn gmatch(state: &mut LuaState) -> crate::Result<u16> {
     )
 }
 
-fn gmatch_iter(state: &mut LuaState) -> crate::Result<u16> {
+fn gmatch_iter(state: &mut LuaState) -> crate::Result<usize> {
     require_userdata!(write, state.try_arg(0), "gmatch_iter", 0, userdata, {
         let UserData::Light(data) = userdata else {
             lua_return!(state);
@@ -381,7 +381,7 @@ fn gmatch_iter(state: &mut LuaState) -> crate::Result<u16> {
                                 }
                             }
                             return Ok(
-                                u16::try_from(regex.captures_len() - 1).expect("too many captures")
+                                regex.captures_len() - 1
                             );
                         }
                         lua_return!(state; LuaValue::from_string(full_match.as_bytes()))
@@ -393,12 +393,12 @@ fn gmatch_iter(state: &mut LuaState) -> crate::Result<u16> {
     })
 }
 
-fn format(state: &mut LuaState) -> crate::Result<u16> {
+fn format(state: &mut LuaState) -> crate::Result<usize> {
     let mut format_string = state.arg_as_string(0)?;
 
     let mut format_from = 0;
     for i in 1..state.num_args() {
-        let v = state.arg(i as usize);
+        let v = state.arg(i);
         let Some((index, format)) =
             format_string
                 .iter()
@@ -442,13 +442,13 @@ fn format(state: &mut LuaState) -> crate::Result<u16> {
     lua_return!(state; LuaValue::from_string(format_string))
 }
 
-fn len(state: &mut LuaState) -> crate::Result<u16> {
+fn len(state: &mut LuaState) -> crate::Result<usize> {
     let input = state.arg_as_string(0)?;
 
     lua_return!(state; LuaValue::from_integer(input.len() as i64))
 }
 
-fn lower(state: &mut LuaState) -> crate::Result<u16> {
+fn lower(state: &mut LuaState) -> crate::Result<usize> {
     let input = state.arg_as_string(0)?;
     let string = String::from_utf8_lossy(&input);
     let lower = string.to_lowercase();
@@ -456,7 +456,7 @@ fn lower(state: &mut LuaState) -> crate::Result<u16> {
     lua_return!(state; LuaValue::from_string(lower.into_bytes()))
 }
 
-fn r#match(state: &mut LuaState) -> crate::Result<u16> {
+fn r#match(state: &mut LuaState) -> crate::Result<usize> {
     let s = state.arg_as_string(0)?;
     let pattern = state.arg_as_string(1)?;
     // TODO: init parameter
@@ -483,7 +483,7 @@ fn r#match(state: &mut LuaState) -> crate::Result<u16> {
     }
 }
 
-fn rep(state: &mut LuaState) -> crate::Result<u16> {
+fn rep(state: &mut LuaState) -> crate::Result<usize> {
     let s = state.arg_as_string(0)?;
     let n = state.arg_as_integer(1)?;
     let sep = state.try_arg_as_string(2)?;
@@ -501,7 +501,7 @@ fn rep(state: &mut LuaState) -> crate::Result<u16> {
     lua_return!(state; LuaValue::from_string(result))
 }
 
-fn reverse(state: &mut LuaState) -> crate::Result<u16> {
+fn reverse(state: &mut LuaState) -> crate::Result<usize> {
     let input = state.arg_as_string(0)?;
 
     let mut reversed = input.clone();
@@ -509,7 +509,7 @@ fn reverse(state: &mut LuaState) -> crate::Result<u16> {
     lua_return!(state; LuaValue::from_string(reversed))
 }
 
-fn pack(state: &mut LuaState) -> crate::Result<u16> {
+fn pack(state: &mut LuaState) -> crate::Result<usize> {
     let fmt = state.arg_as_string(0)?;
     let mut result = LuaString::new();
     let mut max_alignment = 1;
@@ -643,7 +643,7 @@ fn pack(state: &mut LuaState) -> crate::Result<u16> {
     lua_return!(state; LuaValue::from_string(result))
 }
 
-fn packsize(state: &mut LuaState) -> crate::Result<u16> {
+fn packsize(state: &mut LuaState) -> crate::Result<usize> {
     let fmt = state.arg_as_string(0)?;
     let mut result = 0;
     let mut max_alignment = 1;
@@ -692,7 +692,7 @@ fn packsize(state: &mut LuaState) -> crate::Result<u16> {
     lua_return!(state; LuaValue::from_integer(result as i64))
 }
 
-fn sub(state: &mut LuaState) -> crate::Result<u16> {
+fn sub(state: &mut LuaState) -> crate::Result<usize> {
     let s = state.arg_as_string(0)?;
     let i = state.arg_as_integer(1)?;
     let j = match state.try_arg(2) {
@@ -734,7 +734,7 @@ fn sub(state: &mut LuaState) -> crate::Result<u16> {
     ))
 }
 
-fn unpack(state: &mut LuaState) -> crate::Result<u16> {
+fn unpack(state: &mut LuaState) -> crate::Result<usize> {
     let fmt = state.arg_as_string(0)?;
     let s = state.arg_as_string(1)?;
     let mut pos = state.try_arg_as_integer(2)?.map_or(1, |n| match n.cmp(&0) {
@@ -750,7 +750,7 @@ fn unpack(state: &mut LuaState) -> crate::Result<u16> {
         ));
     }
 
-    let mut result_index: u16 = 0;
+    let mut result_index: usize = 0;
     macro_rules! result(
         ($value:expr) => {{
             state.set(result_index, $value);
@@ -912,7 +912,7 @@ fn unpack(state: &mut LuaState) -> crate::Result<u16> {
     Ok(result_index)
 }
 
-fn upper(state: &mut LuaState) -> crate::Result<u16> {
+fn upper(state: &mut LuaState) -> crate::Result<usize> {
     let input = state.arg_as_string(0)?;
     let string = String::from_utf8_lossy(&input);
     let upper = string.to_uppercase();

@@ -24,7 +24,7 @@ pub static DEBUG: LazyLock<LuaValue> = LazyLock::new(|| {
     debug.into()
 });
 
-fn getinfo(state: &mut LuaState) -> crate::Result<u16> {
+fn getinfo(state: &mut LuaState) -> crate::Result<usize> {
     // TODO: First argument can optionally refer to the thread
     // TODO: Last argument can refer to which fields to fill in the table
 
@@ -71,7 +71,7 @@ fn getinfo(state: &mut LuaState) -> crate::Result<u16> {
     lua_return!(state; info.into())
 }
 
-fn getupvalue(state: &mut LuaState) -> crate::Result<u16> {
+fn getupvalue(state: &mut LuaState) -> crate::Result<usize> {
     // TODO: Will produce error "value expected" rather than "function expected, got no value"
     let value = state.ensure_arg(0)?;
     let callable: Result<Callable, _> = value.clone().try_into();
@@ -108,7 +108,7 @@ fn getupvalue(state: &mut LuaState) -> crate::Result<u16> {
     }
 }
 
-fn setmetatable(state: &mut LuaState) -> crate::Result<u16> {
+fn setmetatable(state: &mut LuaState) -> crate::Result<usize> {
     let mut value = state.ensure_arg(0)?;
     let mt = state.try_arg(1);
 
@@ -116,7 +116,7 @@ fn setmetatable(state: &mut LuaState) -> crate::Result<u16> {
     lua_return!(state; value)
 }
 
-fn upvalueid(state: &mut LuaState) -> crate::Result<u16> {
+fn upvalueid(state: &mut LuaState) -> crate::Result<usize> {
     require_closure!(state.try_arg(0), "debug.upvalueid", closure, {
         let n = state.arg_as_integer(1)? - 1;
         if n < 0 || n as usize >= closure.upvalues.len() {

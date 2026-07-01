@@ -28,7 +28,7 @@ pub(crate) struct CallFrame {
     pub(crate) return_addr: usize,
     pub(crate) return_value_register: u8,
     pub(crate) upvalues: Option<HashMap<usize, Arc<RwLock<UpValue>>>>,
-    pub(crate) num_args: u16,
+    pub(crate) num_args: usize,
     pub(crate) varargs: Vec<LuaValue>,
     pub(crate) takes_varargs: bool,
     pub(crate) allow_multi_return_values: bool,
