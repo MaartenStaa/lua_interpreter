@@ -523,7 +523,11 @@ impl LuaState {
 
     fn clear_registers_from(&mut self, from_register: impl Into<usize>) {
         let frame_pointer = self.call_frame().frame_pointer;
-        self.stack[frame_pointer + from_register.into()..].fill(LuaValue::NIL);
+        // Manual .fill(LuaValue::NIL), so we don't end up going through `Clone`
+        // which does unnecessary work here.
+        for i in (frame_pointer + from_register.into())..self.stack.len() {
+            self.stack[i] = LuaValue::NIL;
+        }
     }
 
     fn clear_registers_between(&mut self, from_register: u8, to_register: u8) {
