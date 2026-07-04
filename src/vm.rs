@@ -115,6 +115,19 @@ impl LuaState {
         }
     }
 
+    /// Take the value from a register, and put a [`LuaValue::NIL`] back in its place.
+    #[inline]
+    pub(crate) fn take(&mut self, register: impl Into<usize>) -> LuaValue {
+        let frame_pointer = self.call_frame().frame_pointer;
+        let mut value = LuaValue::NIL;
+        std::mem::swap(&mut value, &mut self.stack[frame_pointer + register.into()]);
+        if value.is_upvalue() {
+            unsafe { value.as_upvalue() }.read().unwrap().0.clone()
+        } else {
+            value.clone()
+        }
+    }
+
     #[inline]
     fn get_upvalue(&self, index: impl Into<usize>) -> LuaValue {
         let upval_index = index.into();
@@ -502,14 +515,10 @@ impl LuaState {
             // TODO: Can just copy these once we have static stack access.
             let num_varargs = num_passed_params - num_params;
             for i in 0..num_varargs {
-                let arg = self.get(num_params + i + 1);
+                let arg = self.take(num_params + i + 1);
                 self.call_frame_mut().varargs.push(arg);
             }
         }
-
-        // Clear out the stack beyond the number of fixed params by filling it
-        // with `nil` values. This gets rid of any stale values.
-        self.clear_registers_from(num_params.min(num_passed_params) + 1);
     }
 
     fn clear_registers_from(&mut self, from_register: impl Into<usize>) {
