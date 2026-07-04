@@ -248,12 +248,14 @@ impl LuaState {
             .unwrap();
         *upval = value.into();
     }
+
     pub(super) fn instr_get_upval(&mut self, instruction: crate::instruction::Instruction) {
         let register = instruction.a();
         let upval_index = instruction.b();
         let value = self.get_upvalue(upval_index);
         self.set(register, value);
     }
+
     pub(super) fn instr_load_vararg(&mut self, instruction: crate::instruction::Instruction) {
         let register = instruction.a();
         let is_single_vararg = instruction.b() == 1;
