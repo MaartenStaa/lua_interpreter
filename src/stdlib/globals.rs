@@ -49,9 +49,10 @@ pub(crate) fn assert(state: &mut LuaState) -> crate::Result<usize> {
         };
     }
 
-    for (i, arg) in state.args().into_iter().enumerate() {
-        state.set(i, arg);
+    for i in (0..state.num_args()).rev() {
+        state.swap(i, i + 1);
     }
+
     Ok(state.num_args())
 }
 

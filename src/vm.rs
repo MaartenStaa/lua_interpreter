@@ -143,6 +143,13 @@ impl LuaState {
         self.stack[frame_pointer + register.into()] = value;
     }
 
+    #[inline]
+    pub fn swap(&mut self, register: impl Into<usize>, with: impl Into<usize>) {
+        let frame_pointer = self.call_frame().frame_pointer;
+        self.stack
+            .swap(frame_pointer + register.into(), frame_pointer + with.into());
+    }
+
     #[allow(clippy::inline_always)]
     #[inline(always)]
     pub(crate) fn call_frame(&self) -> &CallFrame {
