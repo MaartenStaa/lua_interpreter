@@ -70,7 +70,7 @@ macro_rules! assert_closure(
     (read, $value:expr, $closure:ident, $tt:stmt) => {
         match $value {
             LuaValue::Object(o) => match &*o.read().unwrap() {
-                LuaObject::Closure($closure) => {
+                $crate::value::LuaObject::Closure($closure) => {
                     $tt
                 },
                 _ => unreachable!("assert_closure!() called on non-function object"),
@@ -82,7 +82,7 @@ macro_rules! assert_closure(
         let v = $value;
         if v.is_object()
             && let o = unsafe { v.as_object() }
-            && let LuaObject::Closure($closure) = &mut *o.write().unwrap()
+            && let $crate::value::LuaObject::Closure($closure) = &mut *o.write().unwrap()
         {
             $tt
         } else {
