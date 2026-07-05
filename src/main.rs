@@ -4,7 +4,7 @@ use std::{
     sync::Arc,
 };
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use lua_interpreter::{
     GlobalState, compiler::Compiler, lexer::Lexer, optimizer::optimize as optimize_ast, parser,
     token::TokenKind, value::LuaString,
@@ -15,7 +15,7 @@ use miette::{LabeledSpan, NamedSource};
 #[command(version, about, long_about = None)]
 struct Input {
     /// The Lua source file to run
-    filename: PathBuf,
+    filename: Option<PathBuf>,
 
     /// Debug the lexer, printing out each token. Does not parse or execute the file.
     #[clap(long, default_value = "false")]
@@ -36,9 +36,43 @@ struct Input {
     /// Print the execution steps of the VM.
     #[clap(long, default_value = "false")]
     trace_vm: bool,
+
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+#[derive(Subcommand, Debug)]
+enum Command {
+    #[cfg(feature = "debugger")]
+    /// Launch the interactive debugger.
+    Debug {
+        /// The Lua source file to debug
+        filename: PathBuf,
+
+        /// Pause on the very first instruction.
+        #[clap(long, default_value = "false")]
+        break_start: bool,
+
+        /// Set breakpoints. Format: "file.lua:20" or "c:2:15" (chunk:instruction).
+        #[clap(long, short = 'b')]
+        breakpoint: Vec<String>,
+    },
 }
 
 fn main() {
+    let input = Input::parse();
+
+    #[cfg(feature = "debugger")]
+    if let Some(Command::Debug {
+        filename,
+        break_start,
+        breakpoint: breakpoint_args,
+    }) = input.command
+    {
+        run_debugger(filename, break_start, breakpoint_args);
+        return;
+    }
+
     let Input {
         filename,
         debug_lexer,
@@ -46,7 +80,13 @@ fn main() {
         disable_optimizer,
         print_bytecode,
         trace_vm,
-    } = Input::parse();
+        ..
+    } = input;
+
+    let Some(filename) = filename else {
+        eprintln!("error: a filename is required when not using a subcommand");
+        std::process::exit(1);
+    };
 
     let Ok(filename) = filename.canonicalize() else {
         eprintln!("failed to canonicalize filename {}", filename.display());
@@ -152,4 +192,65 @@ fn run_debug_parser(mut parser: parser::Parser) {
     };
 
     println!("{ast:#?}");
+}
+
+#[cfg(feature = "debugger")]
+fn run_debugger(filename: PathBuf, break_start: bool, breakpoint_args: Vec<String>) {
+    use lua_interpreter::debugger;
+
+    let Ok(filename) = filename.canonicalize() else {
+        eprintln!("failed to canonicalize filename {}", filename.display());
+        std::process::exit(1);
+    };
+    let source = std::fs::read(&filename).expect("failed to read source code file");
+    let chunk_name: LuaString = filename
+        .file_name()
+        .map_or_else(|| b"<file>".into(), |n| n.as_bytes().into());
+
+    let mut parser = parser::Parser::new(&chunk_name, &source);
+    let ast = match parser.parse() {
+        Ok(ast) => ast,
+        Err(e) => {
+            eprintln!("{e:?}");
+            std::process::exit(1);
+        }
+    };
+    let ast = optimize_ast(ast);
+
+    let source = Arc::new(source);
+    let state = match Compiler::new(
+        GlobalState::get(),
+        chunk_name.clone(),
+        Some(filename),
+        None,
+        Arc::clone(&source),
+        vec![],
+        true,
+        false,
+    )
+    .compile(Some(ast))
+    {
+        Ok(c) => c,
+        Err(e) => {
+            let e = e.with_source_code(NamedSource::new(
+                String::from_utf8_lossy(&chunk_name),
+                (*source).clone(),
+            ));
+            eprintln!("compilation failed: {e:?}");
+            std::process::exit(1);
+        }
+    };
+
+    let breakpoints: Vec<_> = breakpoint_args
+        .iter()
+        .filter_map(|s| {
+            let bp = debugger::parse_breakpoint(s);
+            if bp.is_none() {
+                eprintln!("warning: invalid breakpoint format: {s}");
+            }
+            bp
+        })
+        .collect();
+
+    debugger::launch_debugger(state, breakpoints, break_start);
 }

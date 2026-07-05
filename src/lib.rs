@@ -3,6 +3,8 @@ mod bytecode;
 mod chunk;
 pub mod compiler;
 pub mod debug;
+#[cfg(feature = "debugger")]
+pub mod debugger;
 pub mod env;
 pub(crate) mod error;
 mod helpers;

@@ -17,6 +17,11 @@ regex = "1.12.2"
 short-uuid = "0.2.1"
 subslice = "0.2.3"
 thiserror = "2.0.17"
+ratatui = { version = "0.29", optional = true, features = ["crossterm"] }
+crossterm = { version = "0.28", optional = true }
+
+[features]
+debugger = ["dep:ratatui", "dep:crossterm"]
 
 [profile.release]
 debug = "line-tables-only"

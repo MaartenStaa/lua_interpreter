@@ -639,6 +639,15 @@ impl LuaState {
                 instr
             };
 
+            #[cfg(feature = "debugger")]
+            {
+                if let Some(mut dbg) = self.debugger.take() {
+                    let result = dbg.on_instruction(self, chunk_index, ip);
+                    self.debugger = Some(dbg);
+                    result?;
+                }
+            }
+
             macro_rules! binary_op_num {
                 (method = $name:ident, $metamethod:ident, $op_name:expr) => {
                     binary_op_num!(_handle $metamethod, $op_name, method, $name)

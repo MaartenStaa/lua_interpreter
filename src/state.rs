@@ -108,6 +108,9 @@ pub struct LuaState {
 
     // Debug/trace support
     pub(crate) tracer: Option<VMTracer>,
+
+    #[cfg(feature = "debugger")]
+    pub(crate) debugger: Option<crate::debugger::controller::DebuggerController>,
 }
 
 impl LuaState {
@@ -210,6 +213,8 @@ impl LuaState {
             is_main_thread,
             pending_yield: None,
             tracer: None,
+            #[cfg(feature = "debugger")]
+            debugger: None,
         }
     }
 
