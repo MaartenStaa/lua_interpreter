@@ -3,7 +3,7 @@ use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph},
+    widgets::{Block, Borders, Paragraph},
 };
 
 use crate::debugger::protocol::{HighlightKind, HighlightSpan, StateSnapshot};
@@ -27,8 +27,6 @@ pub(super) fn render_source_panel(
         .borders(Borders::ALL)
         .border_style(border_style)
         .title(format!(" {title} "));
-
-    frame.render_widget(Clear, area);
 
     let inner = block.inner(area);
     let visible_height = inner.height as usize;
@@ -73,16 +71,26 @@ pub(super) fn render_source_panel(
             let line_start_offset = line_offsets[line_idx];
             let line_end_offset = line_start_offset + line_text.len();
 
-            let is_in_expr_highlight = highlight_range
-                .is_some_and(|(sl, _, el, _)| line_idx >= sl && line_idx <= el);
+            let is_in_expr_highlight =
+                highlight_range.is_some_and(|(sl, _, el, _)| line_idx >= sl && line_idx <= el);
 
             let expr_col_start = highlight_range.and_then(|(sl, sc, _, _)| {
-                if line_idx == sl { Some(sc) } else if is_in_expr_highlight { Some(0) } else { None }
+                if line_idx == sl {
+                    Some(sc)
+                } else if is_in_expr_highlight {
+                    Some(0)
+                } else {
+                    None
+                }
             });
             let expr_col_end = highlight_range.and_then(|(_, _, el, ec)| {
-                if line_idx == el { Some(ec.min(line_text.len())) }
-                else if is_in_expr_highlight { Some(line_text.len()) }
-                else { None }
+                if line_idx == el {
+                    Some(ec.min(line_text.len()))
+                } else if is_in_expr_highlight {
+                    Some(line_text.len())
+                } else {
+                    None
+                }
             });
 
             let mut spans = vec![
@@ -185,13 +193,13 @@ fn highlight_line<'a>(
     spans
 }
 
-fn apply_expr_highlight_multi<'a>(
-    text: &'a str,
+fn apply_expr_highlight_multi(
+    text: &str,
     base_style: Style,
     text_col_start: usize,
     expr_col_start: Option<usize>,
     expr_col_end: Option<usize>,
-) -> Vec<Span<'a>> {
+) -> Vec<Span<'_>> {
     let (Some(es), Some(ee)) = (expr_col_start, expr_col_end) else {
         return vec![Span::styled(text, base_style)];
     };

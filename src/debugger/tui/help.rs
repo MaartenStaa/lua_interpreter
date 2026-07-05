@@ -45,8 +45,18 @@ pub(super) fn render_help_overlay(frame: &mut Frame) {
         Line::from(""),
         Line::from(Span::styled("  View", section_style)),
         Line::from(""),
-        help_line("  Tab", "Cycle: Source / Bytecode / Split", key_style, desc_style),
-        help_line("  b", "Toggle breakpoint on current line", key_style, desc_style),
+        help_line(
+            "  Tab",
+            "Cycle: Source / Bytecode / Split",
+            key_style,
+            desc_style,
+        ),
+        help_line(
+            "  b",
+            "Toggle breakpoint on current line",
+            key_style,
+            desc_style,
+        ),
         help_line("  ?", "Show/hide this help", key_style, desc_style),
     ];
 

@@ -14,7 +14,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::{Block, Borders, Clear, Paragraph},
 };
 
 use super::protocol::{Breakpoint, DebugCommand, DebugEvent, StateSnapshot};
@@ -50,6 +50,13 @@ enum ActivePanel {
     Right,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RunState {
+    Running,
+    Finished,
+    Error,
+}
+
 pub(crate) struct App {
     snapshot: Option<StateSnapshot>,
     panel_mode: PanelMode,
@@ -59,6 +66,7 @@ pub(crate) struct App {
     status: String,
     show_help: bool,
     quit: bool,
+    run_state: RunState,
 }
 
 impl App {
@@ -72,30 +80,24 @@ impl App {
             status: "Waiting for VM...".to_string(),
             show_help: false,
             quit: false,
+            run_state: RunState::Running,
         }
     }
 
     fn update_snapshot(&mut self, snapshot: StateSnapshot) {
-        if let Some(current_line) = self.current_source_line(&snapshot) {
+        if let Some(current_line) = Self::current_source_line(&snapshot) {
             self.left_scroll = current_line.saturating_sub(5);
         }
 
-        if let Some(ip) = Some(snapshot.current_ip) {
-            match self.panel_mode {
-                PanelMode::Bytecode => {
-                    self.left_scroll = ip.saturating_sub(5);
-                }
-                PanelMode::Split => {}
-                PanelMode::Source => {}
+        match self.panel_mode {
+            PanelMode::Bytecode => {
+                self.left_scroll = snapshot.current_ip.saturating_sub(5);
             }
+            PanelMode::Split | PanelMode::Source => {}
         }
 
-        let filename = snapshot
-            .filename
-            .as_deref()
-            .unwrap_or("<unknown>");
-        let line_info = self
-            .current_source_line(&snapshot)
+        let filename = snapshot.filename.as_deref().unwrap_or("<unknown>");
+        let line_info = Self::current_source_line(&snapshot)
             .map(|l| format!(":{l}"))
             .unwrap_or_default();
         self.status = format!(
@@ -105,19 +107,12 @@ impl App {
         self.snapshot = Some(snapshot);
     }
 
-    fn current_source_line(&self, snapshot: &StateSnapshot) -> Option<usize> {
+    fn current_source_line(snapshot: &StateSnapshot) -> Option<usize> {
         snapshot
             .source_map
             .ip_to_line
             .get(&snapshot.current_ip)
             .copied()
-    }
-
-    fn active_scroll(&self) -> usize {
-        match self.active_panel {
-            ActivePanel::Left => self.left_scroll,
-            ActivePanel::Right => self.right_scroll,
-        }
     }
 
     fn active_scroll_mut(&mut self) -> &mut usize {
@@ -128,20 +123,21 @@ impl App {
     }
 
     fn scroll_down(&mut self, amount: usize) {
-        *self.active_scroll_mut() = self.active_scroll().saturating_add(amount);
+        let scroll = self.active_scroll_mut();
+        *scroll = scroll.saturating_add(amount);
     }
 
     fn scroll_up(&mut self, amount: usize) {
-        *self.active_scroll_mut() = self.active_scroll().saturating_sub(amount);
+        let scroll = self.active_scroll_mut();
+        *scroll = scroll.saturating_sub(amount);
     }
 
     fn render(&self, frame: &mut Frame) {
+        frame.render_widget(Clear, frame.area());
+
         let chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Min(5),
-                Constraint::Length(1),
-            ])
+            .constraints([Constraint::Min(5), Constraint::Length(1)])
             .split(frame.area());
 
         let main_area = chunks[0];
@@ -149,10 +145,7 @@ impl App {
 
         let main_columns = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Percentage(70),
-                Constraint::Percentage(30),
-            ])
+            .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
             .split(main_area);
 
         self.render_left_panel(frame, main_columns[0]);
@@ -166,40 +159,75 @@ impl App {
 
     fn render_left_panel(&self, frame: &mut Frame, area: Rect) {
         let Some(snapshot) = &self.snapshot else {
-            let block = Block::default().borders(Borders::ALL).title("Waiting...");
-            frame.render_widget(Paragraph::new("Waiting for VM to pause...").block(block), area);
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .title(" Waiting... ");
+            frame.render_widget(
+                Paragraph::new("Waiting for VM to pause...").block(block),
+                area,
+            );
             return;
         };
 
         match self.panel_mode {
             PanelMode::Source => {
-                source::render_source_panel(frame, area, snapshot, self.left_scroll, self.active_panel == ActivePanel::Left);
+                source::render_source_panel(
+                    frame,
+                    area,
+                    snapshot,
+                    self.left_scroll,
+                    self.active_panel == ActivePanel::Left,
+                );
             }
             PanelMode::Bytecode => {
-                bytecode::render_bytecode_panel(frame, area, snapshot, self.left_scroll, self.active_panel == ActivePanel::Left);
+                bytecode::render_bytecode_panel(
+                    frame,
+                    area,
+                    snapshot,
+                    self.left_scroll,
+                    self.active_panel == ActivePanel::Left,
+                );
             }
             PanelMode::Split => {
                 let split = Layout::default()
                     .direction(Direction::Horizontal)
-                    .constraints([
-                        Constraint::Percentage(50),
-                        Constraint::Percentage(50),
-                    ])
+                    .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
                     .split(area);
-                source::render_source_panel(frame, split[0], snapshot, self.left_scroll, self.active_panel == ActivePanel::Left);
-                bytecode::render_bytecode_panel(frame, split[1], snapshot, self.left_scroll, false);
+                source::render_source_panel(
+                    frame,
+                    split[0],
+                    snapshot,
+                    self.left_scroll,
+                    self.active_panel == ActivePanel::Left,
+                );
+                bytecode::render_bytecode_panel(
+                    frame,
+                    split[1],
+                    snapshot,
+                    self.left_scroll,
+                    false,
+                );
             }
         }
     }
 
     fn render_right_panel(&self, frame: &mut Frame, area: Rect) {
-        state_panel::render_state_panel(frame, area, self.snapshot.as_ref(), self.right_scroll, self.active_panel == ActivePanel::Right);
+        state_panel::render_state_panel(
+            frame,
+            area,
+            self.snapshot.as_ref(),
+            self.right_scroll,
+            self.active_panel == ActivePanel::Right,
+        );
     }
 
     fn render_status_bar(&self, frame: &mut Frame, area: Rect) {
         let mode_label = self.panel_mode.label();
-        let help_hint = "?:help";
-        let keys = "s:step n:next o:out c:cont q:quit";
+
+        let keys = match self.run_state {
+            RunState::Running => "s:step n:next o:out c:cont q:quit",
+            RunState::Finished | RunState::Error => "q:quit",
+        };
 
         let status_line = Line::from(vec![
             Span::styled(
@@ -207,14 +235,11 @@ impl App {
                 Style::default().fg(Color::White),
             ),
             Span::raw("  "),
-            Span::styled(
-                format!("[{mode_label}]"),
-                Style::default().fg(Color::Cyan),
-            ),
+            Span::styled(format!("[{mode_label}]"), Style::default().fg(Color::Cyan)),
             Span::raw("  "),
-            Span::styled(keys, Style::default().fg(Color::DarkGray)),
+            Span::styled(keys, Style::default().fg(Color::White)),
             Span::raw("  "),
-            Span::styled(help_hint, Style::default().fg(Color::DarkGray)),
+            Span::styled("?:help", Style::default().fg(Color::White)),
         ]);
 
         frame.render_widget(
@@ -257,20 +282,12 @@ fn run_event_loop(
                     app.update_snapshot(snapshot);
                 }
                 DebugEvent::Completed => {
-                    app.status = "Execution completed.".to_string();
-                    app.snapshot = None;
-                    terminal.draw(|frame| app.render(frame))?;
-
-                    wait_for_quit()?;
-                    app.quit = true;
+                    app.status = "Execution completed. Press q to exit.".to_string();
+                    app.run_state = RunState::Finished;
                 }
                 DebugEvent::Error(msg) => {
-                    app.status = format!("Error: {msg}");
-                    app.snapshot = None;
-                    terminal.draw(|frame| app.render(frame))?;
-
-                    wait_for_quit()?;
-                    app.quit = true;
+                    app.status = format!("Error: {msg} — Press q to exit.");
+                    app.run_state = RunState::Error;
                 }
             }
         }
@@ -281,62 +298,121 @@ fn run_event_loop(
 
         terminal.draw(|frame| app.render(frame))?;
 
-        if event::poll(Duration::from_millis(50))? {
-            if let Event::Key(key) = event::read()? {
-                if app.show_help {
-                    if matches!(key.code, KeyCode::Esc | KeyCode::Char('?')) {
-                        app.show_help = false;
-                    }
-                    continue;
+        if event::poll(Duration::from_millis(50))?
+            && let Event::Key(key) = event::read()?
+        {
+            if app.show_help {
+                if matches!(key.code, KeyCode::Esc | KeyCode::Char('?')) {
+                    app.show_help = false;
                 }
+                continue;
+            }
 
-                match key {
-                    KeyEvent { code: KeyCode::Char('s'), modifiers: KeyModifiers::NONE, .. } => {
-                        let _ = cmd_tx.send(DebugCommand::Step);
-                    }
-                    KeyEvent { code: KeyCode::Char('n'), modifiers: KeyModifiers::NONE, .. } => {
-                        let _ = cmd_tx.send(DebugCommand::StepOver);
-                    }
-                    KeyEvent { code: KeyCode::Char('o'), modifiers: KeyModifiers::NONE, .. } => {
-                        let _ = cmd_tx.send(DebugCommand::StepOut);
-                    }
-                    KeyEvent { code: KeyCode::Char('c'), modifiers: KeyModifiers::NONE, .. } => {
-                        let _ = cmd_tx.send(DebugCommand::Continue);
-                    }
-                    KeyEvent { code: KeyCode::Char('q'), modifiers: KeyModifiers::NONE, .. } => {
-                        let _ = cmd_tx.send(DebugCommand::Quit);
-                        app.quit = true;
-                    }
-                    KeyEvent { code: KeyCode::Tab, .. } => {
-                        app.panel_mode = app.panel_mode.cycle();
-                    }
-                    KeyEvent { code: KeyCode::Char('?'), .. } => {
-                        app.show_help = true;
-                    }
-                    // Vim-style navigation
-                    KeyEvent { code: KeyCode::Char('j') | KeyCode::Down, modifiers: KeyModifiers::NONE, .. } => {
-                        app.scroll_down(1);
-                    }
-                    KeyEvent { code: KeyCode::Char('k') | KeyCode::Up, modifiers: KeyModifiers::NONE, .. } => {
-                        app.scroll_up(1);
-                    }
-                    KeyEvent { code: KeyCode::Char('h') | KeyCode::Left, modifiers: KeyModifiers::NONE, .. } => {
-                        app.active_panel = ActivePanel::Left;
-                    }
-                    KeyEvent { code: KeyCode::Char('l') | KeyCode::Right, modifiers: KeyModifiers::NONE, .. } => {
-                        app.active_panel = ActivePanel::Right;
-                    }
-                    KeyEvent { code: KeyCode::Char('d'), modifiers: KeyModifiers::CONTROL, .. } => {
-                        app.scroll_down(15);
-                    }
-                    KeyEvent { code: KeyCode::Char('u'), modifiers: KeyModifiers::CONTROL, .. } => {
-                        app.scroll_up(15);
-                    }
-                    KeyEvent { code: KeyCode::Char('b'), modifiers: KeyModifiers::NONE, .. } => {
-                        toggle_breakpoint(app, cmd_tx);
-                    }
-                    _ => {}
+            if app.run_state != RunState::Running {
+                if matches!(key.code, KeyCode::Char('q') | KeyCode::Esc) {
+                    app.quit = true;
                 }
+                continue;
+            }
+
+            match key {
+                KeyEvent {
+                    code: KeyCode::Char('s'),
+                    modifiers: KeyModifiers::NONE,
+                    ..
+                } => {
+                    let _ = cmd_tx.send(DebugCommand::Step);
+                }
+                KeyEvent {
+                    code: KeyCode::Char('n'),
+                    modifiers: KeyModifiers::NONE,
+                    ..
+                } => {
+                    let _ = cmd_tx.send(DebugCommand::StepOver);
+                }
+                KeyEvent {
+                    code: KeyCode::Char('o'),
+                    modifiers: KeyModifiers::NONE,
+                    ..
+                } => {
+                    let _ = cmd_tx.send(DebugCommand::StepOut);
+                }
+                KeyEvent {
+                    code: KeyCode::Char('c'),
+                    modifiers: KeyModifiers::NONE,
+                    ..
+                } => {
+                    let _ = cmd_tx.send(DebugCommand::Continue);
+                }
+                KeyEvent {
+                    code: KeyCode::Char('q'),
+                    modifiers: KeyModifiers::NONE,
+                    ..
+                } => {
+                    let _ = cmd_tx.send(DebugCommand::Quit);
+                    app.quit = true;
+                }
+                KeyEvent {
+                    code: KeyCode::Tab, ..
+                } => {
+                    app.panel_mode = app.panel_mode.cycle();
+                }
+                KeyEvent {
+                    code: KeyCode::Char('?'),
+                    ..
+                } => {
+                    app.show_help = true;
+                }
+                KeyEvent {
+                    code: KeyCode::Char('j') | KeyCode::Down,
+                    modifiers: KeyModifiers::NONE,
+                    ..
+                } => {
+                    app.scroll_down(1);
+                }
+                KeyEvent {
+                    code: KeyCode::Char('k') | KeyCode::Up,
+                    modifiers: KeyModifiers::NONE,
+                    ..
+                } => {
+                    app.scroll_up(1);
+                }
+                KeyEvent {
+                    code: KeyCode::Char('h') | KeyCode::Left,
+                    modifiers: KeyModifiers::NONE,
+                    ..
+                } => {
+                    app.active_panel = ActivePanel::Left;
+                }
+                KeyEvent {
+                    code: KeyCode::Char('l') | KeyCode::Right,
+                    modifiers: KeyModifiers::NONE,
+                    ..
+                } => {
+                    app.active_panel = ActivePanel::Right;
+                }
+                KeyEvent {
+                    code: KeyCode::Char('d'),
+                    modifiers: KeyModifiers::CONTROL,
+                    ..
+                } => {
+                    app.scroll_down(15);
+                }
+                KeyEvent {
+                    code: KeyCode::Char('u'),
+                    modifiers: KeyModifiers::CONTROL,
+                    ..
+                } => {
+                    app.scroll_up(15);
+                }
+                KeyEvent {
+                    code: KeyCode::Char('b'),
+                    modifiers: KeyModifiers::NONE,
+                    ..
+                } => {
+                    toggle_breakpoint(app, cmd_tx);
+                }
+                _ => {}
             }
         }
     }
@@ -345,8 +421,12 @@ fn run_event_loop(
 }
 
 fn toggle_breakpoint(app: &App, cmd_tx: &Sender<DebugCommand>) {
-    let Some(snapshot) = &app.snapshot else { return };
-    let Some(filename) = &snapshot.filename else { return };
+    let Some(snapshot) = &app.snapshot else {
+        return;
+    };
+    let Some(filename) = &snapshot.filename else {
+        return;
+    };
 
     let Some(current_line) = snapshot
         .source_map
@@ -367,15 +447,4 @@ fn toggle_breakpoint(app: &App, cmd_tx: &Sender<DebugCommand>) {
     } else {
         let _ = cmd_tx.send(DebugCommand::AddBreakpoint(bp));
     }
-}
-
-fn wait_for_quit() -> std::io::Result<()> {
-    loop {
-        if let Event::Key(key) = event::read()? {
-            if matches!(key.code, KeyCode::Char('q') | KeyCode::Esc) {
-                break;
-            }
-        }
-    }
-    Ok(())
 }

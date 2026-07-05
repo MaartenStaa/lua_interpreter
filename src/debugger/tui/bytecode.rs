@@ -3,7 +3,7 @@ use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph},
+    widgets::{Block, Borders, Paragraph},
 };
 
 use crate::debugger::protocol::StateSnapshot;
@@ -25,8 +25,6 @@ pub(super) fn render_bytecode_panel(
         .borders(Borders::ALL)
         .border_style(border_style)
         .title(" Bytecode ");
-
-    frame.render_widget(Clear, area);
 
     let inner = block.inner(area);
     let visible_height = inner.height as usize;

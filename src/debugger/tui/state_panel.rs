@@ -3,7 +3,7 @@ use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph},
+    widgets::{Block, Borders, Paragraph},
 };
 
 use crate::debugger::protocol::{CallFrameKindSnapshot, StateSnapshot};
@@ -25,8 +25,6 @@ pub(super) fn render_state_panel(
         .borders(Borders::ALL)
         .border_style(border_style)
         .title(" State ");
-
-    frame.render_widget(Clear, area);
 
     let Some(snapshot) = snapshot else {
         frame.render_widget(block, area);
@@ -51,9 +49,9 @@ pub(super) fn render_state_panel(
         let marker = if is_top { ">" } else { " " };
 
         let label = match &frame_snap.kind {
-            CallFrameKindSnapshot::Lua {
-                chunk_name, ip, ..
-            } => format!("{marker} #{i} {chunk_name}:{ip}"),
+            CallFrameKindSnapshot::Lua { chunk_name, ip, .. } => {
+                format!("{marker} #{i} {chunk_name}:{ip}")
+            }
             CallFrameKindSnapshot::Native { name } => {
                 format!("{marker} #{i} [native] {name}")
             }
@@ -71,31 +69,31 @@ pub(super) fn render_state_panel(
     lines.push(Line::from(""));
 
     // Locals section
-    if let Some(top_frame) = snapshot.call_stack.last() {
-        if !top_frame.locals.is_empty() {
-            lines.push(Line::from(Span::styled(
-                "Locals",
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            )));
+    if let Some(top_frame) = snapshot.call_stack.last()
+        && !top_frame.locals.is_empty()
+    {
+        lines.push(Line::from(Span::styled(
+            "Locals",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )));
 
-            for local in &top_frame.locals {
-                lines.push(Line::from(vec![
-                    Span::styled(
-                        format!("  {} ", local.name),
-                        Style::default().fg(Color::Yellow),
-                    ),
-                    Span::styled("= ", Style::default().fg(Color::DarkGray)),
-                    Span::styled(
-                        format!("{}", local.value),
-                        Style::default().fg(Color::White),
-                    ),
-                ]));
-            }
-
-            lines.push(Line::from(""));
+        for local in &top_frame.locals {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("  {} ", local.name),
+                    Style::default().fg(Color::Yellow),
+                ),
+                Span::styled("= ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!("{}", local.value),
+                    Style::default().fg(Color::White),
+                ),
+            ]));
         }
+
+        lines.push(Line::from(""));
     }
 
     // Register stack section
@@ -108,14 +106,8 @@ pub(super) fn render_state_panel(
 
     for (i, val) in snapshot.frame_stack.iter().enumerate() {
         lines.push(Line::from(vec![
-            Span::styled(
-                format!("  R{i:<3}"),
-                Style::default().fg(Color::DarkGray),
-            ),
-            Span::styled(
-                format!("{val}"),
-                Style::default().fg(Color::White),
-            ),
+            Span::styled(format!("  R{i:<3}"), Style::default().fg(Color::DarkGray)),
+            Span::styled(format!("{val}"), Style::default().fg(Color::White)),
         ]));
     }
 
