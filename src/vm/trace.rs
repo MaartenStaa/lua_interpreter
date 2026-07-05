@@ -1,12 +1,14 @@
 use std::{
     collections::HashMap,
+    fmt::Write,
     sync::{Arc, RwLock},
 };
 
 use crate::{
     chunk::Chunk,
-    instruction::Instruction,
+    debug,
     value::{LuaValue, UpValue},
+    vm::ChunkIndex,
 };
 
 #[derive(Debug)]
@@ -17,9 +19,7 @@ pub(crate) struct VMTracer {
     previous_upvalues: Option<HashMap<usize, Arc<RwLock<UpValue>>>>,
 }
 
-const DIM: &str = "\x1b[38;5;243m";
-const YELLOW: &str = "\x1b[33m";
-const BLUE: &str = "\x1b[34m";
+const DIM: &str = "\x1b[90m";
 const GREEN: &str = "\x1b[32m";
 const RESET: &str = "\x1b[0m";
 
@@ -40,7 +40,7 @@ impl VMTracer {
         frame_varargs: &[LuaValue],
         frame_upvalues: Option<&HashMap<usize, Arc<RwLock<UpValue>>>>,
         chunk: &Chunk,
-        chunk_index: u16,
+        chunk_index: ChunkIndex,
         ip: usize,
         multres: usize,
     ) {
@@ -58,7 +58,10 @@ impl VMTracer {
         );
         let frame_upvalues_str = Self::get_highlighted_changes_str(
             frame_upvalues
-                .map(|map| map.iter().map(|(k, v)| (*k, v)))
+                .map(|map| {
+                    let n = map.len();
+                    (0..n).map(|i| (i, map.get(&i).unwrap()))
+                })
                 .into_iter()
                 .flatten(),
             self.previous_upvalues.as_ref(),
@@ -66,16 +69,16 @@ impl VMTracer {
             '}',
         );
 
-        let multres_str = if self.previous_multres != multres {
-            format!("{GREEN}{multres}{RESET}")
-        } else {
+        let multres_str = if self.previous_multres == multres {
             format!("{DIM}{multres}{RESET}")
+        } else {
+            format!("{GREEN}{multres}{RESET}")
         };
 
         eprintln!(
-            "ip={YELLOW}{chunk_index}{RESET}:{YELLOW}{ip:04}{RESET} instr={BLUE}{:?}{RESET} frame_stack={frame_stack_str} frame_varargs={frame_varargs_str} multres={multres_str} upvalues={frame_upvalues_str}",
-            Instruction::from(chunk.instructions[ip]),
+            "frame_stack={frame_stack_str} frame_varargs={frame_varargs_str} multres={multres_str} upvalues={frame_upvalues_str}",
         );
+        debug::print_instruction(chunk, chunk_index, ip, chunk.instructions[ip]);
 
         self.previous_frame_stack = frame_stack.to_vec();
         self.previous_varargs = frame_varargs.to_vec();
@@ -97,8 +100,6 @@ impl VMTracer {
             if i > 0 {
                 str.push_str(", ");
             }
-            str.push_str(i.to_string().as_str());
-            str.push('=');
 
             str.push_str(if previous_values.has_changed(i, v) {
                 GREEN
@@ -106,7 +107,7 @@ impl VMTracer {
                 DIM
             });
 
-            str.push_str(&format!("{:?}", v));
+            let _ = write!(str, "{i}={v:?}");
             str.push_str(RESET);
         }
         str.push(close_bracket);

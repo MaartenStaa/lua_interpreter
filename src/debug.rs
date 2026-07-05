@@ -19,16 +19,20 @@ macro_rules! instr {
     };
 }
 
-pub fn print_instructions(chunk: &Chunk) {
+pub fn print_instructions(chunk: &Chunk, chunk_index: ChunkIndex) {
     let instructions = chunk.get_instructions();
 
+    eprintln!("-- BYTECODE -- {} ({})", chunk.name, chunk_index);
     for (ip, instruction) in instructions.iter().enumerate() {
         print_instruction(chunk, chunk_index, ip, *instruction);
     }
+
+    eprintln!();
 }
 
 pub(crate) fn print_instruction(
     chunk: &Chunk,
+    chunk_index: ChunkIndex,
     instruction_pointer: usize,
     instruction: Instruction,
 ) {
@@ -64,10 +68,11 @@ pub(crate) fn print_instruction(
     }
 
     eprint!(
-        "{instruction_pointer:00$}  \x1b[90m0x{opcode:01$x}\x1b[0m  ",
+        "{chunk_index}:{instruction_pointer:00$}  \x1b[90m0x{opcode:01$x} {instruction:#010x}\x1b[0m  ",
         IP_WIDTH,
         IP_HEX_WIDTH,
-        opcode = instruction.opcode().raw()
+        opcode = instruction.opcode().raw(),
+        instruction = instruction.raw()
     );
 
     match instruction.opcode() {
