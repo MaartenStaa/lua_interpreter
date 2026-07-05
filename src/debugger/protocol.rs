@@ -2,6 +2,23 @@ use std::collections::HashMap;
 
 use crate::vm::ChunkIndex;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HighlightKind {
+    Keyword,
+    Literal,
+    String,
+    Comment,
+    Operator,
+    Identifier,
+}
+
+#[derive(Debug, Clone)]
+pub struct HighlightSpan {
+    pub start: usize,
+    pub end: usize,
+    pub kind: HighlightKind,
+}
+
 #[derive(Debug, Clone)]
 pub enum DebugCommand {
     Step,
@@ -82,7 +99,10 @@ pub struct CallFrameSnapshot {
 #[derive(Debug, Clone)]
 pub struct BytecodeLine {
     pub ip: usize,
-    pub text: String,
+    pub address: String,
+    pub raw: String,
+    pub opcode_name: String,
+    pub operands: String,
     pub source_line: Option<usize>,
 }
 
@@ -104,4 +124,5 @@ pub struct StateSnapshot {
     pub frame_stack: Vec<DisplayValue>,
     pub breakpoints: Vec<Breakpoint>,
     pub source_map: SourceMap,
+    pub highlight_spans: Vec<HighlightSpan>,
 }

@@ -3,7 +3,7 @@ use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::{Block, Borders, Clear, Paragraph},
 };
 
 use crate::debugger::protocol::StateSnapshot;
@@ -26,6 +26,8 @@ pub(super) fn render_bytecode_panel(
         .border_style(border_style)
         .title(" Bytecode ");
 
+    frame.render_widget(Clear, area);
+
     let inner = block.inner(area);
     let visible_height = inner.height as usize;
 
@@ -36,21 +38,48 @@ pub(super) fn render_bytecode_panel(
         .take(visible_height)
         .map(|bl| {
             let is_current = bl.ip == snapshot.current_ip;
-
-            let marker = if is_current { ">" } else { " " };
-            let marker_style = Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD);
-
-            let text_style = if is_current {
-                Style::default()
-                    .bg(Color::Rgb(60, 60, 20))
-                    .add_modifier(Modifier::BOLD)
+            let bg = if is_current {
+                Color::Rgb(50, 50, 15)
             } else {
-                Style::default()
+                Color::Reset
             };
 
+            let marker = if is_current { ">" } else { " " };
+
             Line::from(vec![
-                Span::styled(marker, marker_style),
-                Span::styled(format!(" {}", bl.text), text_style),
+                Span::styled(
+                    marker,
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .bg(bg)
+                        .add_modifier(if is_current {
+                            Modifier::BOLD
+                        } else {
+                            Modifier::empty()
+                        }),
+                ),
+                Span::styled(
+                    format!(" {} ", bl.address),
+                    Style::default().fg(Color::DarkGray).bg(bg),
+                ),
+                Span::styled(
+                    format!("{} ", bl.raw),
+                    Style::default().fg(Color::Rgb(100, 100, 100)).bg(bg),
+                ),
+                Span::styled(
+                    format!("{:<18}", bl.opcode_name),
+                    Style::default().fg(Color::Blue).bg(bg).add_modifier(
+                        if is_current {
+                            Modifier::BOLD
+                        } else {
+                            Modifier::empty()
+                        },
+                    ),
+                ),
+                Span::styled(
+                    bl.operands.clone(),
+                    Style::default().fg(Color::Yellow).bg(bg),
+                ),
             ])
         })
         .collect();

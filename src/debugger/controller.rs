@@ -6,16 +6,19 @@ use std::sync::{
 use crate::{
     chunk::Chunk,
     error::lua_error,
+    instruction::{Instruction, OpCode},
     state::LuaState,
-    value::LuaValue,
-    vm::{ChunkIndex, call_frame::CallFrameKind},
+    value::{LuaConst, LuaValue},
+    vm::{ChunkIndex, ConstIndex, call_frame::CallFrameKind},
 };
+
+use crate::{lexer::Lexer, token::TokenKind};
 
 use super::{
     breakpoint::BreakpointSet,
     protocol::{
         Breakpoint, BytecodeLine, CallFrameKindSnapshot, CallFrameSnapshot, DebugCommand,
-        DebugEvent, DisplayValue, LocalVar, StateSnapshot,
+        DebugEvent, DisplayValue, HighlightKind, HighlightSpan, LocalVar, StateSnapshot,
     },
     source_map::build_source_map,
 };
@@ -147,40 +150,7 @@ impl DebuggerController {
 
     fn build_snapshot(&self, state: &LuaState, chunk_index: ChunkIndex, ip: usize) -> StateSnapshot {
         let global = state.global.read().unwrap();
-        let chunk = &global.chunks[chunk_index as usize];
-
-        let source = String::from_utf8_lossy(&chunk.source).into_owned();
-        let filename = chunk
-            .filename
-            .as_ref()
-            .and_then(|p| p.file_name())
-            .and_then(|n| n.to_str())
-            .map(String::from);
-
-        let current_span = chunk
-            .instruction_spans
-            .get(&ip)
-            .map(|s| (s.start, s.end));
-
-        let source_map = build_source_map(chunk);
-        let bytecode_lines = self.build_bytecode_lines(chunk, chunk_index, &source_map);
-        let call_stack = self.build_call_stack(state, &global.chunks);
-        let frame_stack = self.build_frame_stack(state);
-
-        let breakpoints = self.breakpoints.specs().to_vec();
-
-        StateSnapshot {
-            current_chunk: chunk_index,
-            current_ip: ip,
-            source,
-            filename,
-            bytecode_lines,
-            current_span,
-            call_stack,
-            frame_stack,
-            breakpoints,
-            source_map,
-        }
+        self.build_snapshot_inner(state, &global, chunk_index, ip)
     }
 
     fn build_snapshot_with_global(
@@ -191,6 +161,16 @@ impl DebuggerController {
         let CallFrameKind::Lua { chunk: chunk_index, ip } = state.call_frame().kind else {
             unreachable!();
         };
+        self.build_snapshot_inner(state, global, chunk_index, ip)
+    }
+
+    fn build_snapshot_inner(
+        &self,
+        state: &LuaState,
+        global: &crate::state::GlobalState,
+        chunk_index: ChunkIndex,
+        ip: usize,
+    ) -> StateSnapshot {
         let chunk = &global.chunks[chunk_index as usize];
 
         let source = String::from_utf8_lossy(&chunk.source).into_owned();
@@ -210,6 +190,7 @@ impl DebuggerController {
         let bytecode_lines = self.build_bytecode_lines(chunk, chunk_index, &source_map);
         let call_stack = self.build_call_stack(state, &global.chunks);
         let frame_stack = self.build_frame_stack(state);
+        let highlight_spans = build_highlight_spans(&chunk.name, &chunk.source);
 
         StateSnapshot {
             current_chunk: chunk_index,
@@ -222,6 +203,7 @@ impl DebuggerController {
             frame_stack,
             breakpoints: self.breakpoints.specs().to_vec(),
             source_map,
+            highlight_spans,
         }
     }
 
@@ -236,15 +218,20 @@ impl DebuggerController {
             .iter()
             .enumerate()
             .map(|(ip, instr)| {
-                let text = format!(
-                    "{chunk_index}:{ip:04}  0x{opcode:02x} {raw:#010x}  {name}",
-                    opcode = instr.opcode().raw(),
-                    raw = instr.raw(),
-                    name = format!("{:?}", instr.opcode()),
+                let address = format!("{chunk_index}:{ip:04}");
+                let raw = format!(
+                    "0x{:02x} {:#010x}",
+                    instr.opcode().raw(),
+                    instr.raw()
                 );
+                let opcode_name = opcode_display_name(instr.opcode());
+                let operands = format_operands(chunk, *instr);
                 BytecodeLine {
                     ip,
-                    text,
+                    address,
+                    raw,
+                    opcode_name,
+                    operands,
                     source_line: source_map.ip_to_line.get(&ip).copied(),
                 }
             })
@@ -334,6 +321,244 @@ impl DebuggerController {
             .map(value_to_display)
             .collect()
     }
+}
+
+fn opcode_display_name(opcode: OpCode) -> String {
+    match opcode {
+        OpCode::LoadConst => "LOAD_CONST",
+        OpCode::LoadClosure => "LOAD_CLOSURE",
+        OpCode::LoadNil => "LOAD_NIL",
+        OpCode::LoadShort => "LOAD_SHORT",
+        OpCode::LoadShortFloat => "LOAD_SHORT_FLOAT",
+        OpCode::Add => "ADD",
+        OpCode::Sub => "SUB",
+        OpCode::Mul => "MUL",
+        OpCode::Div => "DIV",
+        OpCode::Mod => "MOD",
+        OpCode::Pow => "POW",
+        OpCode::IDiv => "IDIV",
+        OpCode::Band => "BAND",
+        OpCode::Bor => "BOR",
+        OpCode::Bxor => "BXOR",
+        OpCode::Shl => "SHL",
+        OpCode::Shr => "SHR",
+        OpCode::Eq => "EQ",
+        OpCode::Ne => "NE",
+        OpCode::Lt => "LT",
+        OpCode::Le => "LE",
+        OpCode::Concat => "CONCAT",
+        OpCode::Neg => "NEG",
+        OpCode::Not => "NOT",
+        OpCode::Len => "LEN",
+        OpCode::BNot => "BNOT",
+        OpCode::Mov => "MOV",
+        OpCode::SetUpval => "SET_UPVAL",
+        OpCode::GetUpval => "GET_UPVAL",
+        OpCode::LoadVararg => "LOAD_VARARG",
+        OpCode::ToClose => "TO_CLOSE",
+        OpCode::Close => "CLOSE",
+        OpCode::NewTable => "NEW_TABLE",
+        OpCode::SetTable => "SET_TABLE",
+        OpCode::SetTableConstKey => "SET_TABLE_CK",
+        OpCode::SetTableUpval => "SET_TABLE_UP",
+        OpCode::SetTableUpvalConstKey => "SET_TABLE_UP_CK",
+        OpCode::GetTable => "GET_TABLE",
+        OpCode::GetTableConstKey => "GET_TABLE_CK",
+        OpCode::GetTableUpval => "GET_TABLE_UP",
+        OpCode::GetTableUpvalConstKey => "GET_TABLE_UP_CK",
+        OpCode::AppendToTable => "APPEND_TO_TABLE",
+        OpCode::AppendToTableM => "APPEND_TO_TABLE_M",
+        OpCode::Call => "CALL",
+        OpCode::CallM => "CALL_M",
+        OpCode::CallT => "CALL_T",
+        OpCode::CallTM => "CALL_T_M",
+        OpCode::Return => "RETURN",
+        OpCode::Return0 => "RETURN0",
+        OpCode::Return1 => "RETURN1",
+        OpCode::ReturnM => "RETURN_M",
+        OpCode::Jmp => "JMP",
+        OpCode::JmpTrue => "JMP_TRUE",
+        OpCode::JmpFalse => "JMP_FALSE",
+        OpCode::JmpClose => "JMP_CLOSE",
+        OpCode::Error => "ERROR",
+    }
+    .to_string()
+}
+
+fn format_operands(chunk: &Chunk, instr: Instruction) -> String {
+    let r = |n: u8| format!("R{n}");
+    let num_results = |n: u8| {
+        if n == 0 {
+            "MULTRES".to_string()
+        } else {
+            format!("{}", n - 1)
+        }
+    };
+    let fmt_const = |idx: ConstIndex| -> String {
+        match chunk.get_const(idx) {
+            LuaConst::Nil => "nil".to_string(),
+            LuaConst::Boolean(b) => format!("{b}"),
+            LuaConst::Number(n) => format!("{n}"),
+            LuaConst::String(s) => format!("\"{}\"", String::from_utf8_lossy(s)),
+            LuaConst::Table(t) => format!("table({} fields)", t.keys().count()),
+        }
+    };
+
+    match instr.opcode() {
+        OpCode::LoadConst => format!("{} {}", r(instr.a()), fmt_const(instr.b())),
+        OpCode::LoadClosure => format!("{} chunk:{}", r(instr.a()), instr.bc()),
+        OpCode::LoadNil => format!("{} {}", r(instr.a()), r(instr.b())),
+        OpCode::LoadShort => format!("{} {}", r(instr.a()), instr.bc().cast_signed()),
+        OpCode::LoadShortFloat => format!("{} {}", r(instr.a()), instr.bc().cast_signed() as f32),
+        OpCode::Add | OpCode::Sub | OpCode::Mul | OpCode::Div | OpCode::Mod | OpCode::Pow
+        | OpCode::IDiv | OpCode::Band | OpCode::Bor | OpCode::Bxor | OpCode::Shl
+        | OpCode::Shr | OpCode::Eq | OpCode::Ne | OpCode::Lt | OpCode::Le | OpCode::Concat
+        | OpCode::SetTable | OpCode::GetTable => {
+            format!("{} {} {}", r(instr.a()), r(instr.b()), r(instr.c()))
+        }
+        OpCode::Neg | OpCode::Not | OpCode::Len | OpCode::BNot | OpCode::Mov => {
+            format!("{} {}", r(instr.a()), r(instr.b()))
+        }
+        OpCode::SetUpval => format!("U{} {}", instr.a(), r(instr.b())),
+        OpCode::GetUpval => format!("{} U{}", r(instr.a()), instr.b()),
+        OpCode::LoadVararg => format!("{} {}", r(instr.a()), num_results(instr.b())),
+        OpCode::ToClose | OpCode::Close | OpCode::NewTable | OpCode::Return1 => {
+            r(instr.a())
+        }
+        OpCode::SetTableConstKey => {
+            format!("{} {} {}", r(instr.a()), fmt_const(instr.b()), r(instr.c()))
+        }
+        OpCode::SetTableUpval => format!("{} U{} {}", r(instr.a()), instr.b(), r(instr.c())),
+        OpCode::SetTableUpvalConstKey => {
+            format!("U{} {} {}", instr.a(), fmt_const(instr.b()), r(instr.c()))
+        }
+        OpCode::GetTableConstKey => {
+            format!("{} {} {}", r(instr.a()), r(instr.b()), fmt_const(instr.c()))
+        }
+        OpCode::GetTableUpval => format!("{} U{} {}", r(instr.a()), instr.b(), r(instr.c())),
+        OpCode::GetTableUpvalConstKey => {
+            format!("{} U{} {}", r(instr.a()), instr.b(), fmt_const(instr.c()))
+        }
+        OpCode::AppendToTable | OpCode::AppendToTableM => {
+            format!("{} {}", r(instr.a()), instr.b())
+        }
+        OpCode::Call | OpCode::CallM | OpCode::CallT | OpCode::CallTM => {
+            format!("{} {} {}", r(instr.a()), num_results(instr.b()), instr.c())
+        }
+        OpCode::Return | OpCode::ReturnM => format!("{} {}", r(instr.a()), instr.b()),
+        OpCode::Return0 => String::new(),
+        OpCode::Jmp => format!("{:04}", instr.bc()),
+        OpCode::JmpTrue | OpCode::JmpFalse | OpCode::JmpClose => {
+            format!("{} {:04}", r(instr.a()), instr.bc())
+        }
+        OpCode::Error => format!("{}", instr.a()),
+    }
+}
+
+fn build_highlight_spans(chunk_name: &[u8], source: &[u8]) -> Vec<HighlightSpan> {
+    let lexer = Lexer::new(chunk_name, source);
+    let mut spans = Vec::new();
+    let mut covered_end = 0;
+
+    for result in lexer {
+        let Ok(token) = result else { break };
+
+        if token.span.start > covered_end {
+            find_comments(source, covered_end, token.span.start, &mut spans);
+        }
+
+        let kind = match &token.kind {
+            TokenKind::And
+            | TokenKind::Break
+            | TokenKind::Do
+            | TokenKind::Else
+            | TokenKind::ElseIf
+            | TokenKind::End
+            | TokenKind::For
+            | TokenKind::Function
+            | TokenKind::Goto
+            | TokenKind::If
+            | TokenKind::In
+            | TokenKind::Local
+            | TokenKind::Not
+            | TokenKind::Or
+            | TokenKind::Repeat
+            | TokenKind::Return
+            | TokenKind::Then
+            | TokenKind::Until
+            | TokenKind::While => HighlightKind::Keyword,
+
+            TokenKind::True | TokenKind::False | TokenKind::Nil => HighlightKind::Literal,
+            TokenKind::Integer(_) | TokenKind::Float(_) => HighlightKind::Literal,
+            TokenKind::String(_) => HighlightKind::String,
+            TokenKind::Identifier(_) => HighlightKind::Identifier,
+
+            _ => HighlightKind::Operator,
+        };
+
+        spans.push(HighlightSpan {
+            start: token.span.start,
+            end: token.span.end,
+            kind,
+        });
+        covered_end = token.span.end;
+    }
+
+    if covered_end < source.len() {
+        find_comments(source, covered_end, source.len(), &mut spans);
+    }
+
+    spans.sort_by_key(|s| s.start);
+    spans
+}
+
+fn find_comments(source: &[u8], from: usize, to: usize, spans: &mut Vec<HighlightSpan>) {
+    let region = &source[from..to];
+    let mut pos = 0;
+    while pos < region.len() {
+        if pos + 1 < region.len() && region[pos] == b'-' && region[pos + 1] == b'-' {
+            let comment_start = from + pos;
+            if pos + 3 < region.len() && region[pos + 2] == b'[' {
+                let eq_count = region[pos + 3..]
+                    .iter()
+                    .take_while(|&&b| b == b'=')
+                    .count();
+                if pos + 3 + eq_count < region.len() && region[pos + 3 + eq_count] == b'[' {
+                    let mut close_bracket = b"]".to_vec();
+                    close_bracket.extend(std::iter::repeat_n(b'=', eq_count));
+                    close_bracket.push(b']');
+                    if let Some(end_pos) = find_subsequence(&source[comment_start..], &close_bracket) {
+                        let comment_end = comment_start + end_pos + close_bracket.len();
+                        spans.push(HighlightSpan {
+                            start: comment_start,
+                            end: comment_end.min(to),
+                            kind: HighlightKind::Comment,
+                        });
+                        pos = comment_end - from;
+                        continue;
+                    }
+                }
+            }
+            let line_end = region[pos..]
+                .iter()
+                .position(|&b| b == b'\n')
+                .map_or(to, |p| from + pos + p);
+            spans.push(HighlightSpan {
+                start: comment_start,
+                end: line_end,
+                kind: HighlightKind::Comment,
+            });
+            pos = line_end - from;
+            continue;
+        }
+        pos += 1;
+    }
+}
+
+fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
 }
 
 fn value_to_display(value: &LuaValue) -> DisplayValue {

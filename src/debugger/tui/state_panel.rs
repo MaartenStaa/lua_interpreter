@@ -3,7 +3,7 @@ use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::{Block, Borders, Clear, Paragraph},
 };
 
 use crate::debugger::protocol::{CallFrameKindSnapshot, StateSnapshot};
@@ -25,6 +25,8 @@ pub(super) fn render_state_panel(
         .borders(Borders::ALL)
         .border_style(border_style)
         .title(" State ");
+
+    frame.render_widget(Clear, area);
 
     let Some(snapshot) = snapshot else {
         frame.render_widget(block, area);
