@@ -31,7 +31,7 @@ pub(crate) fn print_instruction(
     chunk: &Chunk,
     instruction_pointer: usize,
     instruction: Instruction,
-) -> usize {
+) {
     macro_rules! reg {
         (1) => {{
             let r = instruction.a();
@@ -52,6 +52,16 @@ pub(crate) fn print_instruction(
             eprint!("\x1b[33m{:>1$}\x1b[0m ", format!("R{}", $r), REG_TEXT_WIDTH);
         }
     }
+    macro_rules! num_results {
+        ($num:expr) => {{
+            let n = $num;
+            if n == 0 {
+                eprint!("\x1b[36mMULTRES\x1b[0m");
+            } else {
+                eprint!("\x1b[36m{}\x1b[0m", n - 1);
+            }
+        }};
+    }
 
     eprint!(
         "{instruction_pointer:00$}  \x1b[90m0x{opcode:01$x}\x1b[0m  ",
@@ -64,27 +74,22 @@ pub(crate) fn print_instruction(
         // Stack manipulation
         OpCode::LoadConst => {
             let const_index = instruction.b() as ConstIndex;
-            dbg!(&const_index);
             instr!("LOAD_CONST");
             reg!();
             print_const(chunk.get_const(const_index));
             eprintln!();
-            2 + size_of::<ConstIndex>()
         }
         OpCode::LoadClosure => {
             let chunk_index = instruction.bc() as ChunkIndex;
             instr!("LOAD_CLOSURE");
             reg!();
             eprintln!("FUNCTION<{name}:{chunk_index:04}>", name = chunk.name);
-
-            2 + size_of::<ChunkIndex>()
         }
         OpCode::LoadNil => {
             instr!("LOAD_NIL");
             reg!(1);
             reg!(2);
             eprintln!();
-            3
         }
         OpCode::LoadShort => {
             instr!("LOAD_SHORT");
@@ -92,7 +97,6 @@ pub(crate) fn print_instruction(
             let bc = instruction.bc();
             let value = u16::cast_signed(bc);
             eprintln!("SHORT {value}");
-            4
         }
         OpCode::LoadShortFloat => {
             instr!("LOAD_SHORT_FLOAT");
@@ -101,7 +105,6 @@ pub(crate) fn print_instruction(
             let value = u16::cast_signed(bc);
             let value = value as f32;
             eprintln!("SHORT_FLOAT {value}");
-            4
         }
 
         // Binary operations
@@ -112,7 +115,6 @@ pub(crate) fn print_instruction(
             reg!(2);
             reg!(3);
             eprintln!();
-            4
         }
         OpCode::Sub => {
             instr!("SUB");
@@ -120,7 +122,6 @@ pub(crate) fn print_instruction(
             reg!(2);
             reg!(3);
             eprintln!();
-            4
         }
         OpCode::Mul => {
             instr!("MUL");
@@ -128,7 +129,6 @@ pub(crate) fn print_instruction(
             reg!(2);
             reg!(3);
             eprintln!();
-            4
         }
         OpCode::Div => {
             instr!("DIV");
@@ -136,7 +136,6 @@ pub(crate) fn print_instruction(
             reg!(2);
             reg!(3);
             eprintln!();
-            4
         }
         OpCode::Mod => {
             instr!("MOD");
@@ -144,7 +143,6 @@ pub(crate) fn print_instruction(
             reg!(2);
             reg!(3);
             eprintln!();
-            4
         }
         OpCode::Pow => {
             instr!("POW");
@@ -152,7 +150,6 @@ pub(crate) fn print_instruction(
             reg!(2);
             reg!(3);
             eprintln!();
-            4
         }
         OpCode::IDiv => {
             instr!("IDIV");
@@ -160,7 +157,6 @@ pub(crate) fn print_instruction(
             reg!(2);
             reg!(3);
             eprintln!();
-            4
         }
         OpCode::Band => {
             instr!("BAND");
@@ -168,7 +164,6 @@ pub(crate) fn print_instruction(
             reg!(2);
             reg!(3);
             eprintln!();
-            4
         }
         OpCode::Bor => {
             instr!("BOR");
@@ -176,7 +171,6 @@ pub(crate) fn print_instruction(
             reg!(2);
             reg!(3);
             eprintln!();
-            4
         }
         OpCode::Bxor => {
             instr!("BXOR");
@@ -184,7 +178,6 @@ pub(crate) fn print_instruction(
             reg!(2);
             reg!(3);
             eprintln!();
-            4
         }
         OpCode::Shl => {
             instr!("SHL");
@@ -192,7 +185,6 @@ pub(crate) fn print_instruction(
             reg!(2);
             reg!(3);
             eprintln!();
-            4
         }
         OpCode::Shr => {
             instr!("SHR");
@@ -200,7 +192,6 @@ pub(crate) fn print_instruction(
             reg!(2);
             reg!(3);
             eprintln!();
-            4
         }
 
         // Comparison
@@ -210,7 +201,6 @@ pub(crate) fn print_instruction(
             reg!(2);
             reg!(3);
             eprintln!();
-            4
         }
         OpCode::Ne => {
             instr!("NE");
@@ -218,7 +208,6 @@ pub(crate) fn print_instruction(
             reg!(2);
             reg!(3);
             eprintln!();
-            4
         }
         OpCode::Lt => {
             instr!("LT");
@@ -226,7 +215,6 @@ pub(crate) fn print_instruction(
             reg!(2);
             reg!(3);
             eprintln!();
-            4
         }
         OpCode::Le => {
             instr!("LE");
@@ -234,7 +222,6 @@ pub(crate) fn print_instruction(
             reg!(2);
             reg!(3);
             eprintln!();
-            4
         }
 
         // Concatenation
@@ -244,7 +231,6 @@ pub(crate) fn print_instruction(
             reg!(2);
             reg!(3);
             eprintln!();
-            4
         }
 
         // Unary operations
@@ -253,28 +239,24 @@ pub(crate) fn print_instruction(
             reg!(1);
             reg!(2);
             eprintln!();
-            3
         }
         OpCode::Not => {
             instr!("NOT");
             reg!(1);
             reg!(2);
             eprintln!();
-            3
         }
         OpCode::Len => {
             instr!("LEN");
             reg!(1);
             reg!(2);
             eprintln!();
-            3
         }
         OpCode::BNot => {
             instr!("BNOT");
             reg!(1);
             reg!(2);
             eprintln!();
-            3
         }
 
         // Variables
@@ -283,7 +265,6 @@ pub(crate) fn print_instruction(
             reg!(1);
             reg!(2);
             eprintln!();
-            3
         }
         OpCode::SetUpval => {
             let upval_index = instruction.a();
@@ -291,33 +272,29 @@ pub(crate) fn print_instruction(
             eprint!("{upval_index}");
             reg!();
             eprintln!();
-            3
         }
         OpCode::GetUpval => {
             let upval_index = instruction.b();
             instr!("GET_UPVAL");
             reg!();
             eprintln!("{upval_index}");
-            3
         }
         OpCode::LoadVararg => {
-            let is_single_value = instruction.b() == 1;
+            let num = instruction.b();
             instr!("LOAD_VARARG");
             reg!();
-            eprintln!("{}", if is_single_value { "single" } else { "multi" });
-            3
+            num_results!(num);
+            eprintln!();
         }
         OpCode::ToClose => {
             instr!("TO_CLOSE");
             reg!();
             eprintln!();
-            2
         }
         OpCode::Close => {
             instr!("CLOSE");
             reg!();
             eprintln!();
-            2
         }
 
         // Table
@@ -325,7 +302,6 @@ pub(crate) fn print_instruction(
             instr!("NEW_TABLE");
             reg!();
             eprintln!();
-            2
         }
         OpCode::SetTable => {
             instr!("SET_TABLE");
@@ -333,7 +309,6 @@ pub(crate) fn print_instruction(
             reg!(2);
             reg!(3);
             eprintln!();
-            4
         }
         OpCode::SetTableConstKey => {
             instr!("SET_TABLE_CK");
@@ -342,7 +317,6 @@ pub(crate) fn print_instruction(
             print_const(chunk.get_const(const_index));
             reg!(3);
             eprintln!();
-            3 + size_of::<ConstIndex>()
         }
         OpCode::SetTableUpval => {
             instr!("SET_TABLE_UP");
@@ -351,7 +325,6 @@ pub(crate) fn print_instruction(
             eprint!("{upval_index}");
             reg!(3);
             eprintln!();
-            4
         }
         OpCode::SetTableUpvalConstKey => {
             instr!("SET_TABLE_UP_CK");
@@ -361,7 +334,6 @@ pub(crate) fn print_instruction(
             print_const(chunk.get_const(const_index));
             reg!(3);
             eprintln!();
-            3 + size_of::<ConstIndex>()
         }
         OpCode::GetTable => {
             instr!("GET_TABLE");
@@ -369,7 +341,6 @@ pub(crate) fn print_instruction(
             reg!(2);
             reg!(3);
             eprintln!();
-            4
         }
         OpCode::GetTableConstKey => {
             instr!("GET_TABLE_CK");
@@ -378,7 +349,6 @@ pub(crate) fn print_instruction(
             let const_index: ConstIndex = instruction.c();
             print_const(chunk.get_const(const_index));
             eprintln!();
-            3 + size_of::<ConstIndex>()
         }
         OpCode::GetTableUpval => {
             instr!("GET_TABLE_UP");
@@ -387,7 +357,6 @@ pub(crate) fn print_instruction(
             eprint!("{upval_index}");
             reg!(3);
             eprintln!();
-            4
         }
         OpCode::GetTableUpvalConstKey => {
             instr!("GET_TABLE_UP_CK");
@@ -397,26 +366,23 @@ pub(crate) fn print_instruction(
             let const_index: ConstIndex = instruction.c();
             print_const(chunk.get_const(const_index));
             eprintln!();
-            3 + size_of::<ConstIndex>()
         }
         OpCode::AppendToTable => {
             instr!("APPEND_TO_TABLE");
             reg!();
             let num_values = instruction.b();
             eprintln!("{num_values}");
-            3
         }
         OpCode::AppendToTableM => {
             instr!("APPEND_TO_TABLE_M");
             reg!();
             let num_values = instruction.b();
             eprintln!("{num_values}");
-            3
         }
 
         // Function
         instr @ (OpCode::Call | OpCode::CallM | OpCode::CallT | OpCode::CallTM) => {
-            let is_single_return = instruction.b() == 1;
+            let num_results = instruction.b();
             let num_params = instruction.c();
             instr!(match instr {
                 OpCode::Call => "CALL",
@@ -426,36 +392,29 @@ pub(crate) fn print_instruction(
                 _ => unreachable!(),
             });
             reg!();
-            eprintln!(
-                "{:9} {num_params}",
-                if is_single_return { "single" } else { "multi" },
-            );
-            4
+            num_results!(num_results);
+            eprintln!(" {num_params}");
         }
         OpCode::Return => {
             instr!("RETURN");
             reg!();
             let n = instruction.b();
             eprintln!("{n}");
-            3
         }
         OpCode::Return0 => {
             instr!("RETURN0");
             eprintln!();
-            1
         }
         OpCode::Return1 => {
             instr!("RETURN1");
             reg!();
             eprintln!();
-            2
         }
         OpCode::ReturnM => {
             instr!("RETURN_M");
             reg!();
             let n = instruction.b();
             eprintln!("{n}");
-            3
         }
 
         // Control
@@ -464,28 +423,24 @@ pub(crate) fn print_instruction(
             let offset: JumpAddr = instruction.bc();
             instr!("JMP");
             eprintln!("{offset:04}");
-            1 + size_of::<JumpAddr>()
         }
         OpCode::JmpTrue => {
             let offset: JumpAddr = instruction.bc();
             instr!("JMP_TRUE");
             reg!();
             eprintln!("{offset:04}");
-            2 + size_of::<JumpAddr>()
         }
         OpCode::JmpFalse => {
             let offset: JumpAddr = instruction.bc();
             instr!("JMP_FALSE");
             reg!();
             eprintln!("{offset:04}");
-            2 + size_of::<JumpAddr>()
         }
         OpCode::JmpClose => {
             let offset: JumpAddr = instruction.bc();
             instr!("JMP_CLOSE");
             reg!();
             eprintln!("{offset:04}");
-            2 + size_of::<JumpAddr>()
         }
 
         // Other
@@ -494,7 +449,6 @@ pub(crate) fn print_instruction(
             let error = RuntimeError::try_from(error_code).expect("valid error code");
             instr!("ERROR");
             eprintln!("{error:?}");
-            2
         }
     }
 }

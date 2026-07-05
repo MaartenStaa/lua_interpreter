@@ -529,14 +529,14 @@ impl LuaValue {
                 Method::Closure(closure) => {
                     let args_r = state.extend_stack(LuaValue::NIL, [self.clone()]);
                     state
-                        .run_closure(&closure, args_r, 1)?
+                        .run_closure(&closure, args_r, 1, 2)?
                         .unwrap_completed()
                         .into_iter()
                         .next()
                 }
                 nf @ Method::NativeFunction(name, f) => {
                     let args_r = state.extend_stack(nf, [self.clone()]);
-                    let num_return = state.run_native_function(name, f, args_r, 1)?;
+                    let num_return = state.run_native_function(name, f, args_r, 1, 2)?;
                     debug_assert!(
                         num_return >= 1,
                         "native function {name} did not return a value",

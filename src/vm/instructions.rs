@@ -258,15 +258,23 @@ impl LuaState {
 
     pub(super) fn instr_load_vararg(&mut self, instruction: crate::instruction::Instruction) {
         let register = instruction.a();
-        let is_single_vararg = instruction.b() == 1;
-        if is_single_vararg {
-            let value = self
-                .call_frame()
-                .varargs
-                .first()
-                .cloned()
-                .unwrap_or(LuaValue::NIL);
-            self.set(register, value);
+        // 0 = multres, otherwise expect n - 1 results.
+        let num_results = instruction.b();
+
+        if num_results > 0 {
+            // We shouldn't need to `ensure_stack_space` here, because we're loading a statically
+            // known amount of values. This means the compiler must have expected the registers
+            // needed, and reserved them.
+            let num_expected_values = num_results - 1;
+            for i in 0..num_expected_values {
+                let value = self
+                    .call_frame()
+                    .varargs
+                    .get(i as usize)
+                    .cloned()
+                    .unwrap_or(LuaValue::NIL);
+                self.set(register as usize + i as usize, value);
+            }
         } else {
             // Ensure we'll have enough space on the stack.
             let varargs = self.call_frame().varargs.clone();
@@ -280,7 +288,7 @@ impl LuaState {
             // Clear out extraneous registers
             // TODO: Store the number of expected values in the instruction (not just
             // single or multiple) so we know if we need to do this or not.
-            self.clear_registers_from(register as usize + self.multres);
+            self.clear_registers_from(register as usize + self.multres, None);
         }
     }
 
@@ -376,12 +384,13 @@ impl LuaState {
                                 args_r,
                                 &closure,
                                 3usize,
+                                1,
                             )?;
                             return Ok(InstructionResult::Continue);
                         }
                         nf @ Method::NativeFunction(name, f) => {
                             let args_r = self.extend_stack(nf, [table.clone(), key, value]);
-                            self.run_native_function(name, f, args_r, 3)?;
+                            self.run_native_function(name, f, args_r, 3, 1)?;
 
                             // Check if the native function yielded
                             if let Some(yield_values) = self.pending_yield.take() {
@@ -530,11 +539,12 @@ impl LuaState {
                                 dest_r,
                                 &closure,
                                 2usize,
+                                2,
                             )?;
                             return Ok(InstructionResult::Continue);
                         }
                         Method::NativeFunction(name, f) => {
-                            self.run_native_function(name, f, args_r, 2)?;
+                            self.run_native_function(name, f, args_r, 2, 2)?;
 
                             // Check if the native function yielded
                             if let Some(yield_values) = self.pending_yield.take() {
@@ -608,7 +618,9 @@ impl LuaState {
         ip: usize,
     ) -> crate::Result<InstructionResult> {
         let func_r = instruction.a();
-        let is_single_return = instruction.b() == 1;
+        // let is_single_return = instruction.b() == 1;
+        // 0 = multres, otherwise expect n - 1 results.
+        let expected_num_results = instruction.b();
         let mut num_args = instruction.c() as usize;
 
         let is_callm = matches!(instr, OpCode::CallM);
@@ -668,14 +680,15 @@ impl LuaState {
                     Some(closure.upvalues.clone()),
                     num_params.into(),
                     has_varargs,
-                    !is_single_return,
+                    expected_num_results,
                 )?;
                 self.align_closure_args(num_params, num_args, has_varargs);
 
                 Ok(InstructionResult::Continue)
             }
             Method::NativeFunction(name, f) => {
-                let result = self.run_native_function(name, f, func_r, num_args)?;
+                let result =
+                    self.run_native_function(name, f, func_r, num_args, expected_num_results)?;
 
                 // Check if the native function yielded
                 if let Some(yield_values) = self.pending_yield.take() {
@@ -688,26 +701,27 @@ impl LuaState {
                     return Ok(ExecutionResult::Yielded(yield_values).into());
                 }
 
-                let value_slots_needed = match (is_single_return, result) {
-                    (true, 0) => 1,
-                    (true, n) => n.min(1),
-                    (false, n) => n,
+                let value_slots_needed = if expected_num_results == 0 {
+                    result
+                } else {
+                    (expected_num_results as usize - 1).min(result)
                 };
                 self.ensure_stack_space(func_r as usize + value_slots_needed);
 
-                if result == 0 && is_single_return {
+                self.multres = result;
+                if result == 0 && expected_num_results > 0 {
                     self.set(func_r, LuaValue::NIL);
-                    self.multres = 0;
-                } else if is_single_return {
-                    // TODO: Do we need to cap the values set by the native function?
-                    self.multres = 1;
-                } else {
-                    self.multres = result;
                 }
 
-                // TODO: Store the number of expected values in the instruction (not just
-                // single or multiple), so we know if we can skip this.
-                self.clear_registers_from(func_r as usize + self.multres);
+                // If we expected a specific number of results, and we got fewer than that, clear
+                // the extra registers beyond the returned values to get rid of stale values, such
+                // as arguments to the called function.
+                if expected_num_results > 0 && (expected_num_results as usize - 1) > result {
+                    self.clear_registers_from(
+                        func_r as usize + self.multres,
+                        Some(func_r as usize + expected_num_results as usize - 1),
+                    );
+                }
 
                 Ok(InstructionResult::Normal)
             }
@@ -764,19 +778,28 @@ impl LuaState {
             _ => unreachable!(),
         };
 
-        // Collect the return values
-        // TODO: We probably don't need to allocate a vector here as long as this is
-        // not a border frame.
-        let mut return_values: Vec<_> = (0..num_return_values)
-            .map(|i| self.get(values_starting_register as usize + i))
-            .collect();
-
-        let frame = self.pop_call_frame();
-        if return_values.is_empty() && !frame.allow_multi_return_values {
-            return_values.push(LuaValue::NIL);
+        // Strip upvalue wrappers from the returning function's registers so they
+        // don't leak into the caller's frame. Without this, MOV instructions in
+        // the caller that happen to target a leaked upvalue-wrapped register would
+        // write through to the shared UpValue, corrupting closures that captured it.
+        {
+            let fp = self.call_frame().frame_pointer;
+            for slot in &mut self.stack[fp..] {
+                if slot.is_upvalue() {
+                    let inner = unsafe { slot.as_upvalue() }.read().unwrap().0.clone();
+                    *slot = inner;
+                }
+            }
         }
 
-        self.multres = if frame.allow_multi_return_values {
+        let frame = self.pop_call_frame();
+        let mut corrected_starting_register =
+            frame.frame_pointer + values_starting_register as usize;
+        if self.call_stack_index > 0 {
+            corrected_starting_register -= self.call_frame().frame_pointer;
+        }
+
+        self.multres = if frame.num_return_values == 0 {
             num_return_values
         } else {
             1
@@ -784,28 +807,53 @@ impl LuaState {
 
         // Check if this is the root frame, or if we're leaving this chunk
         if frame.border_frame {
+            // Collect the return values. When call_stack_index == 0 (e.g. a
+            // coroutine's root frame), there is no parent frame so we must
+            // access the stack directly — corrected_starting_register is
+            // already an absolute position in that case.
+            let mut return_values: Vec<_> = (0..num_return_values)
+                .map(|i| {
+                    if self.call_stack_index > 0 {
+                        self.get(corrected_starting_register + i)
+                    } else {
+                        self.stack[corrected_starting_register + i].clone()
+                    }
+                })
+                .collect();
+
+            // Ensure we always return a value.
+            if return_values.is_empty() && frame.num_return_values > 0 {
+                return_values.push(LuaValue::NIL);
+            }
+
             return ExecutionResult::Completed(return_values).into();
         }
 
         self.call_frame_mut().set_ip(frame.return_addr);
 
-        self.ensure_stack_space(frame.return_value_register as usize + return_values.len());
-
         // Put the return values back
-        for (i, value) in return_values.into_iter().enumerate() {
-            self.set(frame.return_value_register as usize + i, value);
-            if !frame.allow_multi_return_values {
+        for i in 0..num_return_values {
+            self.swap(
+                frame.return_value_register as usize + i,
+                corrected_starting_register + i,
+            );
+
+            // Did we reach the number of expected values? Then we can stop moving values around.
+            if frame.num_return_values > 0 && frame.num_return_values as usize - 1 == i {
                 break;
             }
         }
 
-        // Clear out any stale values after the last return value
-        let clear_registers_from = if frame.allow_multi_return_values {
-            frame.return_value_register as usize + num_return_values
-        } else {
-            frame.return_value_register as usize + 1
-        };
-        self.clear_registers_from(clear_registers_from);
+        // If we expected a specific number of results, and we got fewer than that, clear
+        // the extra registers beyond the returned values to get rid of stale values, such
+        // as arguments to the called function.
+        if frame.num_return_values > 0 && (frame.num_return_values as usize - 1) > num_return_values
+        {
+            self.clear_registers_from(
+                frame.return_value_register as usize + num_return_values,
+                Some(frame.return_value_register as usize + frame.num_return_values as usize - 1),
+            );
+        }
 
         None
     }

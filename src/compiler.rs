@@ -410,7 +410,7 @@ impl Compiler {
                     return Ok(BlockResult::new());
                 }
 
-                self.compile_function_call(function_call, ExpressionResultMode::Multiple)?;
+                self.compile_function_call(function_call, ExpressionResultMode::Amount(0))?;
                 self.release_registers_from(current_register);
                 BlockResult::new()
             }
@@ -459,7 +459,7 @@ impl Compiler {
                     );
                 }
 
-                self.compile_expression_list(expressions)?;
+                self.compile_expression_list(expressions, Some(num_names))?;
 
                 for (index, name) in names.into_iter().enumerate() {
                     let name_register = current_register + index as u8;
@@ -527,7 +527,7 @@ impl Compiler {
                 BlockResult::new()
             }
             Statement::Assignment { varlist, explist } => {
-                self.compile_expression_list(explist)?;
+                self.compile_expression_list(explist, Some(varlist.len()))?;
 
                 for (index, variable) in varlist.into_iter().enumerate() {
                     match variable.node {
@@ -605,7 +605,7 @@ impl Compiler {
                                         .compile_expression(
                                             target_index,
                                             ExpressionMode::Ref,
-                                            ExpressionResultMode::Single,
+                                            ExpressionResultMode::Amount(1),
                                         )?
                                         .get_register();
                                     self.push_bytecode(
@@ -622,14 +622,14 @@ impl Compiler {
                                         .compile_prefix_expression(
                                             target,
                                             ExpressionMode::Ref,
-                                            ExpressionResultMode::Single,
+                                            ExpressionResultMode::Amount(1),
                                         )?
                                         .get_register();
                                     let index_r = self
                                         .compile_expression(
                                             target_index,
                                             ExpressionMode::Ref,
-                                            ExpressionResultMode::Single,
+                                            ExpressionResultMode::Amount(1),
                                         )?
                                         .get_register();
                                     self.push_bytecode(
@@ -687,7 +687,7 @@ impl Compiler {
                                         .compile_prefix_expression(
                                             target,
                                             ExpressionMode::Ref,
-                                            ExpressionResultMode::Single,
+                                            ExpressionResultMode::Amount(1),
                                         )?
                                         .get_register();
 
@@ -721,7 +721,7 @@ impl Compiler {
                     .compile_expression(
                         condition,
                         ExpressionMode::Ref,
-                        ExpressionResultMode::Single,
+                        ExpressionResultMode::Amount(1),
                     )?
                     .get_register();
 
@@ -762,7 +762,7 @@ impl Compiler {
                         .compile_expression(
                             else_if.node.condition,
                             ExpressionMode::Ref,
-                            ExpressionResultMode::Single,
+                            ExpressionResultMode::Amount(1),
                         )?
                         .get_register();
                     // Jump to the end of the block if the condition is false
@@ -870,7 +870,7 @@ impl Compiler {
                     .compile_expression(
                         condition,
                         ExpressionMode::Ref,
-                        ExpressionResultMode::Single,
+                        ExpressionResultMode::Amount(1),
                     )?
                     .get_register();
                 self.push_bytecode(
@@ -895,7 +895,7 @@ impl Compiler {
                     .compile_expression(
                         condition,
                         ExpressionMode::Ref,
-                        ExpressionResultMode::Single,
+                        ExpressionResultMode::Amount(1),
                     )?
                     .get_register();
                 let jmp_false_addr = self.push_undecided_jump(
@@ -959,7 +959,7 @@ impl Compiler {
                             .compile_expression(
                                 initial,
                                 ExpressionMode::Copy,
-                                ExpressionResultMode::Single,
+                                ExpressionResultMode::Amount(1),
                             )?
                             .get_register();
                         self.add_local(name.node.0, ident_r, 0, Some(name.span));
@@ -971,7 +971,7 @@ impl Compiler {
                             .compile_expression(
                                 limit,
                                 ExpressionMode::Copy,
-                                ExpressionResultMode::Single,
+                                ExpressionResultMode::Amount(1),
                             )?
                             .get_register();
                         self.add_local(b"#limit".into(), limit_r, 0, None);
@@ -982,7 +982,7 @@ impl Compiler {
                                 .compile_expression(
                                     step,
                                     ExpressionMode::Copy,
-                                    ExpressionResultMode::Single,
+                                    ExpressionResultMode::Amount(1),
                                 )?
                                 .get_register();
                             self.add_local(b"#step".into(), step_r, 0, None);
@@ -1131,7 +1131,7 @@ impl Compiler {
                             },
                             None,
                         );
-                        self.compile_expression_list(expressions)?;
+                        self.compile_expression_list(expressions, Some(4))?;
                         self.set_register_index(current_register + 4);
 
                         // Save the result as locals: the iterator function, the state, the initial
@@ -1197,7 +1197,7 @@ impl Compiler {
                         self.push_bytecode(
                             Bytecode::Call {
                                 func_register: func_r,
-                                result_mode: ExpressionResultMode::Multiple,
+                                result_mode: ExpressionResultMode::Multres,
                                 num_args: 2,
                             },
                             None,
@@ -1394,7 +1394,7 @@ impl Compiler {
         );
 
         let register = self.register_index;
-        let expression_list_length = self.compile_expression_list(return_statement)?;
+        let expression_list_length = self.compile_expression_list(return_statement, None)?;
 
         if has_to_close_values {
             self.push_bytecode(Bytecode::Close { from_register: 0 }, None);
@@ -1439,7 +1439,7 @@ impl Compiler {
                     .compile_prefix_expression(
                         *function_call.node.function,
                         ExpressionMode::Copy,
-                        ExpressionResultMode::Single,
+                        ExpressionResultMode::Amount(1),
                     )?
                     .get_register();
 
@@ -1461,7 +1461,7 @@ impl Compiler {
                     .compile_prefix_expression(
                         *function_call.node.function,
                         ExpressionMode::Copy,
-                        ExpressionResultMode::Single,
+                        ExpressionResultMode::Amount(1),
                     )?
                     .get_register();
 
@@ -1469,7 +1469,8 @@ impl Compiler {
             };
 
         let num_args = function_call.node.args.node.len() + self_arg_n;
-        let expression_list_length = self.compile_expression_list(function_call.node.args.node)?;
+        let expression_list_length =
+            self.compile_expression_list(function_call.node.args.node, None)?;
 
         let args_multres = matches!(expression_list_length, ExpressionListLength::MultRes { .. });
         let num_args = match expression_list_length {
@@ -1542,7 +1543,8 @@ impl Compiler {
         } else {
             (self.register_index, false)
         };
-        let expression_list_length = self.compile_expression_list(function_call.node.args.node)?;
+        let expression_list_length =
+            self.compile_expression_list(function_call.node.args.node, None)?;
         if !is_self_call {
             debug_assert_eq!(parameters_register, expression_list_length.get_register());
         }
@@ -1554,7 +1556,7 @@ impl Compiler {
         };
 
         // TODO: Is this right? Does it matter?
-        let result_mode = ExpressionResultMode::Multiple;
+        let result_mode = ExpressionResultMode::Multres;
         let num_args = match expression_list_length {
             ExpressionListLength::Constant { .. } => num_args as u8,
             // Subtract one, because the last argument will be accounted for via multres
@@ -1629,6 +1631,7 @@ impl Compiler {
     fn compile_expression_list(
         &mut self,
         expressions: Vec<TokenTree<Expression>>,
+        num_targets: Option<usize>,
     ) -> crate::Result<ExpressionListLength> {
         let num_expressions = expressions.len();
         let from_register = self.register_index;
@@ -1639,10 +1642,12 @@ impl Compiler {
                 self.compile_expression(
                     expression,
                     ExpressionMode::Copy,
-                    if is_last {
-                        ExpressionResultMode::Multiple
-                    } else {
-                        ExpressionResultMode::Single
+                    match (is_last, num_targets) {
+                        (true, Some(num_targets)) => {
+                            ExpressionResultMode::Amount(num_targets - i)
+                        }
+                        (true, None) => ExpressionResultMode::Multres,
+                        (false, _) => ExpressionResultMode::Amount(1),
                     },
                 )?,
                 ExpressionResult::Multiple { .. }
@@ -1677,7 +1682,7 @@ impl Compiler {
                             .compile_expression(
                                 *lhs,
                                 ExpressionMode::Copy,
-                                ExpressionResultMode::Single,
+                                ExpressionResultMode::Amount(1),
                             )?
                             .get_register();
                         let jmp_false_addr = self.push_undecided_jump(
@@ -1693,7 +1698,7 @@ impl Compiler {
                             .compile_expression(
                                 *rhs,
                                 ExpressionMode::Copy,
-                                ExpressionResultMode::Single,
+                                ExpressionResultMode::Amount(1),
                             )?
                             .get_register();
                         self.patch_addr_placeholder(jmp_false_addr);
@@ -1707,7 +1712,7 @@ impl Compiler {
                             .compile_expression(
                                 *lhs,
                                 ExpressionMode::Copy,
-                                ExpressionResultMode::Single,
+                                ExpressionResultMode::Amount(1),
                             )?
                             .get_register();
                         let jmp_true_addr = self.push_undecided_jump(
@@ -1723,7 +1728,7 @@ impl Compiler {
                             .compile_expression(
                                 *rhs,
                                 ExpressionMode::Copy,
-                                ExpressionResultMode::Single,
+                                ExpressionResultMode::Amount(1),
                             )?
                             .get_register();
                         self.patch_addr_placeholder(jmp_true_addr);
@@ -1738,14 +1743,14 @@ impl Compiler {
                             .compile_expression(
                                 *lhs,
                                 ExpressionMode::Ref,
-                                ExpressionResultMode::Single,
+                                ExpressionResultMode::Amount(1),
                             )?
                             .get_register();
                         let rhs_r = self
                             .compile_expression(
                                 *rhs,
                                 ExpressionMode::Ref,
-                                ExpressionResultMode::Single,
+                                ExpressionResultMode::Amount(1),
                             )?
                             .get_register();
                         self.compile_binary_operator(op, dest_r, lhs_r, rhs_r, expression.span);
@@ -1764,7 +1769,7 @@ impl Compiler {
             Expression::UnaryOp { op, rhs } => {
                 let current_r = self.register_index;
                 let expr_r = self
-                    .compile_expression(*rhs, ExpressionMode::Ref, ExpressionResultMode::Single)?
+                    .compile_expression(*rhs, ExpressionMode::Ref, ExpressionResultMode::Amount(1))?
                     .get_register();
                 let dest_r = if current_r == expr_r {
                     expr_r
@@ -1790,7 +1795,7 @@ impl Compiler {
                 self.push_bytecode(
                     Bytecode::LoadVararg {
                         dest_register: register,
-                        single_value: matches!(result_mode, ExpressionResultMode::Single),
+                        result_mode,
                     },
                     Some(expression.span),
                 );
@@ -1812,9 +1817,11 @@ impl Compiler {
 
                 result_mode.into_result(register)
             }
-            PrefixExpression::Parenthesized(expression) => {
-                self.compile_expression(*expression, expression_mode, ExpressionResultMode::Single)?
-            }
+            PrefixExpression::Parenthesized(expression) => self.compile_expression(
+                *expression,
+                expression_mode,
+                ExpressionResultMode::Amount(1),
+            )?,
             PrefixExpression::Variable(variable) => {
                 let register = match variable.node {
                     Variable::Name(name) => self.read_variable(
@@ -1855,7 +1862,7 @@ impl Compiler {
                                     .compile_expression(
                                         *index,
                                         ExpressionMode::Ref,
-                                        ExpressionResultMode::Single,
+                                        ExpressionResultMode::Amount(1),
                                     )?
                                     .get_register();
 
@@ -1879,7 +1886,7 @@ impl Compiler {
                                 .compile_prefix_expression(
                                     *prefix,
                                     ExpressionMode::Ref,
-                                    ExpressionResultMode::Single,
+                                    ExpressionResultMode::Amount(1),
                                 )?
                                 .get_register();
                             let const_index = self.get_const_index(LuaConst::String(key));
@@ -1906,14 +1913,14 @@ impl Compiler {
                                 .compile_prefix_expression(
                                     *prefix,
                                     ExpressionMode::Ref,
-                                    ExpressionResultMode::Single,
+                                    ExpressionResultMode::Amount(1),
                                 )?
                                 .get_register();
                             let index_r = self
                                 .compile_expression(
                                     *index,
                                     ExpressionMode::Ref,
-                                    ExpressionResultMode::Single,
+                                    ExpressionResultMode::Amount(1),
                                 )?
                                 .get_register();
 
@@ -1967,7 +1974,7 @@ impl Compiler {
                                 .compile_prefix_expression(
                                     *prefix,
                                     ExpressionMode::Ref,
-                                    ExpressionResultMode::Single,
+                                    ExpressionResultMode::Amount(1),
                                 )?
                                 .get_register();
 
@@ -2106,7 +2113,7 @@ impl Compiler {
                         .compile_expression(
                             value,
                             ExpressionMode::Ref,
-                            ExpressionResultMode::Single,
+                            ExpressionResultMode::Amount(1),
                         )?
                         .get_register();
                     self.push_bytecode(
@@ -2125,14 +2132,14 @@ impl Compiler {
                         .compile_expression(
                             index_expression,
                             ExpressionMode::Ref,
-                            ExpressionResultMode::Single,
+                            ExpressionResultMode::Amount(1),
                         )?
                         .get_register();
                     let value_r = self
                         .compile_expression(
                             value,
                             ExpressionMode::Ref,
-                            ExpressionResultMode::Single,
+                            ExpressionResultMode::Amount(1),
                         )?
                         .get_register();
                     self.push_bytecode(
@@ -2155,9 +2162,9 @@ impl Compiler {
                             value,
                             ExpressionMode::Copy,
                             if is_last_field {
-                                ExpressionResultMode::Multiple
+                                ExpressionResultMode::Multres
                             } else {
-                                ExpressionResultMode::Single
+                                ExpressionResultMode::Amount(1)
                             },
                         )?,
                         ExpressionResult::Multiple { .. }

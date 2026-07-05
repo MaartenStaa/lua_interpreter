@@ -290,14 +290,14 @@ pub(crate) fn load(state: &mut LuaState) -> crate::Result<usize> {
                         load_from_closure = true;
                         let r = state.extend_stack(callable.method.clone(), []);
                         state
-                            .run_closure(closure, r, 0)?
+                            .run_closure(closure, r, 0, 2)?
                             .unwrap_completed()
                             .into_iter()
                             .next()
                     }
                     Method::NativeFunction(name, f) => {
                         let r = state.extend_stack(callable.method.clone(), []);
-                        state.run_native_function(name, *f, r, 0)?;
+                        state.run_native_function(name, *f, r, 0, 2)?;
                         // NOTE: native functions MUST return at least one value
                         Some(state.get(r as usize))
                     }
@@ -422,7 +422,9 @@ pub(crate) fn pairs(state: &mut LuaState) -> crate::Result<usize> {
             Method::Closure(closure) => {
                 // TODO: Is this ok
                 let args_r = state.extend_stack(LuaValue::NIL, [t.clone()]);
-                let mut result = state.run_closure(&closure, args_r, 1)?.unwrap_completed();
+                let mut result = state
+                    .run_closure(&closure, args_r, 1, 4)?
+                    .unwrap_completed();
                 result.resize(3, LuaValue::NIL);
 
                 for (i, v) in result.into_iter().enumerate() {
@@ -430,7 +432,7 @@ pub(crate) fn pairs(state: &mut LuaState) -> crate::Result<usize> {
                 }
             }
             Method::NativeFunction(name, f) => {
-                let num_results = state.run_native_function(name, f, 0, 1)?;
+                let num_results = state.run_native_function(name, f, 0, 1, 4)?;
                 if num_results < 3 {
                     (num_results..3).for_each(|i| state.set(i, LuaValue::NIL));
                 }
@@ -472,7 +474,7 @@ pub(crate) fn pcall(state: &mut LuaState) -> crate::Result<usize> {
             // TODO: Is this okay?
             let args_r = state.extend_stack(LuaValue::NIL, args);
             state
-                .run_closure(&closure, args_r, num_args)
+                .run_closure(&closure, args_r, num_args, 0)
                 .map(ExecutionResult::unwrap_completed)
                 .map(ResultKind::Vector)
         }
@@ -483,7 +485,7 @@ pub(crate) fn pcall(state: &mut LuaState) -> crate::Result<usize> {
                 (1, state.num_args() - 1)
             };
             state
-                .run_native_function(name, f, args_r, num_args)
+                .run_native_function(name, f, args_r, num_args, 0)
                 .map(|num_values| ResultKind::Register {
                     r: args_r,
                     num_values,
@@ -941,7 +943,7 @@ pub(crate) fn xpcall(state: &mut LuaState) -> crate::Result<usize> {
             let num_args = args.len();
             let args_r = state.extend_stack(closure.clone(), args);
             state
-                .run_closure(&closure, args_r, num_args)
+                .run_closure(&closure, args_r, num_args, 0)
                 .map(ExecutionResult::unwrap_completed)
                 .map(ResultKind::Vector)
         }
@@ -957,7 +959,7 @@ pub(crate) fn xpcall(state: &mut LuaState) -> crate::Result<usize> {
             };
 
             state
-                .run_native_function(name, f, args_r, num_args)
+                .run_native_function(name, f, args_r, num_args, 0)
                 .map(|num_values| ResultKind::Register {
                     r: args_r,
                     num_values,
@@ -977,7 +979,7 @@ pub(crate) fn xpcall(state: &mut LuaState) -> crate::Result<usize> {
                             [LuaValue::from_string(e.to_string().into_bytes())],
                         );
                         state
-                            .run_closure(closure, args_r, 1)
+                            .run_closure(closure, args_r, 1, 0)
                             .map(ExecutionResult::unwrap_completed)
                             .map(ResultKind::Vector)
                     }
@@ -987,7 +989,7 @@ pub(crate) fn xpcall(state: &mut LuaState) -> crate::Result<usize> {
                             [LuaValue::from_string(e.to_string().into_bytes())],
                         );
                         state
-                            .run_native_function(name, *f, args_r, 1)
+                            .run_native_function(name, *f, args_r, 1, 0)
                             .map(|num_values| ResultKind::Register {
                                 r: args_r,
                                 num_values,

@@ -31,7 +31,8 @@ pub(crate) struct CallFrame {
     pub(crate) num_args: usize,
     pub(crate) varargs: Vec<LuaValue>,
     pub(crate) takes_varargs: bool,
-    pub(crate) allow_multi_return_values: bool,
+    /// 0 = multres, otherwise expect `num_return_values - 1` values.
+    pub(crate) num_return_values: u8,
     pub(crate) to_close: Vec<u8>,
     pub(crate) max_registers: u8,
 }
@@ -69,7 +70,7 @@ impl CallFrame {
             num_args: 0,
             varargs: vec![],
             takes_varargs: false,
-            allow_multi_return_values: true,
+            num_return_values: 0,
             to_close: vec![],
             max_registers: 0,
         }
@@ -79,8 +80,10 @@ impl CallFrame {
 #[derive(Debug, Copy, Clone)]
 pub(crate) struct PoppedCallFrame {
     pub(crate) kind: CallFrameKind,
+    pub(crate) frame_pointer: usize,
     pub(crate) border_frame: bool,
     pub(crate) return_addr: usize,
     pub(crate) return_value_register: u8,
-    pub(crate) allow_multi_return_values: bool,
+    /// 0 = multres, otherwise expect `num_return_values - 1` values.
+    pub(crate) num_return_values: u8,
 }

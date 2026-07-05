@@ -191,7 +191,7 @@ impl LuaState {
         upvalues: Option<HashMap<usize, Arc<RwLock<UpValue>>>>,
         num_args: usize,
         takes_varargs: bool,
-        allow_multi_return_values: bool,
+        num_return_values: u8,
     ) -> crate::Result {
         if self.call_stack_index >= MAX_STACK_SIZE {
             return Err(lua_error!("stack overflow"));
@@ -203,8 +203,7 @@ impl LuaState {
         self.call_stack[self.call_stack_index].frame_pointer = frame_pointer;
         self.call_stack[self.call_stack_index].return_addr = return_addr;
         self.call_stack[self.call_stack_index].return_value_register = return_value_register;
-        self.call_stack[self.call_stack_index].allow_multi_return_values =
-            allow_multi_return_values;
+        self.call_stack[self.call_stack_index].num_return_values = num_return_values;
         self.call_stack[self.call_stack_index].num_args = num_args;
         self.call_stack[self.call_stack_index].takes_varargs = takes_varargs;
         match self.call_stack[self.call_stack_index].upvalues.as_mut() {
@@ -276,10 +275,11 @@ impl LuaState {
         let frame = &mut self.call_stack[self.call_stack_index];
         let popped_frame = PoppedCallFrame {
             kind: frame.kind,
+            frame_pointer: frame.frame_pointer,
             border_frame: frame.border_frame,
             return_addr: frame.return_addr,
             return_value_register: frame.return_value_register,
-            allow_multi_return_values: frame.allow_multi_return_values,
+            num_return_values: frame.num_return_values,
         };
 
         debug_assert!(
@@ -407,6 +407,7 @@ impl LuaState {
         value: &LuaClosure,
         args_r: u8,
         num_args: usize,
+        num_return_values: u8,
     ) -> crate::Result<ExecutionResult> {
         let original_call_stack_index = self.call_stack_index;
         let frame_pointer = self.call_frame().frame_pointer + args_r as usize;
@@ -432,7 +433,7 @@ impl LuaState {
             Some(value.upvalues.clone()),
             num_params.into(),
             has_varargs,
-            false,
+            num_return_values,
         )?;
 
         // TODO: Move this responsibility out of here so we can get it set up right before even
@@ -469,6 +470,7 @@ impl LuaState {
         return_value_register: u8,
         closure: &LuaClosure,
         num_passed_params: impl Into<usize>,
+        num_return_values: u8,
     ) -> crate::Result {
         let (max_registers, num_params, has_varargs) = self
             .with_chunk(closure.chunk, |chunk| {
@@ -490,7 +492,7 @@ impl LuaState {
             Some(closure.upvalues.clone()),
             num_params.into(),
             has_varargs,
-            false,
+            num_return_values,
         )?;
 
         self.align_closure_args(num_params, num_passed_params, has_varargs);
@@ -521,11 +523,13 @@ impl LuaState {
         }
     }
 
-    fn clear_registers_from(&mut self, from_register: impl Into<usize>) {
+    fn clear_registers_from(&mut self, from_register: impl Into<usize>, to: Option<usize>) {
         let frame_pointer = self.call_frame().frame_pointer;
         // Manual .fill(LuaValue::NIL), so we don't end up going through `Clone`
         // which does unnecessary work here.
-        for i in (frame_pointer + from_register.into())..self.stack.len() {
+        for i in (frame_pointer + from_register.into())
+            ..to.unwrap_or(self.stack.len()).min(self.stack.len())
+        {
             self.stack[i] = LuaValue::NIL;
         }
     }
@@ -556,6 +560,7 @@ impl LuaState {
         function: NativeLuaFunction,
         args_r: u8,
         num_args: usize,
+        num_return_values: u8,
     ) -> crate::Result<usize> {
         let original_call_stack_index = self.call_stack_index;
         let parent_frame_pointer = if self.call_stack_index > 0 {
@@ -586,7 +591,7 @@ impl LuaState {
             None,
             num_args,
             false, // Not applicable
-            false, // Not applicable
+            num_return_values,
         )?;
 
         let result = function(self)

@@ -163,7 +163,7 @@ pub(crate) enum Bytecode {
     /// or all of them.
     LoadVararg {
         dest_register: u8,
-        single_value: bool,
+        result_mode: ExpressionResultMode,
     },
     /// Mark a register as having a <close> attribute.
     ToClose {
@@ -341,8 +341,14 @@ macro_rules! bytes {
 impl Bytecode {
     fn expression_result_mode_to_byte(mode: ExpressionResultMode) -> u8 {
         match mode {
-            ExpressionResultMode::Single => 1,
-            ExpressionResultMode::Multiple => 0,
+            ExpressionResultMode::Amount(n) => {
+                debug_assert!(
+                    n < u8::MAX as usize,
+                    "ExpressionResultMode::Amount must be < 255"
+                );
+                (n + 1) as u8
+            }
+            ExpressionResultMode::Multres => 0,
         }
     }
 
@@ -546,9 +552,13 @@ impl Bytecode {
             }
             Self::LoadVararg {
                 dest_register,
-                single_value,
+                result_mode,
             } => {
-                bytes!(LoadVararg, dest_register, single_value as u8)
+                bytes!(
+                    LoadVararg,
+                    dest_register,
+                    Self::expression_result_mode_to_byte(result_mode)
+                )
             }
             Self::ToClose { register } => {
                 bytes!(ToClose, register)

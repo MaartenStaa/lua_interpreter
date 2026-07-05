@@ -413,7 +413,13 @@ fn read(state: &mut LuaState) -> crate::Result<usize> {
     args.extend(state.args());
     let f = native_function!(file_read);
     let args_r = state.extend_stack(f, args);
-    state.run_native_function("file_read", file_read, args_r, state.num_args() + 1)
+    state.run_native_function(
+        "file_read",
+        file_read,
+        args_r,
+        state.num_args() + 1,
+        state.call_frame().num_return_values,
+    )
 }
 
 fn r#type(state: &mut LuaState) -> crate::Result<usize> {
@@ -442,5 +448,11 @@ fn write(state: &mut LuaState) -> crate::Result<usize> {
     args.extend(state.args());
     let f = native_function!(file_write);
     let args_r = state.extend_stack(f, args);
-    state.run_native_function("file:write", file_write, args_r, state.num_args() + 1)
+    state.run_native_function(
+        "file:write",
+        file_write,
+        args_r,
+        state.num_args() + 1,
+        state.call_frame().num_return_values,
+    )
 }

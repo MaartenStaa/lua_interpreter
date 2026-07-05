@@ -37,9 +37,7 @@ impl LuaState {
                     .try_into()
                     .map_err(|_| lua_error!("__close metamethod must be a callable value"))?;
 
-                let error = error
-                    .map(|e| e.message.clone().into_bytes().into())
-                    .unwrap_or(LuaValue::NIL);
+                let error = error.map_or(LuaValue::NIL, |e| e.message.clone().into_bytes().into());
                 let args = if close.is_metamethod {
                     vec![__close, value, error]
                 } else {
@@ -49,12 +47,12 @@ impl LuaState {
                     Method::Closure(closure) => {
                         let num_args = args.len();
                         let args_r = self.extend_stack(LuaValue::NIL, args);
-                        self.run_closure(&closure, args_r, num_args)?;
+                        self.run_closure(&closure, args_r, num_args, 1)?;
                     }
                     nf @ Method::NativeFunction(name, func) => {
                         let num_args = args.len();
                         let args_r = self.extend_stack(nf, args);
-                        self.run_native_function(name, func, args_r, num_args)?;
+                        self.run_native_function(name, func, args_r, num_args, 1)?;
                     }
                 }
             } else {
@@ -66,7 +64,7 @@ impl LuaState {
 
         // Remove closed registers from to_close list
         self.call_frame_mut().to_close.truncate(stopped_at);
-        self.clear_registers_from(from_register);
+        self.clear_registers_from(from_register, None);
 
         Ok(())
     }

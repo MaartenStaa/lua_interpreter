@@ -143,7 +143,7 @@ impl LuaState {
                 }),
                 0,
                 true,
-                true,
+                0,
             )
             .expect("cannot stack overflow");
 
@@ -172,7 +172,7 @@ impl LuaState {
                         Some(closure.upvalues),
                         num_params.into(),
                         has_varargs,
-                        true,
+                        0,
                     )
                     .expect("cannot stack overflow");
             }
@@ -190,7 +190,7 @@ impl LuaState {
                         None,
                         0,
                         false,
-                        true,
+                        0,
                     )
                     .expect("cannot stack overflow");
             }
