@@ -14,10 +14,20 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph},
+    widgets::{Block, Borders, Paragraph},
 };
 
 use super::protocol::{Breakpoint, DebugCommand, DebugEvent, StateSnapshot};
+
+fn pad_line(line: Line<'_>, width: usize) -> Line<'_> {
+    let content_width: usize = line.spans.iter().map(|s| s.content.len()).sum();
+    if content_width >= width {
+        return line;
+    }
+    let mut spans = line.spans;
+    spans.push(Span::raw(" ".repeat(width - content_width)));
+    Line::from(spans)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PanelMode {
@@ -133,7 +143,6 @@ impl App {
     }
 
     fn render(&self, frame: &mut Frame) {
-        frame.render_widget(Clear, frame.area());
 
         let chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -162,10 +171,14 @@ impl App {
             let block = Block::default()
                 .borders(Borders::ALL)
                 .title(" Waiting... ");
-            frame.render_widget(
-                Paragraph::new("Waiting for VM to pause...").block(block),
-                area,
-            );
+            let inner = block.inner(area);
+            let w = inner.width as usize;
+            let h = inner.height as usize;
+            let mut lines: Vec<Line> = vec![pad_line(Line::from("Waiting for VM to pause..."), w)];
+            while lines.len() < h {
+                lines.push(pad_line(Line::from(""), w));
+            }
+            frame.render_widget(Paragraph::new(lines).block(block), area);
             return;
         };
 

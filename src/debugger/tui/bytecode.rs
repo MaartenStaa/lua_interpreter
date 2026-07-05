@@ -8,6 +8,8 @@ use ratatui::{
 
 use crate::debugger::protocol::StateSnapshot;
 
+use super::pad_line;
+
 pub(super) fn render_bytecode_panel(
     frame: &mut Frame,
     area: Rect,
@@ -28,8 +30,9 @@ pub(super) fn render_bytecode_panel(
 
     let inner = block.inner(area);
     let visible_height = inner.height as usize;
+    let panel_width = inner.width as usize;
 
-    let lines: Vec<Line> = snapshot
+    let mut lines: Vec<Line> = snapshot
         .bytecode_lines
         .iter()
         .skip(scroll)
@@ -44,7 +47,7 @@ pub(super) fn render_bytecode_panel(
 
             let marker = if is_current { ">" } else { " " };
 
-            Line::from(vec![
+            let line = Line::from(vec![
                 Span::styled(
                     marker,
                     Style::default()
@@ -78,9 +81,14 @@ pub(super) fn render_bytecode_panel(
                     bl.operands.clone(),
                     Style::default().fg(Color::Yellow).bg(bg),
                 ),
-            ])
+            ]);
+            pad_line(line, panel_width)
         })
         .collect();
+
+    while lines.len() < visible_height {
+        lines.push(pad_line(Line::from(""), panel_width));
+    }
 
     frame.render_widget(Paragraph::new(lines).block(block), area);
 }

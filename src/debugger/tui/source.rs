@@ -8,6 +8,8 @@ use ratatui::{
 
 use crate::debugger::protocol::{HighlightKind, HighlightSpan, StateSnapshot};
 
+use super::pad_line;
+
 pub(super) fn render_source_panel(
     frame: &mut Frame,
     area: Rect,
@@ -30,6 +32,7 @@ pub(super) fn render_source_panel(
 
     let inner = block.inner(area);
     let visible_height = inner.height as usize;
+    let panel_width = inner.width as usize;
 
     let source_lines: Vec<&str> = snapshot.source.lines().collect();
     let line_offsets = compute_line_offsets(&snapshot.source);
@@ -54,7 +57,7 @@ pub(super) fn render_source_panel(
         })
         .collect();
 
-    let lines: Vec<Line> = source_lines
+    let mut lines: Vec<Line> = source_lines
         .iter()
         .enumerate()
         .skip(scroll)
@@ -107,9 +110,13 @@ pub(super) fn render_source_panel(
                 expr_col_end,
             ));
 
-            Line::from(spans)
+            pad_line(Line::from(spans), panel_width)
         })
         .collect();
+
+    while lines.len() < visible_height {
+        lines.push(pad_line(Line::from(""), panel_width));
+    }
 
     frame.render_widget(Paragraph::new(lines).block(block), area);
 }

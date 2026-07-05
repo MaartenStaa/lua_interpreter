@@ -8,6 +8,8 @@ use ratatui::{
 
 use crate::debugger::protocol::{CallFrameKindSnapshot, StateSnapshot};
 
+use super::pad_line;
+
 pub(super) fn render_state_panel(
     frame: &mut Frame,
     area: Rect,
@@ -26,17 +28,21 @@ pub(super) fn render_state_panel(
         .border_style(border_style)
         .title(" State ");
 
+    let inner = block.inner(area);
+    let visible_height = inner.height as usize;
+    let panel_width = inner.width as usize;
+
     let Some(snapshot) = snapshot else {
-        frame.render_widget(block, area);
+        let mut lines = Vec::new();
+        while lines.len() < visible_height {
+            lines.push(pad_line(Line::from(""), panel_width));
+        }
+        frame.render_widget(Paragraph::new(lines).block(block), area);
         return;
     };
 
-    let inner = block.inner(area);
-    let visible_height = inner.height as usize;
-
     let mut lines: Vec<Line> = Vec::new();
 
-    // Call stack section
     lines.push(Line::from(Span::styled(
         "Call Stack",
         Style::default()
@@ -68,7 +74,6 @@ pub(super) fn render_state_panel(
 
     lines.push(Line::from(""));
 
-    // Locals section
     if let Some(top_frame) = snapshot.call_stack.last()
         && !top_frame.locals.is_empty()
     {
@@ -96,7 +101,6 @@ pub(super) fn render_state_panel(
         lines.push(Line::from(""));
     }
 
-    // Register stack section
     lines.push(Line::from(Span::styled(
         "Registers",
         Style::default()
@@ -111,11 +115,16 @@ pub(super) fn render_state_panel(
         ]));
     }
 
-    let display_lines: Vec<Line> = lines
+    let mut display_lines: Vec<Line> = lines
         .into_iter()
         .skip(scroll)
         .take(visible_height)
+        .map(|l| pad_line(l, panel_width))
         .collect();
+
+    while display_lines.len() < visible_height {
+        display_lines.push(pad_line(Line::from(""), panel_width));
+    }
 
     frame.render_widget(Paragraph::new(display_lines).block(block), area);
 }
