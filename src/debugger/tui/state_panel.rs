@@ -3,12 +3,10 @@ use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::{Block, Borders},
 };
 
 use crate::debugger::protocol::{CallFrameKindSnapshot, StateSnapshot};
-
-use super::pad_line;
 
 pub(super) fn render_state_panel(
     frame: &mut Frame,
@@ -28,16 +26,8 @@ pub(super) fn render_state_panel(
         .border_style(border_style)
         .title(" State ");
 
-    let inner = block.inner(area);
-    let visible_height = inner.height as usize;
-    let panel_width = inner.width as usize;
-
     let Some(snapshot) = snapshot else {
-        let mut lines = Vec::new();
-        while lines.len() < visible_height {
-            lines.push(pad_line(Line::from(""), panel_width));
-        }
-        frame.render_widget(Paragraph::new(lines).block(block), area);
+        super::render_lines(frame, area, block, &[]);
         return;
     };
 
@@ -115,16 +105,7 @@ pub(super) fn render_state_panel(
         ]));
     }
 
-    let mut display_lines: Vec<Line> = lines
-        .into_iter()
-        .skip(scroll)
-        .take(visible_height)
-        .map(|l| pad_line(l, panel_width))
-        .collect();
+    let display_lines: Vec<Line> = lines.into_iter().skip(scroll).collect();
 
-    while display_lines.len() < visible_height {
-        display_lines.push(pad_line(Line::from(""), panel_width));
-    }
-
-    frame.render_widget(Paragraph::new(display_lines).block(block), area);
+    super::render_lines(frame, area, block, &display_lines);
 }

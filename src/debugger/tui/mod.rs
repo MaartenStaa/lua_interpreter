@@ -14,19 +14,37 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::{Block, Borders, Widget},
 };
 
 use super::protocol::{Breakpoint, DebugCommand, DebugEvent, StateSnapshot};
 
-fn pad_line(line: Line<'_>, width: usize) -> Line<'_> {
-    let content_width: usize = line.spans.iter().map(|s| s.content.len()).sum();
-    if content_width >= width {
-        return line;
+fn render_lines(frame: &mut Frame, area: Rect, block: Block<'_>, lines: &[Line<'_>]) {
+    let inner = block.inner(area);
+    let buf = frame.buffer_mut();
+    block.render(area, buf);
+
+    for row in 0..inner.height {
+        let y = inner.y + row;
+        let mut x = inner.x;
+
+        if let Some(line) = lines.get(row as usize) {
+            for span in &line.spans {
+                for ch in span.content.chars() {
+                    if x >= inner.right() {
+                        break;
+                    }
+                    buf[(x, y)].set_char(ch).set_style(span.style);
+                    x += 1;
+                }
+            }
+        }
+
+        while x < inner.right() {
+            buf[(x, y)].set_char(' ').set_style(Style::reset());
+            x += 1;
+        }
     }
-    let mut spans = line.spans;
-    spans.push(Span::raw(" ".repeat(width - content_width)));
-    Line::from(spans)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -171,14 +189,7 @@ impl App {
             let block = Block::default()
                 .borders(Borders::ALL)
                 .title(" Waiting... ");
-            let inner = block.inner(area);
-            let w = inner.width as usize;
-            let h = inner.height as usize;
-            let mut lines: Vec<Line> = vec![pad_line(Line::from("Waiting for VM to pause..."), w)];
-            while lines.len() < h {
-                lines.push(pad_line(Line::from(""), w));
-            }
-            frame.render_widget(Paragraph::new(lines).block(block), area);
+            render_lines(frame, area, block, &[Line::from("Waiting for VM to pause...")]);
             return;
         };
 
@@ -242,24 +253,53 @@ impl App {
             RunState::Finished | RunState::Error => "q:quit",
         };
 
-        let status_line = Line::from(vec![
+        let line = Line::from(vec![
             Span::styled(
                 format!(" {}", self.status),
-                Style::default().fg(Color::White),
+                Style::default().bg(Color::DarkGray).fg(Color::White),
             ),
-            Span::raw("  "),
-            Span::styled(format!("[{mode_label}]"), Style::default().fg(Color::Cyan)),
-            Span::raw("  "),
-            Span::styled(keys, Style::default().fg(Color::White)),
-            Span::raw("  "),
-            Span::styled("?:help", Style::default().fg(Color::White)),
+            Span::styled(
+                "  ",
+                Style::default().bg(Color::DarkGray),
+            ),
+            Span::styled(
+                format!("[{mode_label}]"),
+                Style::default().bg(Color::DarkGray).fg(Color::Cyan),
+            ),
+            Span::styled(
+                "  ",
+                Style::default().bg(Color::DarkGray),
+            ),
+            Span::styled(
+                keys,
+                Style::default().bg(Color::DarkGray).fg(Color::White),
+            ),
+            Span::styled(
+                "  ",
+                Style::default().bg(Color::DarkGray),
+            ),
+            Span::styled(
+                "?:help",
+                Style::default().bg(Color::DarkGray).fg(Color::White),
+            ),
         ]);
 
-        frame.render_widget(
-            Paragraph::new(status_line)
-                .style(Style::default().bg(Color::DarkGray).fg(Color::White)),
-            area,
-        );
+        let buf = frame.buffer_mut();
+        let mut x = area.x;
+        for span in &line.spans {
+            for ch in span.content.chars() {
+                if x >= area.right() {
+                    break;
+                }
+                buf[(x, area.y)].set_char(ch).set_style(span.style);
+                x += 1;
+            }
+        }
+        let fill_style = Style::default().bg(Color::DarkGray);
+        while x < area.right() {
+            buf[(x, area.y)].set_char(' ').set_style(fill_style);
+            x += 1;
+        }
     }
 }
 
