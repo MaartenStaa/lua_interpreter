@@ -1,18 +1,29 @@
 use std::collections::HashMap;
 
-use crate::chunk::Chunk;
-use super::protocol::SourceMap;
+use crate::{instruction::Instruction, token::Span};
 
-pub(crate) fn build_source_map(chunk: &Chunk) -> SourceMap {
-    let line_starts = compute_line_starts(&chunk.source);
+#[derive(Debug, Clone)]
+pub(crate) struct SourceMap {
+    pub line_to_ips: HashMap<usize, Vec<usize>>,
+    pub ip_to_line: HashMap<usize, usize>,
+}
+
+pub(crate) fn build_source_map(
+    instructions: &[Instruction],
+    instruction_spans: &HashMap<usize, Span>,
+    source: &[u8],
+) -> SourceMap {
+    let line_starts = compute_line_starts(source);
 
     let mut line_to_ips: HashMap<usize, Vec<usize>> = HashMap::new();
     let mut ip_to_line: HashMap<usize, usize> = HashMap::new();
 
-    for (&ip, span) in &chunk.instruction_spans {
-        let line = offset_to_line(&line_starts, span.start);
-        line_to_ips.entry(line).or_default().push(ip);
-        ip_to_line.insert(ip, line);
+    for ip in 0..instructions.len() {
+        if let Some(span) = instruction_spans.get(&ip) {
+            let line = offset_to_line(&line_starts, span.start);
+            line_to_ips.entry(line).or_default().push(ip);
+            ip_to_line.insert(ip, line);
+        }
     }
 
     for ips in line_to_ips.values_mut() {

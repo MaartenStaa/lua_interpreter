@@ -1,12 +1,11 @@
-mod bytecode;
+mod bytecode_fmt;
+mod code_panel;
 mod help;
-mod source;
 mod state_panel;
 
 use std::{
-    collections::HashSet,
     sync::mpsc::{Receiver, Sender},
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
@@ -15,87 +14,12 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Widget},
+    widgets::{Block, Paragraph, Widget},
 };
 
-use super::protocol::{Breakpoint, BytecodeLine, DebugCommand, DebugEvent, StateSnapshot};
+use super::protocol::{DebugCommand, DebugEvent, VmState};
 
-pub(crate) enum AlignedRow<'a> {
-    SourceWithBytecode {
-        source_line_idx: usize,
-        bytecode: &'a BytecodeLine,
-    },
-    SourceOnly {
-        source_line_idx: usize,
-    },
-    BytecodeOnly {
-        bytecode: &'a BytecodeLine,
-    },
-}
-
-fn build_aligned_rows(snapshot: &StateSnapshot) -> Vec<AlignedRow<'_>> {
-    let source_line_count = snapshot.source.lines().count();
-    let mut rows = Vec::new();
-    let mut bc_index = 0;
-    for line_num in 1..=source_line_count {
-        let line_idx = line_num - 1;
-
-        // Try to find all matching bytecode lines for this source line.
-        // If there are multiple, the first one will be paired with the source line,
-        // and the rest will be added as BytecodeOnly rows.
-        let mut i = 0;
-        let any_bc = loop {
-            let bc = snapshot.bytecode_lines.get(bc_index);
-            if let Some(bc) = bc {
-                match bc.source_line {
-                    Some(line) if line == line_num && i == 0 => {
-                        rows.push(AlignedRow::SourceWithBytecode {
-                            source_line_idx: line_idx,
-                            bytecode: bc,
-                        });
-                        bc_index += 1;
-                    }
-                    Some(line) if line == line_num => {
-                        rows.push(AlignedRow::BytecodeOnly { bytecode: bc });
-                        bc_index += 1;
-                    }
-                    Some(_) => {
-                        break i > 0;
-                    }
-                    None => {
-                        // Bytecode that doesn't have a span attached, we'll add it here now.
-                        rows.push(if i == 0 {
-                            AlignedRow::SourceWithBytecode {
-                                source_line_idx: line_idx,
-                                bytecode: bc,
-                            }
-                        } else {
-                            AlignedRow::BytecodeOnly { bytecode: bc }
-                        });
-                        bc_index += 1;
-                    }
-                }
-            } else {
-                break i > 0;
-            }
-
-            i += 1;
-        };
-
-        // If no bytecode lines were found for this source line, add a SourceOnly row.
-        // (This would probably only happen if the source line is a comment or whitespace,
-        // but we want to show it anyway.)
-        if !any_bc {
-            rows.push(AlignedRow::SourceOnly {
-                source_line_idx: line_idx,
-            });
-        }
-    }
-
-    rows
-}
-
-fn render_lines(frame: &mut Frame, area: Rect, block: Block<'_>, lines: &[Line<'_>]) {
+pub(crate) fn render_lines(frame: &mut Frame, area: Rect, block: Block<'_>, lines: &[Line<'_>]) {
     let inner = block.inner(area);
     let buf = frame.buffer_mut();
     block.render(area, buf);
@@ -104,36 +28,10 @@ fn render_lines(frame: &mut Frame, area: Rect, block: Block<'_>, lines: &[Line<'
     frame.render_widget(paragraph, inner);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PanelMode {
-    Source,
-    Bytecode,
-    Split,
-    Aligned,
-}
-
-impl PanelMode {
-    fn cycle(self) -> Self {
-        match self {
-            Self::Source => Self::Bytecode,
-            Self::Bytecode => Self::Split,
-            Self::Split => Self::Aligned,
-            Self::Aligned => Self::Source,
-        }
-    }
-
-    fn is_single(self) -> bool {
-        matches!(self, Self::Source | Self::Bytecode)
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::Source => "Source",
-            Self::Bytecode => "Bytecode",
-            Self::Split => "Source | Bytecode",
-            Self::Aligned => "Aligned",
-        }
-    }
+pub(crate) enum KeyResult {
+    Consumed,
+    Command(DebugCommand),
+    Ignored,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -143,164 +41,56 @@ enum RunState {
     Error,
 }
 
-const HIGHLIGHT_DURATION: Duration = Duration::from_millis(600);
-
-pub(crate) struct ChangeTracker {
-    changed_locals: HashSet<String>,
-    changed_registers: HashSet<usize>,
-    changed_at: Instant,
-}
-
-impl ChangeTracker {
-    fn new() -> Self {
-        Self {
-            changed_locals: HashSet::new(),
-            changed_registers: HashSet::new(),
-            changed_at: Instant::now(),
-        }
-    }
-
-    fn intensity(&self) -> f32 {
-        let elapsed = self.changed_at.elapsed();
-        if elapsed >= HIGHLIGHT_DURATION {
-            return 0.0;
-        }
-        1.0 - (elapsed.as_secs_f32() / HIGHLIGHT_DURATION.as_secs_f32())
-    }
-
-    fn is_local_changed(&self, name: &str) -> bool {
-        self.intensity() > 0.0 && self.changed_locals.contains(name)
-    }
-
-    fn is_register_changed(&self, index: usize) -> bool {
-        self.intensity() > 0.0 && self.changed_registers.contains(&index)
-    }
-}
-
-pub(crate) struct App {
-    snapshot: Option<StateSnapshot>,
-    panel_mode: PanelMode,
-    active_panel: u8,
-    left_scroll: usize,
-    right_scroll: usize,
-    focus_lines: Vec<usize>,
+struct App {
+    vm_state: Option<VmState>,
+    code_panel: code_panel::CodePanel,
+    state_panels: state_panel::StatePanels,
+    active_panel: usize,
     status: String,
     show_help: bool,
     quit: bool,
     run_state: RunState,
-    changes: ChangeTracker,
 }
+
+const PANEL_CODE: usize = 0;
+const PANEL_CALL_STACK: usize = 1;
+const PANEL_LOCALS: usize = 2;
+const PANEL_REGISTERS: usize = 3;
+const NUM_PANELS: usize = 4;
 
 impl App {
     fn new() -> Self {
         Self {
-            snapshot: None,
-            panel_mode: PanelMode::Source,
-            active_panel: 0,
-            left_scroll: 0,
-            right_scroll: 0,
-            focus_lines: vec![0; 5],
+            vm_state: None,
+            code_panel: code_panel::CodePanel::new(),
+            state_panels: state_panel::StatePanels::new(),
+            active_panel: PANEL_CODE,
             status: "Waiting for VM...".to_string(),
             show_help: false,
             quit: false,
             run_state: RunState::Running,
-            changes: ChangeTracker::new(),
         }
     }
 
-    fn update_snapshot(&mut self, snapshot: StateSnapshot) {
-        self.diff_state(&snapshot);
-        if let Some(current_line) = Self::current_source_line(&snapshot) {
-            self.left_scroll = current_line.saturating_sub(5);
-        }
+    fn update_state(&mut self, state: VmState) {
+        self.code_panel.update(&state);
+        self.state_panels.update(&state);
 
-        match self.panel_mode {
-            PanelMode::Bytecode | PanelMode::Aligned => {
-                self.left_scroll = snapshot.current_ip.saturating_sub(5);
-            }
-            PanelMode::Split | PanelMode::Source => {}
-        }
-
-        let filename = snapshot.filename.as_deref().unwrap_or("<unknown>");
-        let line_info = Self::current_source_line(&snapshot)
+        let chunk = &state.chunks[state.current_chunk as usize];
+        let filename = chunk.filename.as_deref().unwrap_or("<unknown>");
+        let line_info = self
+            .code_panel
+            .current_source_line()
             .map(|l| format!(":{l}"))
             .unwrap_or_default();
         self.status = format!(
             "Paused at {filename}{line_info} (chunk={}, ip={})",
-            snapshot.current_chunk, snapshot.current_ip
+            state.current_chunk, state.current_ip
         );
-        self.snapshot = Some(snapshot);
+        self.vm_state = Some(state);
     }
 
-    fn current_source_line(snapshot: &StateSnapshot) -> Option<usize> {
-        snapshot
-            .source_map
-            .ip_to_line
-            .get(&snapshot.current_ip)
-            .copied()
-    }
-
-    fn diff_state(&mut self, new_snapshot: &StateSnapshot) {
-        let mut changed_locals = HashSet::new();
-        let mut changed_registers = HashSet::new();
-
-        if let Some(old) = &self.snapshot {
-            let old_locals = old.call_stack.last().map(|f| &f.locals);
-            let new_locals = new_snapshot.call_stack.last().map(|f| &f.locals);
-
-            if let (Some(old_locals), Some(new_locals)) = (old_locals, new_locals) {
-                for new_local in new_locals {
-                    let old_val = old_locals
-                        .iter()
-                        .find(|l| l.name == new_local.name)
-                        .map(|l| &l.value);
-                    if old_val != Some(&new_local.value) {
-                        changed_locals.insert(new_local.name.clone());
-                    }
-                }
-            } else if new_locals.is_some()
-                && let Some(new_locals) = new_locals
-            {
-                for l in new_locals {
-                    changed_locals.insert(l.name.clone());
-                }
-            }
-
-            for (i, new_val) in new_snapshot.frame_stack.iter().enumerate() {
-                let old_val = old.frame_stack.get(i);
-                if old_val != Some(new_val) {
-                    changed_registers.insert(i);
-                }
-            }
-        }
-
-        if !changed_locals.is_empty() || !changed_registers.is_empty() {
-            self.changes = ChangeTracker {
-                changed_locals,
-                changed_registers,
-                changed_at: Instant::now(),
-            };
-        }
-    }
-
-    fn active_scroll_mut(&mut self) -> &mut usize {
-        match self.active_panel {
-            0 => &mut self.left_scroll,
-            _ => &mut self.right_scroll,
-        }
-    }
-
-    fn scroll_down(&mut self, amount: usize) {
-        let scroll = self.active_scroll_mut();
-        *scroll = scroll.saturating_add(amount);
-    }
-
-    fn scroll_up(&mut self, amount: usize) {
-        let scroll = self.active_scroll_mut();
-        *scroll = scroll.saturating_sub(amount);
-    }
-
-    fn render(&mut self, frame: &mut Frame) {
+    fn render(&self, frame: &mut Frame) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Min(5), Constraint::Length(1)])
@@ -314,8 +104,10 @@ impl App {
             .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
             .split(main_area);
 
-        self.render_left_panel(frame, main_columns[0]);
-        self.render_right_panels(frame, main_columns[1]);
+        self.code_panel
+            .render(frame, main_columns[0], self.active_panel == PANEL_CODE);
+        self.state_panels
+            .render(frame, main_columns[1], self.active_panel);
         self.render_status_bar(frame, status_area);
 
         if self.show_help {
@@ -323,97 +115,8 @@ impl App {
         }
     }
 
-    fn render_left_panel(&self, frame: &mut Frame, area: Rect) {
-        let Some(snapshot) = &self.snapshot else {
-            let block = Block::default().borders(Borders::ALL).title(" Waiting... ");
-            render_lines(
-                frame,
-                area,
-                block,
-                &[Line::from("Waiting for VM to pause...")],
-            );
-            return;
-        };
-
-        match self.panel_mode {
-            PanelMode::Source => {
-                source::render_source_panel(
-                    frame,
-                    area,
-                    snapshot,
-                    self.left_scroll,
-                    self.active_panel == 0,
-                );
-            }
-            PanelMode::Bytecode => {
-                bytecode::render_bytecode_panel(
-                    frame,
-                    area,
-                    snapshot,
-                    self.left_scroll,
-                    self.active_panel == 0,
-                );
-            }
-            PanelMode::Split => {
-                let split = Layout::default()
-                    .direction(Direction::Horizontal)
-                    .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-                    .split(area);
-                source::render_source_panel(
-                    frame,
-                    split[0],
-                    snapshot,
-                    self.left_scroll,
-                    self.active_panel == 0,
-                );
-                bytecode::render_bytecode_panel(
-                    frame,
-                    split[1],
-                    snapshot,
-                    self.left_scroll,
-                    self.active_panel == 1,
-                );
-            }
-            PanelMode::Aligned => {
-                let split = Layout::default()
-                    .direction(Direction::Horizontal)
-                    .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-                    .split(area);
-                let rows = build_aligned_rows(snapshot);
-                source::render_aligned_source_panel(
-                    frame,
-                    split[0],
-                    snapshot,
-                    &rows,
-                    self.left_scroll,
-                    self.active_panel == 0,
-                );
-                bytecode::render_aligned_bytecode_panel(
-                    frame,
-                    split[1],
-                    snapshot,
-                    &rows,
-                    self.left_scroll,
-                    self.active_panel == 1,
-                );
-            }
-        }
-    }
-
-    fn render_right_panels(&mut self, frame: &mut Frame, area: Rect) {
-        state_panel::render_state_panel(
-            frame,
-            area,
-            self.snapshot.as_ref(),
-            self.right_scroll,
-            self.active_panel,
-            &mut self.focus_lines,
-            &self.changes,
-        );
-    }
-
     fn render_status_bar(&self, frame: &mut Frame, area: Rect) {
-        let mode_label = self.panel_mode.label();
+        let mode_label = self.code_panel.mode_label();
 
         let keys = match self.run_state {
             RunState::Running => "s:step n:next o:out c:cont q:quit",
@@ -456,6 +159,14 @@ impl App {
             x += 1;
         }
     }
+
+    fn cycle_focus(&mut self, forward: bool) {
+        if forward {
+            self.active_panel = (self.active_panel + 1) % NUM_PANELS;
+        } else {
+            self.active_panel = (self.active_panel + NUM_PANELS - 1) % NUM_PANELS;
+        }
+    }
 }
 
 pub(crate) fn run_tui(
@@ -486,8 +197,8 @@ fn run_event_loop(
     loop {
         while let Ok(evt) = evt_rx.try_recv() {
             match evt {
-                DebugEvent::Paused(snapshot) => {
-                    app.update_snapshot(*snapshot);
+                DebugEvent::Paused(state) => {
+                    app.update_state(*state);
                 }
                 DebugEvent::Completed => {
                     app.status = "Execution completed. Press q to exit.".to_string();
@@ -523,6 +234,7 @@ fn run_event_loop(
                 continue;
             }
 
+            // Global keys first
             match key {
                 KeyEvent {
                     code: KeyCode::Char('s'),
@@ -530,6 +242,7 @@ fn run_event_loop(
                     ..
                 } => {
                     let _ = cmd_tx.send(DebugCommand::Step);
+                    continue;
                 }
                 KeyEvent {
                     code: KeyCode::Char('n'),
@@ -537,6 +250,7 @@ fn run_event_loop(
                     ..
                 } => {
                     let _ = cmd_tx.send(DebugCommand::StepOver);
+                    continue;
                 }
                 KeyEvent {
                     code: KeyCode::Char('o'),
@@ -544,6 +258,7 @@ fn run_event_loop(
                     ..
                 } => {
                     let _ = cmd_tx.send(DebugCommand::StepOut);
+                    continue;
                 }
                 KeyEvent {
                     code: KeyCode::Char('c'),
@@ -551,6 +266,7 @@ fn run_event_loop(
                     ..
                 } => {
                     let _ = cmd_tx.send(DebugCommand::Continue);
+                    continue;
                 }
                 KeyEvent {
                     code: KeyCode::Char('q'),
@@ -559,121 +275,48 @@ fn run_event_loop(
                 } => {
                     let _ = cmd_tx.send(DebugCommand::Quit);
                     app.quit = true;
-                }
-                KeyEvent {
-                    code: KeyCode::Tab, ..
-                } => {
-                    app.panel_mode = app.panel_mode.cycle();
-                    if app.active_panel == 1 && app.panel_mode.is_single() {
-                        app.active_panel = 0;
-                    }
+                    continue;
                 }
                 KeyEvent {
                     code: KeyCode::Char('?'),
                     ..
                 } => {
                     app.show_help = true;
-                }
-                KeyEvent {
-                    code: KeyCode::Char('j') | KeyCode::Down,
-                    modifiers: KeyModifiers::NONE,
-                    ..
-                } => {
-                    if app.active_panel < 2 {
-                        app.scroll_down(1);
-                    } else {
-                        app.focus_lines[app.active_panel as usize] =
-                            app.focus_lines[app.active_panel as usize].saturating_add(1);
-                    }
-                }
-                KeyEvent {
-                    code: KeyCode::Char('k') | KeyCode::Up,
-                    modifiers: KeyModifiers::NONE,
-                    ..
-                } => {
-                    if app.active_panel < 2 {
-                        app.scroll_up(1);
-                    } else {
-                        app.focus_lines[app.active_panel as usize] =
-                            app.focus_lines[app.active_panel as usize].saturating_sub(1);
-                    }
+                    continue;
                 }
                 KeyEvent {
                     code: KeyCode::Char('h') | KeyCode::Left,
                     modifiers: KeyModifiers::NONE,
                     ..
                 } => {
-                    if app.active_panel >= 2 && app.panel_mode.is_single() {
-                        app.active_panel = 0;
-                    } else {
-                        app.active_panel = app.active_panel.saturating_sub(1);
-                    }
+                    app.cycle_focus(false);
+                    continue;
                 }
                 KeyEvent {
                     code: KeyCode::Char('l') | KeyCode::Right,
                     modifiers: KeyModifiers::NONE,
                     ..
                 } => {
-                    if app.active_panel == 0 && app.panel_mode.is_single() {
-                        app.active_panel = 2;
-                    } else {
-                        app.active_panel = app.active_panel.saturating_add(1).min(4);
-                    }
-                }
-                KeyEvent {
-                    code: KeyCode::Char('d'),
-                    modifiers: KeyModifiers::CONTROL,
-                    ..
-                } => {
-                    app.scroll_down(15);
-                }
-                KeyEvent {
-                    code: KeyCode::Char('u'),
-                    modifiers: KeyModifiers::CONTROL,
-                    ..
-                } => {
-                    app.scroll_up(15);
-                }
-                KeyEvent {
-                    code: KeyCode::Char('b'),
-                    modifiers: KeyModifiers::NONE,
-                    ..
-                } => {
-                    toggle_breakpoint(app, cmd_tx);
+                    app.cycle_focus(true);
+                    continue;
                 }
                 _ => {}
+            }
+
+            // Delegate to focused panel
+            let result = match app.active_panel {
+                PANEL_CODE => app.code_panel.handle_key(key),
+                PANEL_CALL_STACK => app.state_panels.call_stack.handle_key(key),
+                PANEL_LOCALS => app.state_panels.locals.handle_key(key),
+                PANEL_REGISTERS => app.state_panels.registers.handle_key(key),
+                _ => KeyResult::Ignored,
+            };
+
+            if let KeyResult::Command(cmd) = result {
+                let _ = cmd_tx.send(cmd);
             }
         }
     }
 
     Ok(())
-}
-
-fn toggle_breakpoint(app: &App, cmd_tx: &Sender<DebugCommand>) {
-    let Some(snapshot) = &app.snapshot else {
-        return;
-    };
-    let Some(filename) = &snapshot.filename else {
-        return;
-    };
-
-    let Some(current_line) = snapshot
-        .source_map
-        .ip_to_line
-        .get(&snapshot.current_ip)
-        .copied()
-    else {
-        return;
-    };
-
-    let bp = Breakpoint::SourceLine {
-        filename: filename.clone(),
-        line: current_line,
-    };
-
-    if snapshot.breakpoints.contains(&bp) {
-        let _ = cmd_tx.send(DebugCommand::RemoveBreakpoint(bp));
-    } else {
-        let _ = cmd_tx.send(DebugCommand::AddBreakpoint(bp));
-    }
 }

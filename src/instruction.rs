@@ -105,7 +105,7 @@ impl OpCode {
 ///
 /// Layout B:
 /// [opcode: u8, operand1: u8, operand2: u16]
-#[derive(Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 #[repr(transparent)]
 pub struct Instruction(u32);
 

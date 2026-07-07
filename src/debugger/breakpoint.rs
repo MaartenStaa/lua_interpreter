@@ -1,8 +1,8 @@
 use std::collections::HashSet;
 
-use crate::{chunk::Chunk, vm::ChunkIndex};
 use super::protocol::Breakpoint;
-use super::source_map::build_source_map;
+use super::source_map;
+use crate::{chunk::Chunk, vm::ChunkIndex};
 
 pub(crate) struct BreakpointSet {
     resolved: HashSet<(ChunkIndex, usize)>,
@@ -61,11 +61,15 @@ impl BreakpointSet {
                 continue;
             }
 
-            let source_map = build_source_map(chunk);
-            if let Some(ips) = source_map.line_to_ips.get(&line) {
-                if let Some(&first_ip) = ips.first() {
-                    self.resolved.insert((chunk_idx as ChunkIndex, first_ip));
-                }
+            let source_map = source_map::build_source_map(
+                &chunk.instructions,
+                &chunk.instruction_spans,
+                &chunk.source,
+            );
+            if let Some(ips) = source_map.line_to_ips.get(&line)
+                && let Some(&first_ip) = ips.first()
+            {
+                self.resolved.insert((chunk_idx as ChunkIndex, first_ip));
             }
         }
     }
