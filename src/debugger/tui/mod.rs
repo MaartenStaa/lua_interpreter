@@ -17,7 +17,82 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Widget},
 };
 
-use super::protocol::{Breakpoint, DebugCommand, DebugEvent, StateSnapshot};
+use super::protocol::{Breakpoint, BytecodeLine, DebugCommand, DebugEvent, StateSnapshot};
+
+pub(crate) enum AlignedRow<'a> {
+    SourceWithBytecode {
+        source_line_idx: usize,
+        bytecode: &'a BytecodeLine,
+    },
+    SourceOnly {
+        source_line_idx: usize,
+    },
+    BytecodeOnly {
+        bytecode: &'a BytecodeLine,
+    },
+}
+
+fn build_aligned_rows(snapshot: &StateSnapshot) -> Vec<AlignedRow<'_>> {
+    let source_line_count = snapshot.source.lines().count();
+    let mut rows = Vec::new();
+    let mut bc_index = 0;
+    for line_num in 1..=source_line_count {
+        let line_idx = line_num - 1;
+
+        // Try to find all matching bytecode lines for this source line.
+        // If there are multiple, the first one will be paired with the source line,
+        // and the rest will be added as BytecodeOnly rows.
+        let mut i = 0;
+        let any_bc = loop {
+            let bc = snapshot.bytecode_lines.get(bc_index);
+            if let Some(bc) = bc {
+                match bc.source_line {
+                    Some(line) if line == line_num && i == 0 => {
+                        rows.push(AlignedRow::SourceWithBytecode {
+                            source_line_idx: line_idx,
+                            bytecode: bc,
+                        });
+                        bc_index += 1;
+                    }
+                    Some(line) if line == line_num => {
+                        rows.push(AlignedRow::BytecodeOnly { bytecode: bc });
+                        bc_index += 1;
+                    }
+                    Some(_) => {
+                        break i > 0;
+                    }
+                    None => {
+                        // Bytecode that doesn't have a span attached, we'll add it here now.
+                        rows.push(if i == 0 {
+                            AlignedRow::SourceWithBytecode {
+                                source_line_idx: line_idx,
+                                bytecode: bc,
+                            }
+                        } else {
+                            AlignedRow::BytecodeOnly { bytecode: bc }
+                        });
+                        bc_index += 1;
+                    }
+                }
+            } else {
+                break i > 0;
+            }
+
+            i += 1;
+        };
+
+        // If no bytecode lines were found for this source line, add a SourceOnly row.
+        // (This would probably only happen if the source line is a comment or whitespace,
+        // but we want to show it anyway.)
+        if !any_bc {
+            rows.push(AlignedRow::SourceOnly {
+                source_line_idx: line_idx,
+            });
+        }
+    }
+
+    rows
+}
 
 fn render_lines(frame: &mut Frame, area: Rect, block: Block<'_>, lines: &[Line<'_>]) {
     let inner = block.inner(area);
@@ -217,14 +292,23 @@ impl App {
                     .direction(Direction::Horizontal)
                     .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
                     .split(area);
+                let rows = build_aligned_rows(snapshot);
                 source::render_aligned_source_panel(
                     frame,
                     split[0],
                     snapshot,
+                    &rows,
                     self.left_scroll,
                     self.active_panel == ActivePanel::Left,
                 );
-                bytecode::render_bytecode_panel(frame, split[1], snapshot, self.left_scroll, false);
+                bytecode::render_aligned_bytecode_panel(
+                    frame,
+                    split[1],
+                    snapshot,
+                    &rows,
+                    self.left_scroll,
+                    false,
+                );
             }
         }
     }

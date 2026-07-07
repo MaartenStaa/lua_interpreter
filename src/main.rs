@@ -14,6 +14,9 @@ use miette::{LabeledSpan, NamedSource};
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Input {
+    #[command(subcommand)]
+    command: Option<Command>,
+
     /// The Lua source file to run
     filename: Option<PathBuf>,
 
@@ -28,9 +31,6 @@ struct Input {
     /// Print the execution steps of the VM.
     #[clap(long, default_value = "false")]
     trace_vm: bool,
-
-    #[command(subcommand)]
-    command: Option<Command>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -44,6 +44,9 @@ enum Command {
     #[cfg(feature = "debugger")]
     /// Launch the interactive debugger.
     Debug {
+        /// Path to the Lua source file to debug.
+        filename: PathBuf,
+
         /// Pause on the very first instruction.
         #[clap(long, default_value = "false")]
         break_start: bool,
@@ -63,9 +66,15 @@ fn main() {
         trace_vm,
     } = Input::parse();
 
-    let Some(filename) = filename else {
-        eprintln!("error: a filename is required when not using a subcommand");
-        std::process::exit(1);
+    let filename = {
+        #[cfg(feature = "debugger")]
+        if let Some(Command::Debug { filename, .. }) = &command {
+            filename.clone()
+        } else {
+            extract_filename(filename)
+        }
+        #[cfg(not(feature = "debugger"))]
+        extract_filename(filename)
     };
 
     let Ok(filename) = filename.canonicalize() else {
@@ -93,6 +102,7 @@ fn main() {
             Command::Debug {
                 break_start,
                 breakpoint: breakpoint_args,
+                ..
             } => {
                 run_debugger(&filename, break_start, &breakpoint_args);
                 return;
@@ -142,6 +152,14 @@ fn main() {
     {
         std::process::exit(1);
     }
+}
+
+fn extract_filename(filename: Option<PathBuf>) -> PathBuf {
+    let Some(filename) = filename else {
+        eprintln!("error: a filename is required when not using a subcommand");
+        std::process::exit(1);
+    };
+    filename
 }
 
 fn run_debug_lexer(lexer: Lexer, filename: &Path, source: &[u8]) {

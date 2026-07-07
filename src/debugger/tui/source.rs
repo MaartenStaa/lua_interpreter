@@ -450,6 +450,7 @@ pub(super) fn render_aligned_source_panel(
     frame: &mut Frame,
     area: Rect,
     snapshot: &StateSnapshot,
+    rows: &[super::AlignedRow<'_>],
     scroll: usize,
     focused: bool,
 ) {
@@ -494,17 +495,24 @@ pub(super) fn render_aligned_source_panel(
 
     let gutter_style = Style::default().fg(Color::DarkGray);
 
-    let mut all_lines: Vec<Line> = Vec::with_capacity(snapshot.bytecode_lines.len());
-    let mut last_source_line: Option<usize> = None;
+    let lines: Vec<Line> = rows
+        .iter()
+        .skip(scroll)
+        .take(visible_height)
+        .map(|row| {
+            let source_line_idx = match row {
+                super::AlignedRow::SourceWithBytecode {
+                    source_line_idx, ..
+                }
+                | super::AlignedRow::SourceOnly { source_line_idx } => Some(*source_line_idx),
+                super::AlignedRow::BytecodeOnly { .. } => None,
+            };
 
-    for bl in &snapshot.bytecode_lines {
-        let source_line = bl.source_line;
-        let is_first_for_line = source_line != last_source_line && source_line.is_some();
-        last_source_line = source_line;
+            let Some(line_idx) = source_line_idx else {
+                return Line::from(Span::styled("      │", gutter_style));
+            };
 
-        if is_first_for_line {
-            let line_idx = source_line.unwrap() - 1;
-            let line_num = source_line.unwrap();
+            let line_num = line_idx + 1;
             let line_text = source_lines.get(line_idx).copied().unwrap_or("");
 
             let has_breakpoint = breakpoint_lines.contains(&line_num);
@@ -545,14 +553,11 @@ pub(super) fn render_aligned_source_panel(
                 expr_col_start,
                 expr_col_end,
             ));
-            all_lines.push(Line::from(spans));
-        } else {
-            all_lines.push(Line::from(Span::styled("     │", gutter_style)));
-        }
-    }
+            Line::from(spans)
+        })
+        .collect();
 
-    let visible: Vec<Line> = all_lines.into_iter().skip(scroll).take(visible_height).collect();
-    super::render_lines(frame, area, block, &visible);
+    super::render_lines(frame, area, block, &lines);
 }
 
 fn compute_line_offsets(source: &str) -> Vec<usize> {
