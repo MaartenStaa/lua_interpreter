@@ -8,12 +8,26 @@ use ratatui::{
 
 use crate::debugger::protocol::{CallFrameKindSnapshot, StateSnapshot};
 
+use super::ChangeTracker;
+
+fn change_color(tracker: &ChangeTracker) -> Color {
+    let t = tracker.intensity();
+    if t <= 0.0 {
+        return Color::White;
+    }
+    let r = (0xFF as f32 * (1.0 - t * 0.3)) as u8;
+    let g = (0xFF as f32 * (1.0 - t * 0.0)) as u8;
+    let b = (0xFF as f32 * (1.0 - t * 0.7)) as u8;
+    Color::Rgb(r, g, b)
+}
+
 pub(super) fn render_state_panel(
     frame: &mut Frame,
     area: Rect,
     snapshot: Option<&StateSnapshot>,
     scroll: usize,
     focused: bool,
+    changes: &ChangeTracker,
 ) {
     let border_style = if focused {
         Style::default().fg(Color::Cyan)
@@ -75,16 +89,21 @@ pub(super) fn render_state_panel(
         )));
 
         for local in &top_frame.locals {
+            let changed = changes.is_local_changed(&local.name);
+            let value_fg = if changed {
+                change_color(changes)
+            } else {
+                Color::White
+            };
+            let value_style = Style::default().fg(value_fg);
+
             lines.push(Line::from(vec![
                 Span::styled(
                     format!("  {} ", local.name),
                     Style::default().fg(Color::Yellow),
                 ),
                 Span::styled("= ", Style::default().fg(Color::DarkGray)),
-                Span::styled(
-                    format!("{}", local.value),
-                    Style::default().fg(Color::White),
-                ),
+                Span::styled(format!("{}", local.value), value_style),
             ]));
         }
 
@@ -99,9 +118,16 @@ pub(super) fn render_state_panel(
     )));
 
     for (i, val) in snapshot.frame_stack.iter().enumerate() {
+        let changed = changes.is_register_changed(i);
+        let value_fg = if changed {
+            change_color(changes)
+        } else {
+            Color::White
+        };
+
         lines.push(Line::from(vec![
             Span::styled(format!("  R{i:<3}"), Style::default().fg(Color::DarkGray)),
-            Span::styled(format!("{val}"), Style::default().fg(Color::White)),
+            Span::styled(format!("{val}"), Style::default().fg(value_fg)),
         ]));
     }
 

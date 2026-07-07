@@ -35,7 +35,7 @@ pub enum Breakpoint {
     SourceLine { filename: String, line: usize },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum DisplayValue {
     Nil,
     Boolean(bool),

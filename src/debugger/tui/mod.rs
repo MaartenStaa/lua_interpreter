@@ -4,8 +4,9 @@ mod source;
 mod state_panel;
 
 use std::{
+    collections::HashSet,
     sync::mpsc::{Receiver, Sender},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
@@ -144,6 +145,40 @@ enum RunState {
     Error,
 }
 
+const HIGHLIGHT_DURATION: Duration = Duration::from_millis(600);
+
+pub(crate) struct ChangeTracker {
+    changed_locals: HashSet<String>,
+    changed_registers: HashSet<usize>,
+    changed_at: Instant,
+}
+
+impl ChangeTracker {
+    fn new() -> Self {
+        Self {
+            changed_locals: HashSet::new(),
+            changed_registers: HashSet::new(),
+            changed_at: Instant::now(),
+        }
+    }
+
+    fn intensity(&self) -> f32 {
+        let elapsed = self.changed_at.elapsed();
+        if elapsed >= HIGHLIGHT_DURATION {
+            return 0.0;
+        }
+        1.0 - (elapsed.as_secs_f32() / HIGHLIGHT_DURATION.as_secs_f32())
+    }
+
+    fn is_local_changed(&self, name: &str) -> bool {
+        self.intensity() > 0.0 && self.changed_locals.contains(name)
+    }
+
+    fn is_register_changed(&self, index: usize) -> bool {
+        self.intensity() > 0.0 && self.changed_registers.contains(&index)
+    }
+}
+
 pub(crate) struct App {
     snapshot: Option<StateSnapshot>,
     panel_mode: PanelMode,
@@ -154,6 +189,7 @@ pub(crate) struct App {
     show_help: bool,
     quit: bool,
     run_state: RunState,
+    changes: ChangeTracker,
 }
 
 impl App {
@@ -168,10 +204,12 @@ impl App {
             show_help: false,
             quit: false,
             run_state: RunState::Running,
+            changes: ChangeTracker::new(),
         }
     }
 
     fn update_snapshot(&mut self, snapshot: StateSnapshot) {
+        self.diff_state(&snapshot);
         if let Some(current_line) = Self::current_source_line(&snapshot) {
             self.left_scroll = current_line.saturating_sub(5);
         }
@@ -200,6 +238,49 @@ impl App {
             .ip_to_line
             .get(&snapshot.current_ip)
             .copied()
+    }
+
+    fn diff_state(&mut self, new_snapshot: &StateSnapshot) {
+        let mut changed_locals = HashSet::new();
+        let mut changed_registers = HashSet::new();
+
+        if let Some(old) = &self.snapshot {
+            let old_locals = old.call_stack.last().map(|f| &f.locals);
+            let new_locals = new_snapshot.call_stack.last().map(|f| &f.locals);
+
+            if let (Some(old_locals), Some(new_locals)) = (old_locals, new_locals) {
+                for new_local in new_locals {
+                    let old_val = old_locals
+                        .iter()
+                        .find(|l| l.name == new_local.name)
+                        .map(|l| &l.value);
+                    if old_val != Some(&new_local.value) {
+                        changed_locals.insert(new_local.name.clone());
+                    }
+                }
+            } else if new_locals.is_some() {
+                if let Some(new_locals) = new_locals {
+                    for l in new_locals {
+                        changed_locals.insert(l.name.clone());
+                    }
+                }
+            }
+
+            for (i, new_val) in new_snapshot.frame_stack.iter().enumerate() {
+                let old_val = old.frame_stack.get(i);
+                if old_val != Some(new_val) {
+                    changed_registers.insert(i);
+                }
+            }
+        }
+
+        if !changed_locals.is_empty() || !changed_registers.is_empty() {
+            self.changes = ChangeTracker {
+                changed_locals,
+                changed_registers,
+                changed_at: Instant::now(),
+            };
+        }
     }
 
     fn active_scroll_mut(&mut self) -> &mut usize {
@@ -320,6 +401,7 @@ impl App {
             self.snapshot.as_ref(),
             self.right_scroll,
             self.active_panel == ActivePanel::Right,
+            &self.changes,
         );
     }
 
