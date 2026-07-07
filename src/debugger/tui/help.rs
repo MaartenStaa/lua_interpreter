@@ -57,6 +57,12 @@ pub(super) fn render_help_overlay(frame: &mut Frame) {
             key_style,
             desc_style,
         ),
+        help_line(
+            "  Enter",
+            "Expand/collapse table in locals/registers",
+            key_style,
+            desc_style,
+        ),
         help_line("  ?", "Show/hide this help", key_style, desc_style),
     ];
 

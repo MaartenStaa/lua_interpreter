@@ -12,7 +12,10 @@ use ratatui::{
     widgets::{Block, Borders},
 };
 
-use crate::debugger::protocol::{FrameKind, VmState};
+use crate::{
+    debugger::protocol::{FrameKind, VmState},
+    value::{LuaObject, LuaValue},
+};
 
 use super::KeyResult;
 
@@ -36,7 +39,7 @@ fn change_intensity(changed_at: Instant) -> f32 {
     1.0 - (elapsed.as_secs_f32() / HIGHLIGHT_DURATION.as_secs_f32())
 }
 
-// --- Scrollable list panel helper ---
+// --- Scrollable list state ---
 
 struct ListState {
     focus: usize,
@@ -51,54 +54,171 @@ impl ListState {
         }
     }
 
-    fn handle_key(&mut self, key: KeyEvent, len: usize) -> KeyResult {
-        match key {
-            KeyEvent {
-                code: KeyCode::Char('j') | KeyCode::Down,
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => {
-                if len > 0 {
-                    self.focus = (self.focus + 1).min(len - 1);
-                }
-                KeyResult::Consumed
-            }
-            KeyEvent {
-                code: KeyCode::Char('k') | KeyCode::Up,
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => {
-                self.focus = self.focus.saturating_sub(1);
-                KeyResult::Consumed
-            }
-            KeyEvent {
-                code: KeyCode::Char('d'),
-                modifiers: KeyModifiers::CONTROL,
-                ..
-            } => {
-                if len > 0 {
-                    self.focus = (self.focus + 10).min(len - 1);
-                }
-                KeyResult::Consumed
-            }
-            KeyEvent {
-                code: KeyCode::Char('u'),
-                modifiers: KeyModifiers::CONTROL,
-                ..
-            } => {
-                self.focus = self.focus.saturating_sub(10);
-                KeyResult::Consumed
-            }
-            _ => KeyResult::Ignored,
+    fn move_focus(&mut self, delta: isize, len: usize) -> bool {
+        if len == 0 {
+            return false;
         }
+        let old = self.focus;
+        if delta > 0 {
+            self.focus = (self.focus + delta as usize).min(len - 1);
+        } else {
+            self.focus = self.focus.saturating_sub((-delta) as usize);
+        }
+        self.focus != old
     }
 
     fn ensure_visible(&mut self, visible_height: usize) {
+        if visible_height == 0 {
+            return;
+        }
         if self.focus < self.scroll {
             self.scroll = self.focus;
         } else if self.focus >= self.scroll + visible_height {
             self.scroll = self.focus - visible_height + 1;
         }
+    }
+
+    fn clamp(&mut self, len: usize) {
+        if len == 0 {
+            self.focus = 0;
+        } else if self.focus >= len {
+            self.focus = len - 1;
+        }
+    }
+}
+
+// --- Tree view for expandable values ---
+
+type TreePath = Vec<String>;
+
+struct TreeRow {
+    path: TreePath,
+    depth: usize,
+    label: String,
+    display: String,
+    expandable: bool,
+    expanded: bool,
+}
+
+struct TreeView {
+    expanded: HashSet<TreePath>,
+}
+
+impl TreeView {
+    fn new() -> Self {
+        Self {
+            expanded: HashSet::new(),
+        }
+    }
+
+    fn toggle(&mut self, path: &TreePath) {
+        if self.expanded.contains(path) {
+            self.expanded.retain(|p| !p.starts_with(path));
+        } else {
+            self.expanded.insert(path.clone());
+        }
+    }
+
+    fn prune_stale(&mut self, valid_roots: &HashSet<String>) {
+        self.expanded
+            .retain(|path| path.first().is_some_and(|root| valid_roots.contains(root)));
+    }
+
+    fn flatten_value(
+        &self,
+        label: String,
+        value: &LuaValue,
+        path: TreePath,
+        depth: usize,
+        rows: &mut Vec<TreeRow>,
+    ) {
+        let expandable = is_expandable(value);
+        let expanded = expandable && self.expanded.contains(&path);
+
+        let display = if expandable {
+            format_table_summary(value)
+        } else {
+            format!("{value}")
+        };
+
+        rows.push(TreeRow {
+            path: path.clone(),
+            depth,
+            label,
+            display,
+            expandable,
+            expanded,
+        });
+
+        if expanded {
+            self.flatten_table_children(value, &path, depth + 1, rows);
+        }
+    }
+
+    fn flatten_table_children(
+        &self,
+        value: &LuaValue,
+        parent_path: &TreePath,
+        depth: usize,
+        rows: &mut Vec<TreeRow>,
+    ) {
+        if !value.is_object() {
+            return;
+        }
+        let obj_lock = unsafe { value.as_object() };
+        let Ok(obj) = obj_lock.read() else {
+            return;
+        };
+        let LuaObject::Table(table) = &*obj else {
+            return;
+        };
+
+        for (key, val) in table.iter() {
+            if val.is_nil() {
+                continue;
+            }
+            let key_str = format_key(key);
+            let mut child_path = parent_path.clone();
+            child_path.push(key_str.clone());
+
+            self.flatten_value(key_str, val, child_path, depth, rows);
+        }
+    }
+}
+
+fn is_expandable(value: &LuaValue) -> bool {
+    if !value.is_object() {
+        return false;
+    }
+    let obj_lock = unsafe { value.as_object() };
+    let Ok(obj) = obj_lock.read() else {
+        return false;
+    };
+    matches!(&*obj, LuaObject::Table(t) if !t.is_empty())
+}
+
+fn format_table_summary(value: &LuaValue) -> String {
+    if !value.is_object() {
+        return format!("{value}");
+    }
+    let obj_lock = unsafe { value.as_object() };
+    let Ok(obj) = obj_lock.read() else {
+        return format!("{value}");
+    };
+    match &*obj {
+        LuaObject::Table(table) => {
+            let count = table.iter().filter(|(_, v)| !v.is_nil()).count();
+            format!("table ({count} fields)")
+        }
+        _ => format!("{value}"),
+    }
+}
+
+fn format_key(key: &LuaValue) -> String {
+    if key.is_string() {
+        String::from_utf8_lossy(unsafe { key.as_string() }).into_owned()
+    } else {
+        format!("[{key}]")
     }
 }
 
@@ -144,13 +264,30 @@ impl CallStackPanel {
             })
             .collect();
 
-        if self.list.focus >= self.entries.len() {
-            self.list.focus = self.entries.len().saturating_sub(1);
-        }
+        self.list.clamp(self.entries.len());
     }
 
     pub(crate) fn handle_key(&mut self, key: KeyEvent) -> KeyResult {
-        self.list.handle_key(key, self.entries.len())
+        let len = self.entries.len();
+        match key {
+            KeyEvent {
+                code: KeyCode::Char('j') | KeyCode::Down,
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => {
+                self.list.move_focus(1, len);
+                KeyResult::Consumed
+            }
+            KeyEvent {
+                code: KeyCode::Char('k') | KeyCode::Up,
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => {
+                self.list.move_focus(-1, len);
+                KeyResult::Consumed
+            }
+            _ => KeyResult::Ignored,
+        }
     }
 
     pub(crate) fn render(&self, frame: &mut Frame, area: Rect, focused: bool) {
@@ -158,7 +295,10 @@ impl CallStackPanel {
         let inner = block.inner(area);
         let visible_height = inner.height as usize;
 
-        let mut list = self.list.clone_for_render();
+        let mut list = ListState {
+            focus: self.list.focus,
+            scroll: self.list.scroll,
+        };
         list.ensure_visible(visible_height);
 
         let lines: Vec<Line> = self
@@ -188,61 +328,68 @@ impl CallStackPanel {
 
 pub(crate) struct LocalsPanel {
     list: ListState,
-    entries: Vec<LocalEntry>,
+    tree: TreeView,
+    rows: Vec<TreeRow>,
     changed: HashSet<String>,
     changed_at: Option<Instant>,
-}
-
-struct LocalEntry {
-    name: String,
-    display: String,
+    prev_displays: Vec<(String, String)>,
 }
 
 impl LocalsPanel {
     fn new() -> Self {
         Self {
             list: ListState::new(),
-            entries: Vec::new(),
+            tree: TreeView::new(),
+            rows: Vec::new(),
             changed: HashSet::new(),
             changed_at: None,
+            prev_displays: Vec::new(),
         }
     }
 
     pub(crate) fn update(&mut self, state: &VmState) {
-        let old_entries = std::mem::take(&mut self.entries);
+        let mut entries: Vec<(String, LuaValue)> = Vec::new();
 
         if let Some(top_frame) = state.call_stack.last()
             && let FrameKind::Lua { chunk, ip } = &top_frame.kind
         {
             let chunk_snap = &state.chunks[*chunk as usize];
-            self.entries = chunk_snap
-                .local_vars
-                .iter()
-                .filter(|var| *ip >= var.start_ip && *ip <= var.end_ip)
-                .map(|var| {
-                    let reg = var.register as usize;
-                    let abs_idx = top_frame.frame_pointer + reg;
+            for var in &chunk_snap.local_vars {
+                if *ip >= var.start_ip && *ip <= var.end_ip {
+                    let abs_idx = top_frame.frame_pointer + var.register as usize;
                     let value = state
                         .stack
                         .get(abs_idx)
                         .cloned()
-                        .unwrap_or(crate::value::LuaValue::NIL);
-                    LocalEntry {
-                        name: var.name.clone(),
-                        display: format!("{value}"),
-                    }
-                })
-                .collect();
+                        .unwrap_or(LuaValue::NIL);
+                    entries.push((var.name.clone(), value));
+                }
+            }
         }
 
+        // Detect changes
         let mut new_changed = HashSet::new();
-        for entry in &self.entries {
-            let old_display = old_entries
+        for (name, value) in &entries {
+            let display = format!("{value}");
+            let old = self
+                .prev_displays
                 .iter()
-                .find(|e| e.name == entry.name)
-                .map(|e| &e.display);
-            if old_display != Some(&entry.display) {
-                new_changed.insert(entry.name.clone());
+                .find(|(n, _)| n == name)
+                .map(|(_, d)| d.as_str());
+            if old != Some(&display) {
+                new_changed.insert(name.clone());
+
+                // If the type changed (e.g. table -> nil), collapse expansion
+                let was_table = self
+                    .rows
+                    .iter()
+                    .any(|r| r.path == vec![name.clone()] && r.expandable);
+                let is_table = is_expandable(value);
+                if was_table && !is_table {
+                    self.tree
+                        .expanded
+                        .retain(|p| p.first() != Some(name));
+                }
             }
         }
         if !new_changed.is_empty() {
@@ -250,13 +397,76 @@ impl LocalsPanel {
             self.changed_at = Some(Instant::now());
         }
 
-        if self.list.focus >= self.entries.len() {
-            self.list.focus = self.entries.len().saturating_sub(1);
+        // Prune expansion paths for locals that no longer exist
+        let valid_roots: HashSet<String> = entries.iter().map(|(n, _)| n.clone()).collect();
+        self.tree.prune_stale(&valid_roots);
+
+        // Rebuild flattened rows
+        self.rows.clear();
+        for (name, value) in &entries {
+            self.tree
+                .flatten_value(name.clone(), value, vec![name.clone()], 0, &mut self.rows);
         }
+
+        // Store displays for next diff
+        self.prev_displays = entries
+            .iter()
+            .map(|(n, v)| (n.clone(), format!("{v}")))
+            .collect();
+
+        self.list.clamp(self.rows.len());
     }
 
     pub(crate) fn handle_key(&mut self, key: KeyEvent) -> KeyResult {
-        self.list.handle_key(key, self.entries.len())
+        let len = self.rows.len();
+        match key {
+            KeyEvent {
+                code: KeyCode::Char('j') | KeyCode::Down,
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => {
+                self.list.move_focus(1, len);
+                KeyResult::Consumed
+            }
+            KeyEvent {
+                code: KeyCode::Char('k') | KeyCode::Up,
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => {
+                self.list.move_focus(-1, len);
+                KeyResult::Consumed
+            }
+            KeyEvent {
+                code: KeyCode::Char('d'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            } => {
+                self.list.move_focus(10, len);
+                KeyResult::Consumed
+            }
+            KeyEvent {
+                code: KeyCode::Char('u'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            } => {
+                self.list.move_focus(-10, len);
+                KeyResult::Consumed
+            }
+            KeyEvent {
+                code: KeyCode::Enter,
+                ..
+            } => {
+                if let Some(row) = self.rows.get(self.list.focus)
+                    && row.expandable
+                {
+                    self.tree.toggle(&row.path);
+                    KeyResult::Consumed
+                } else {
+                    KeyResult::Ignored
+                }
+            }
+            _ => KeyResult::Ignored,
+        }
     }
 
     pub(crate) fn render(&self, frame: &mut Frame, area: Rect, focused: bool) {
@@ -264,35 +474,36 @@ impl LocalsPanel {
         let inner = block.inner(area);
         let visible_height = inner.height as usize;
 
-        let mut list = self.list.clone_for_render();
+        let mut list = ListState {
+            focus: self.list.focus,
+            scroll: self.list.scroll,
+        };
         list.ensure_visible(visible_height);
 
         let intensity = self.changed_at.map_or(0.0, change_intensity);
 
         let lines: Vec<Line> = self
-            .entries
+            .rows
             .iter()
             .enumerate()
             .skip(list.scroll)
             .take(visible_height)
-            .map(|(i, entry)| {
-                let is_changed = intensity > 0.0 && self.changed.contains(&entry.name);
+            .map(|(i, row)| {
+                let root = row.path.first().map(String::as_str).unwrap_or("");
+                let is_changed = intensity > 0.0 && self.changed.contains(root);
                 let value_fg = if is_changed {
                     change_color(intensity)
                 } else {
                     Color::White
                 };
 
-                let mut bg = None;
-                if focused && i == self.list.focus {
-                    bg = Some(Color::Rgb(0x36, 0x3a, 0x4f));
-                }
+                let bg = if focused && i == self.list.focus {
+                    Some(Color::Rgb(0x36, 0x3a, 0x4f))
+                } else {
+                    None
+                };
 
-                Line::from(vec![
-                    styled_span(format!("  {} ", entry.name), Color::Yellow, bg),
-                    styled_span("= ".to_string(), Color::DarkGray, bg),
-                    styled_span(entry.display.clone(), value_fg, bg),
-                ])
+                render_tree_row(row, value_fg, bg)
             })
             .collect();
 
@@ -304,38 +515,56 @@ impl LocalsPanel {
 
 pub(crate) struct RegistersPanel {
     list: ListState,
-    entries: Vec<String>,
+    tree: TreeView,
+    rows: Vec<TreeRow>,
     changed: HashSet<usize>,
     changed_at: Option<Instant>,
+    prev_displays: Vec<String>,
 }
 
 impl RegistersPanel {
     fn new() -> Self {
         Self {
             list: ListState::new(),
-            entries: Vec::new(),
+            tree: TreeView::new(),
+            rows: Vec::new(),
             changed: HashSet::new(),
             changed_at: None,
+            prev_displays: Vec::new(),
         }
     }
 
     pub(crate) fn update(&mut self, state: &VmState) {
-        let old_entries = std::mem::take(&mut self.entries);
+        let mut entries: Vec<(String, LuaValue)> = Vec::new();
 
         if let Some(top_frame) = state.call_stack.last() {
             let end = state
                 .stack
                 .len()
                 .min(top_frame.frame_pointer + top_frame.max_registers as usize);
-            self.entries = (top_frame.frame_pointer..end)
-                .map(|i| format!("{}", state.stack[i]))
-                .collect();
+            for (i, abs_idx) in (top_frame.frame_pointer..end).enumerate() {
+                entries.push((format!("R{i}"), state.stack[abs_idx].clone()));
+            }
         }
 
+        // Detect changes
         let mut new_changed = HashSet::new();
-        for (i, entry) in self.entries.iter().enumerate() {
-            if old_entries.get(i) != Some(entry) {
+        for (i, (_, value)) in entries.iter().enumerate() {
+            let display = format!("{value}");
+            if self.prev_displays.get(i) != Some(&display) {
                 new_changed.insert(i);
+
+                let reg_name = format!("R{i}");
+                let was_table = self
+                    .rows
+                    .iter()
+                    .any(|r| r.path == vec![reg_name.clone()] && r.expandable);
+                let is_table = is_expandable(value);
+                if was_table && !is_table {
+                    self.tree
+                        .expanded
+                        .retain(|p| p.first() != Some(&reg_name));
+                }
             }
         }
         if !new_changed.is_empty() {
@@ -343,13 +572,70 @@ impl RegistersPanel {
             self.changed_at = Some(Instant::now());
         }
 
-        if self.list.focus >= self.entries.len() {
-            self.list.focus = self.entries.len().saturating_sub(1);
+        let valid_roots: HashSet<String> = entries.iter().map(|(n, _)| n.clone()).collect();
+        self.tree.prune_stale(&valid_roots);
+
+        self.rows.clear();
+        for (name, value) in &entries {
+            self.tree
+                .flatten_value(name.clone(), value, vec![name.clone()], 0, &mut self.rows);
         }
+
+        self.prev_displays = entries.iter().map(|(_, v)| format!("{v}")).collect();
+
+        self.list.clamp(self.rows.len());
     }
 
     pub(crate) fn handle_key(&mut self, key: KeyEvent) -> KeyResult {
-        self.list.handle_key(key, self.entries.len())
+        let len = self.rows.len();
+        match key {
+            KeyEvent {
+                code: KeyCode::Char('j') | KeyCode::Down,
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => {
+                self.list.move_focus(1, len);
+                KeyResult::Consumed
+            }
+            KeyEvent {
+                code: KeyCode::Char('k') | KeyCode::Up,
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => {
+                self.list.move_focus(-1, len);
+                KeyResult::Consumed
+            }
+            KeyEvent {
+                code: KeyCode::Char('d'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            } => {
+                self.list.move_focus(10, len);
+                KeyResult::Consumed
+            }
+            KeyEvent {
+                code: KeyCode::Char('u'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            } => {
+                self.list.move_focus(-10, len);
+                KeyResult::Consumed
+            }
+            KeyEvent {
+                code: KeyCode::Enter,
+                ..
+            } => {
+                if let Some(row) = self.rows.get(self.list.focus)
+                    && row.expandable
+                {
+                    self.tree.toggle(&row.path);
+                    KeyResult::Consumed
+                } else {
+                    KeyResult::Ignored
+                }
+            }
+            _ => KeyResult::Ignored,
+        }
     }
 
     pub(crate) fn render(&self, frame: &mut Frame, area: Rect, focused: bool) {
@@ -357,34 +643,41 @@ impl RegistersPanel {
         let inner = block.inner(area);
         let visible_height = inner.height as usize;
 
-        let mut list = self.list.clone_for_render();
+        let mut list = ListState {
+            focus: self.list.focus,
+            scroll: self.list.scroll,
+        };
         list.ensure_visible(visible_height);
 
         let intensity = self.changed_at.map_or(0.0, change_intensity);
 
         let lines: Vec<Line> = self
-            .entries
+            .rows
             .iter()
             .enumerate()
             .skip(list.scroll)
             .take(visible_height)
-            .map(|(i, display)| {
-                let is_changed = intensity > 0.0 && self.changed.contains(&i);
+            .map(|(i, row)| {
+                let root_idx: usize = row
+                    .path
+                    .first()
+                    .and_then(|r| r.strip_prefix('R'))
+                    .and_then(|n| n.parse().ok())
+                    .unwrap_or(usize::MAX);
+                let is_changed = intensity > 0.0 && self.changed.contains(&root_idx);
                 let value_fg = if is_changed {
                     change_color(intensity)
                 } else {
                     Color::White
                 };
 
-                let mut bg = None;
-                if focused && i == self.list.focus {
-                    bg = Some(Color::Rgb(0x36, 0x3a, 0x4f));
-                }
+                let bg = if focused && i == self.list.focus {
+                    Some(Color::Rgb(0x36, 0x3a, 0x4f))
+                } else {
+                    None
+                };
 
-                Line::from(vec![
-                    styled_span(format!("  R{i:<3}"), Color::DarkGray, bg),
-                    styled_span(display.clone(), value_fg, bg),
-                ])
+                render_tree_row(row, value_fg, bg)
             })
             .collect();
 
@@ -434,15 +727,26 @@ impl StatePanels {
     }
 }
 
-// --- Helpers ---
+// --- Rendering helpers ---
 
-impl ListState {
-    fn clone_for_render(&self) -> ListState {
-        ListState {
-            focus: self.focus,
-            scroll: self.scroll,
+fn render_tree_row<'a>(row: &TreeRow, value_fg: Color, bg: Option<Color>) -> Line<'a> {
+    let indent = "  ".repeat(row.depth);
+    let toggle = if row.expandable {
+        if row.expanded {
+            "\u{25bc} "
+        } else {
+            "\u{25b6} "
         }
-    }
+    } else {
+        "  "
+    };
+
+    Line::from(vec![
+        styled_span(format!("  {indent}{toggle}"), Color::DarkGray, bg),
+        styled_span(format!("{} ", row.label), Color::Yellow, bg),
+        styled_span("= ".to_string(), Color::DarkGray, bg),
+        styled_span(row.display.clone(), value_fg, bg),
+    ])
 }
 
 fn panel_block(focused: bool, title: &str) -> Block<'_> {
