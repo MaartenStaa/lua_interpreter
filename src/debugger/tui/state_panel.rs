@@ -128,12 +128,12 @@ impl TreeView {
         &self,
         label: String,
         value: &LuaValue,
-        path: TreePath,
+        path: &TreePath,
         depth: usize,
         rows: &mut Vec<TreeRow>,
     ) {
         let expandable = is_expandable(value);
-        let expanded = expandable && self.expanded.contains(&path);
+        let expanded = expandable && self.expanded.contains(path);
 
         let display = if expandable {
             format_table_summary(value)
@@ -151,7 +151,7 @@ impl TreeView {
         });
 
         if expanded {
-            self.flatten_table_children(value, &path, depth + 1, rows);
+            self.flatten_table_children(value, path, depth + 1, rows);
         }
     }
 
@@ -181,7 +181,7 @@ impl TreeView {
             let mut child_path = parent_path.clone();
             child_path.push(key_str.clone());
 
-            self.flatten_value(key_str, val, child_path, depth, rows);
+            self.flatten_value(key_str, val, &child_path, depth, rows);
         }
     }
 }
@@ -354,14 +354,16 @@ impl LocalsPanel {
             && let FrameKind::Lua { chunk, ip } = &top_frame.kind
         {
             let chunk_snap = &state.chunks[*chunk as usize];
+            let nil = LuaValue::NIL;
             for var in &chunk_snap.local_vars {
                 if *ip >= var.start_ip && *ip <= var.end_ip {
                     let abs_idx = top_frame.frame_pointer + var.register as usize;
-                    let value = state
-                        .stack
-                        .get(abs_idx)
-                        .cloned()
-                        .unwrap_or(LuaValue::NIL);
+                    let value = state.stack.get(abs_idx).unwrap_or(&nil);
+                    let value = if value.is_upvalue() {
+                        unsafe { value.as_upvalue() }.read().unwrap().0.clone()
+                    } else {
+                        value.clone()
+                    };
                     entries.push((var.name.clone(), value));
                 }
             }
@@ -386,9 +388,7 @@ impl LocalsPanel {
                     .any(|r| r.path == vec![name.clone()] && r.expandable);
                 let is_table = is_expandable(value);
                 if was_table && !is_table {
-                    self.tree
-                        .expanded
-                        .retain(|p| p.first() != Some(name));
+                    self.tree.expanded.retain(|p| p.first() != Some(name));
                 }
             }
         }
@@ -405,7 +405,7 @@ impl LocalsPanel {
         self.rows.clear();
         for (name, value) in &entries {
             self.tree
-                .flatten_value(name.clone(), value, vec![name.clone()], 0, &mut self.rows);
+                .flatten_value(name.clone(), value, &vec![name.clone()], 0, &mut self.rows);
         }
 
         // Store displays for next diff
@@ -489,7 +489,7 @@ impl LocalsPanel {
             .skip(list.scroll)
             .take(visible_height)
             .map(|(i, row)| {
-                let root = row.path.first().map(String::as_str).unwrap_or("");
+                let root = row.path.first().map_or("", String::as_str);
                 let is_changed = intensity > 0.0 && self.changed.contains(root);
                 let value_fg = if is_changed {
                     change_color(intensity)
@@ -543,7 +543,13 @@ impl RegistersPanel {
                 .len()
                 .min(top_frame.frame_pointer + top_frame.max_registers as usize);
             for (i, abs_idx) in (top_frame.frame_pointer..end).enumerate() {
-                entries.push((format!("R{i}"), state.stack[abs_idx].clone()));
+                let value = &state.stack[abs_idx];
+                let value = if value.is_upvalue() {
+                    unsafe { value.as_upvalue() }.read().unwrap().0.clone()
+                } else {
+                    value.clone()
+                };
+                entries.push((format!("R{i}"), value));
             }
         }
 
@@ -561,9 +567,7 @@ impl RegistersPanel {
                     .any(|r| r.path == vec![reg_name.clone()] && r.expandable);
                 let is_table = is_expandable(value);
                 if was_table && !is_table {
-                    self.tree
-                        .expanded
-                        .retain(|p| p.first() != Some(&reg_name));
+                    self.tree.expanded.retain(|p| p.first() != Some(&reg_name));
                 }
             }
         }
@@ -578,7 +582,7 @@ impl RegistersPanel {
         self.rows.clear();
         for (name, value) in &entries {
             self.tree
-                .flatten_value(name.clone(), value, vec![name.clone()], 0, &mut self.rows);
+                .flatten_value(name.clone(), value, &vec![name.clone()], 0, &mut self.rows);
         }
 
         self.prev_displays = entries.iter().map(|(_, v)| format!("{v}")).collect();
