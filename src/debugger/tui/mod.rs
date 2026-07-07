@@ -122,6 +122,10 @@ impl PanelMode {
         }
     }
 
+    fn is_single(self) -> bool {
+        matches!(self, Self::Source | Self::Bytecode)
+    }
+
     fn label(self) -> &'static str {
         match self {
             Self::Source => "Source",
@@ -130,12 +134,6 @@ impl PanelMode {
             Self::Aligned => "Aligned",
         }
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ActivePanel {
-    Left,
-    Right,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -182,7 +180,7 @@ impl ChangeTracker {
 pub(crate) struct App {
     snapshot: Option<StateSnapshot>,
     panel_mode: PanelMode,
-    active_panel: ActivePanel,
+    active_panel: u8,
     left_scroll: usize,
     right_scroll: usize,
     status: String,
@@ -197,7 +195,7 @@ impl App {
         Self {
             snapshot: None,
             panel_mode: PanelMode::Source,
-            active_panel: ActivePanel::Left,
+            active_panel: 0,
             left_scroll: 0,
             right_scroll: 0,
             status: "Waiting for VM...".to_string(),
@@ -258,11 +256,11 @@ impl App {
                         changed_locals.insert(new_local.name.clone());
                     }
                 }
-            } else if new_locals.is_some() {
-                if let Some(new_locals) = new_locals {
-                    for l in new_locals {
-                        changed_locals.insert(l.name.clone());
-                    }
+            } else if new_locals.is_some()
+                && let Some(new_locals) = new_locals
+            {
+                for l in new_locals {
+                    changed_locals.insert(l.name.clone());
                 }
             }
 
@@ -285,8 +283,8 @@ impl App {
 
     fn active_scroll_mut(&mut self) -> &mut usize {
         match self.active_panel {
-            ActivePanel::Left => &mut self.left_scroll,
-            ActivePanel::Right => &mut self.right_scroll,
+            0 => &mut self.left_scroll,
+            _ => &mut self.right_scroll,
         }
     }
 
@@ -315,7 +313,7 @@ impl App {
             .split(main_area);
 
         self.render_left_panel(frame, main_columns[0]);
-        self.render_right_panel(frame, main_columns[1]);
+        self.render_right_panels(frame, main_columns[1]);
         self.render_status_bar(frame, status_area);
 
         if self.show_help {
@@ -342,7 +340,7 @@ impl App {
                     area,
                     snapshot,
                     self.left_scroll,
-                    self.active_panel == ActivePanel::Left,
+                    self.active_panel == 0,
                 );
             }
             PanelMode::Bytecode => {
@@ -351,7 +349,7 @@ impl App {
                     area,
                     snapshot,
                     self.left_scroll,
-                    self.active_panel == ActivePanel::Left,
+                    self.active_panel == 0,
                 );
             }
             PanelMode::Split => {
@@ -364,9 +362,15 @@ impl App {
                     split[0],
                     snapshot,
                     self.left_scroll,
-                    self.active_panel == ActivePanel::Left,
+                    self.active_panel == 0,
                 );
-                bytecode::render_bytecode_panel(frame, split[1], snapshot, self.left_scroll, false);
+                bytecode::render_bytecode_panel(
+                    frame,
+                    split[1],
+                    snapshot,
+                    self.left_scroll,
+                    self.active_panel == 1,
+                );
             }
             PanelMode::Aligned => {
                 let split = Layout::default()
@@ -380,7 +384,7 @@ impl App {
                     snapshot,
                     &rows,
                     self.left_scroll,
-                    self.active_panel == ActivePanel::Left,
+                    self.active_panel == 0,
                 );
                 bytecode::render_aligned_bytecode_panel(
                     frame,
@@ -388,19 +392,19 @@ impl App {
                     snapshot,
                     &rows,
                     self.left_scroll,
-                    false,
+                    self.active_panel == 1,
                 );
             }
         }
     }
 
-    fn render_right_panel(&self, frame: &mut Frame, area: Rect) {
+    fn render_right_panels(&self, frame: &mut Frame, area: Rect) {
         state_panel::render_state_panel(
             frame,
             area,
             self.snapshot.as_ref(),
             self.right_scroll,
-            self.active_panel == ActivePanel::Right,
+            self.active_panel,
             &self.changes,
         );
     }
@@ -557,6 +561,9 @@ fn run_event_loop(
                     code: KeyCode::Tab, ..
                 } => {
                     app.panel_mode = app.panel_mode.cycle();
+                    if app.active_panel == 1 && app.panel_mode.is_single() {
+                        app.active_panel = 0;
+                    }
                 }
                 KeyEvent {
                     code: KeyCode::Char('?'),
@@ -583,14 +590,22 @@ fn run_event_loop(
                     modifiers: KeyModifiers::NONE,
                     ..
                 } => {
-                    app.active_panel = ActivePanel::Left;
+                    if app.active_panel >= 2 && app.panel_mode.is_single() {
+                        app.active_panel = 0;
+                    } else {
+                        app.active_panel = app.active_panel.saturating_sub(1);
+                    }
                 }
                 KeyEvent {
                     code: KeyCode::Char('l') | KeyCode::Right,
                     modifiers: KeyModifiers::NONE,
                     ..
                 } => {
-                    app.active_panel = ActivePanel::Right;
+                    if app.active_panel == 0 && app.panel_mode.is_single() {
+                        app.active_panel = 2;
+                    } else {
+                        app.active_panel = app.active_panel.saturating_add(1).min(4);
+                    }
                 }
                 KeyEvent {
                     code: KeyCode::Char('d'),

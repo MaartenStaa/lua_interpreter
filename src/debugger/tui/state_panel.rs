@@ -1,7 +1,7 @@
 use ratatui::{
     Frame,
-    layout::Rect,
-    style::{Color, Modifier, Style},
+    layout::{Constraint, Layout, Rect},
+    style::{Color, Style},
     text::{Line, Span},
     widgets::{Block, Borders},
 };
@@ -25,35 +25,54 @@ pub(super) fn render_state_panel(
     frame: &mut Frame,
     area: Rect,
     snapshot: Option<&StateSnapshot>,
-    scroll: usize,
-    focused: bool,
+    _scroll: usize,
+    focused: u8,
     changes: &ChangeTracker,
 ) {
+    let rows = Layout::default()
+        .direction(ratatui::layout::Direction::Vertical)
+        .constraints([
+            Constraint::Percentage(25),
+            Constraint::Percentage(25),
+            Constraint::Percentage(50),
+        ])
+        .split(area);
+
+    let call_stack_area = rows[0];
+    let locals_area = rows[1];
+    let stack_area = rows[2];
+
+    render_call_stack_panel(frame, call_stack_area, snapshot, focused == 2);
+    render_locals_panel(frame, locals_area, snapshot, changes, focused == 3);
+    render_stack_panel(frame, stack_area, snapshot, changes, focused == 4);
+}
+
+fn panel(focused: bool, title: &str) -> Block<'_> {
     let border_style = if focused {
         Style::default().fg(Color::Cyan)
     } else {
         Style::default().fg(Color::DarkGray)
     };
 
-    let block = Block::default()
+    Block::default()
         .borders(Borders::ALL)
         .border_style(border_style)
-        .title(" State ");
+        .title(title)
+}
 
+fn render_call_stack_panel(
+    frame: &mut Frame,
+    area: Rect,
+    snapshot: Option<&StateSnapshot>,
+    focused: bool,
+) {
+    let block = panel(focused, " Call stack ");
     let Some(snapshot) = snapshot else {
         super::render_lines(frame, area, block, &[]);
         return;
     };
 
-    let mut lines: Vec<Line> = Vec::new();
-
-    lines.push(Line::from(Span::styled(
-        "Call Stack",
-        Style::default()
-            .fg(Color::Cyan)
-            .add_modifier(Modifier::BOLD),
-    )));
-
+    let mut lines = Vec::new();
     for (i, frame_snap) in snapshot.call_stack.iter().enumerate().rev() {
         let is_top = i == snapshot.call_stack.len() - 1;
         let marker = if is_top { ">" } else { " " };
@@ -76,21 +95,28 @@ pub(super) fn render_state_panel(
         lines.push(Line::from(Span::styled(label, style)));
     }
 
-    lines.push(Line::from(""));
+    super::render_lines(frame, area, block, &lines);
+}
 
-    if let Some(top_frame) = snapshot.call_stack.last()
-        && !top_frame.locals.is_empty()
-    {
-        lines.push(Line::from(Span::styled(
-            "Locals",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        )));
+fn render_locals_panel(
+    frame: &mut Frame,
+    area: Rect,
+    snapshot: Option<&StateSnapshot>,
+    changes: &ChangeTracker,
+    focused: bool,
+) {
+    let block = panel(focused, " Locals ");
+    let Some(snapshot) = snapshot else {
+        super::render_lines(frame, area, block, &[]);
+        return;
+    };
 
+    let mut lines = Vec::new();
+
+    if let Some(top_frame) = snapshot.call_stack.last() {
         for local in &top_frame.locals {
-            let changed = changes.is_local_changed(&local.name);
-            let value_fg = if changed {
+            let local_has_changed = changes.is_local_changed(&local.name);
+            let value_fg = if local_has_changed {
                 change_color(changes)
             } else {
                 Color::White
@@ -106,20 +132,29 @@ pub(super) fn render_state_panel(
                 Span::styled(format!("{}", local.value), value_style),
             ]));
         }
-
-        lines.push(Line::from(""));
     }
 
-    lines.push(Line::from(Span::styled(
-        "Registers",
-        Style::default()
-            .fg(Color::Cyan)
-            .add_modifier(Modifier::BOLD),
-    )));
+    super::render_lines(frame, area, block, &lines);
+}
+
+fn render_stack_panel(
+    frame: &mut Frame,
+    area: Rect,
+    snapshot: Option<&StateSnapshot>,
+    changes: &ChangeTracker,
+    focused: bool,
+) {
+    let block = panel(focused, " Registers ");
+    let Some(snapshot) = snapshot else {
+        super::render_lines(frame, area, block, &[]);
+        return;
+    };
+
+    let mut lines = Vec::new();
 
     for (i, val) in snapshot.frame_stack.iter().enumerate() {
-        let changed = changes.is_register_changed(i);
-        let value_fg = if changed {
+        let register_has_changed = changes.is_register_changed(i);
+        let value_fg = if register_has_changed {
             change_color(changes)
         } else {
             Color::White
@@ -131,7 +166,5 @@ pub(super) fn render_state_panel(
         ]));
     }
 
-    let display_lines: Vec<Line> = lines.into_iter().skip(scroll).collect();
-
-    super::render_lines(frame, area, block, &display_lines);
+    super::render_lines(frame, area, block, &lines);
 }
