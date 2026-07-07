@@ -1,22 +1,14 @@
 use std::collections::HashMap;
 
-use crate::vm::ChunkIndex;
+use tree_sitter::Point;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HighlightKind {
-    Keyword,
-    Literal,
-    String,
-    Comment,
-    Operator,
-    Identifier,
-}
+use crate::vm::ChunkIndex;
 
 #[derive(Debug, Clone)]
 pub struct HighlightSpan {
-    pub start: usize,
-    pub end: usize,
-    pub kind: HighlightKind,
+    pub start: Point,
+    pub end: Point,
+    pub kind: String,
 }
 
 #[derive(Debug, Clone)]
@@ -124,5 +116,5 @@ pub struct StateSnapshot {
     pub frame_stack: Vec<DisplayValue>,
     pub breakpoints: Vec<Breakpoint>,
     pub source_map: SourceMap,
-    pub highlight_spans: Vec<HighlightSpan>,
+    pub source_spans: Vec<HighlightSpan>,
 }

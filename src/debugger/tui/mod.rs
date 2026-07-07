@@ -14,7 +14,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Widget},
+    widgets::{Block, Borders, Paragraph, Widget},
 };
 
 use super::protocol::{Breakpoint, DebugCommand, DebugEvent, StateSnapshot};
@@ -24,27 +24,8 @@ fn render_lines(frame: &mut Frame, area: Rect, block: Block<'_>, lines: &[Line<'
     let buf = frame.buffer_mut();
     block.render(area, buf);
 
-    for row in 0..inner.height {
-        let y = inner.y + row;
-        let mut x = inner.x;
-
-        if let Some(line) = lines.get(row as usize) {
-            for span in &line.spans {
-                for ch in span.content.chars() {
-                    if x >= inner.right() {
-                        break;
-                    }
-                    buf[(x, y)].set_char(ch).set_style(span.style);
-                    x += 1;
-                }
-            }
-        }
-
-        while x < inner.right() {
-            buf[(x, y)].set_char(' ').set_style(Style::reset());
-            x += 1;
-        }
-    }
+    let paragraph = Paragraph::new(lines.to_vec());
+    frame.render_widget(paragraph, inner);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -161,7 +142,6 @@ impl App {
     }
 
     fn render(&self, frame: &mut Frame) {
-
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Min(5), Constraint::Length(1)])
@@ -186,10 +166,13 @@ impl App {
 
     fn render_left_panel(&self, frame: &mut Frame, area: Rect) {
         let Some(snapshot) = &self.snapshot else {
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .title(" Waiting... ");
-            render_lines(frame, area, block, &[Line::from("Waiting for VM to pause...")]);
+            let block = Block::default().borders(Borders::ALL).title(" Waiting... ");
+            render_lines(
+                frame,
+                area,
+                block,
+                &[Line::from("Waiting for VM to pause...")],
+            );
             return;
         };
 
@@ -224,13 +207,7 @@ impl App {
                     self.left_scroll,
                     self.active_panel == ActivePanel::Left,
                 );
-                bytecode::render_bytecode_panel(
-                    frame,
-                    split[1],
-                    snapshot,
-                    self.left_scroll,
-                    false,
-                );
+                bytecode::render_bytecode_panel(frame, split[1], snapshot, self.left_scroll, false);
             }
         }
     }
@@ -258,26 +235,14 @@ impl App {
                 format!(" {}", self.status),
                 Style::default().bg(Color::DarkGray).fg(Color::White),
             ),
-            Span::styled(
-                "  ",
-                Style::default().bg(Color::DarkGray),
-            ),
+            Span::styled("  ", Style::default().bg(Color::DarkGray)),
             Span::styled(
                 format!("[{mode_label}]"),
                 Style::default().bg(Color::DarkGray).fg(Color::Cyan),
             ),
-            Span::styled(
-                "  ",
-                Style::default().bg(Color::DarkGray),
-            ),
-            Span::styled(
-                keys,
-                Style::default().bg(Color::DarkGray).fg(Color::White),
-            ),
-            Span::styled(
-                "  ",
-                Style::default().bg(Color::DarkGray),
-            ),
+            Span::styled("  ", Style::default().bg(Color::DarkGray)),
+            Span::styled(keys, Style::default().bg(Color::DarkGray).fg(Color::White)),
+            Span::styled("  ", Style::default().bg(Color::DarkGray)),
             Span::styled(
                 "?:help",
                 Style::default().bg(Color::DarkGray).fg(Color::White),
