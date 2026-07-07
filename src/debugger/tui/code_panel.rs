@@ -52,10 +52,14 @@ enum SubFocus {
     Right,
 }
 
+const SCROLL_MARGIN: usize = 4;
+
 pub(crate) struct CodePanel {
     mode: PanelMode,
     sub_focus: SubFocus,
     scroll: usize,
+    focus_line: usize,
+    last_visible_height: usize,
     // Cached per-chunk data
     cached_chunk: Option<ChunkIndex>,
     source_map: SourceMap,
@@ -83,6 +87,8 @@ impl CodePanel {
             mode: PanelMode::Source,
             sub_focus: SubFocus::Left,
             scroll: 0,
+            focus_line: 0,
+            last_visible_height: 20,
             cached_chunk: None,
             source_map: SourceMap {
                 line_to_ips: HashMap::new(),
@@ -122,16 +128,51 @@ impl CodePanel {
             self.rebuild_cache(chunk, state.current_chunk);
         }
 
+        let exec_row = self.execution_row();
+        self.ensure_row_visible(exec_row);
+    }
+
+    fn execution_row(&self) -> usize {
         match self.mode {
             PanelMode::Source | PanelMode::Split => {
-                if let Some(line) = self.current_source_line() {
-                    self.scroll = line.saturating_sub(5);
-                }
+                self.current_source_line().unwrap_or(0).saturating_sub(1)
             }
-            PanelMode::Bytecode | PanelMode::Aligned => {
-                self.scroll = state.current_ip.saturating_sub(5);
+            PanelMode::Bytecode => self.current_ip,
+            PanelMode::Aligned => self.current_ip,
+        }
+    }
+
+    fn total_rows(&self) -> usize {
+        match self.mode {
+            PanelMode::Source | PanelMode::Split => self.source.lines().count(),
+            PanelMode::Bytecode => self.bytecode_lines.len(),
+            PanelMode::Aligned => {
+                let source_count = self.source.lines().count();
+                source_count + self.bytecode_lines.len()
             }
         }
+    }
+
+    fn ensure_row_visible(&mut self, row: usize) {
+        let h = self.last_visible_height;
+        if h == 0 {
+            return;
+        }
+        if row < self.scroll + SCROLL_MARGIN {
+            self.scroll = row.saturating_sub(SCROLL_MARGIN);
+        } else if row >= self.scroll + h - SCROLL_MARGIN {
+            self.scroll = row.saturating_sub(h - SCROLL_MARGIN - 1);
+        }
+    }
+
+    fn move_focus(&mut self, delta: isize) {
+        let max = self.total_rows().saturating_sub(1);
+        if delta > 0 {
+            self.focus_line = (self.focus_line + delta as usize).min(max);
+        } else {
+            self.focus_line = self.focus_line.saturating_sub((-delta) as usize);
+        }
+        self.ensure_row_visible(self.focus_line);
     }
 
     fn rebuild_cache(&mut self, chunk: &ChunkSnapshot, chunk_index: ChunkIndex) {
@@ -185,7 +226,7 @@ impl CodePanel {
                 modifiers: KeyModifiers::NONE,
                 ..
             } => {
-                self.scroll = self.scroll.saturating_add(1);
+                self.move_focus(1);
                 KeyResult::Consumed
             }
             KeyEvent {
@@ -193,7 +234,7 @@ impl CodePanel {
                 modifiers: KeyModifiers::NONE,
                 ..
             } => {
-                self.scroll = self.scroll.saturating_sub(1);
+                self.move_focus(-1);
                 KeyResult::Consumed
             }
             KeyEvent {
@@ -201,7 +242,8 @@ impl CodePanel {
                 modifiers: KeyModifiers::CONTROL,
                 ..
             } => {
-                self.scroll = self.scroll.saturating_add(15);
+                let half = (self.last_visible_height / 2).max(1);
+                self.move_focus(half as isize);
                 KeyResult::Consumed
             }
             KeyEvent {
@@ -209,7 +251,8 @@ impl CodePanel {
                 modifiers: KeyModifiers::CONTROL,
                 ..
             } => {
-                self.scroll = self.scroll.saturating_sub(15);
+                let half = (self.last_visible_height / 2).max(1);
+                self.move_focus(-(half as isize));
                 KeyResult::Consumed
             }
             KeyEvent {
@@ -221,17 +264,37 @@ impl CodePanel {
         }
     }
 
+    fn focused_source_line(&self) -> Option<usize> {
+        match self.mode {
+            PanelMode::Source | PanelMode::Split => Some(self.focus_line + 1),
+            PanelMode::Bytecode => self
+                .bytecode_lines
+                .get(self.focus_line)
+                .and_then(|bl| bl.source_line),
+            PanelMode::Aligned => {
+                let rows = self.build_aligned_rows();
+                rows.get(self.focus_line).and_then(|row| match row {
+                    AlignedRow::SourceWithBytecode {
+                        source_line_idx, ..
+                    }
+                    | AlignedRow::SourceOnly { source_line_idx } => Some(*source_line_idx + 1),
+                    AlignedRow::BytecodeOnly { bytecode } => bytecode.source_line,
+                })
+            }
+        }
+    }
+
     fn toggle_breakpoint(&self) -> KeyResult {
         let Some(filename) = &self.filename else {
             return KeyResult::Ignored;
         };
-        let Some(current_line) = self.current_source_line() else {
+        let Some(line) = self.focused_source_line() else {
             return KeyResult::Ignored;
         };
 
         let bp = Breakpoint::SourceLine {
             filename: filename.clone(),
-            line: current_line,
+            line,
         };
 
         if self.breakpoints.contains(&bp) {
@@ -241,7 +304,7 @@ impl CodePanel {
         }
     }
 
-    pub(crate) fn render(&self, frame: &mut Frame, area: Rect, focused: bool) {
+    pub(crate) fn render(&mut self, frame: &mut Frame, area: Rect, focused: bool) {
         if self.source.is_empty() {
             let block = Block::default().borders(Borders::ALL).title(" Waiting... ");
             super::render_lines(
@@ -265,42 +328,30 @@ impl CodePanel {
                     .direction(Direction::Horizontal)
                     .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
                     .split(area);
-                self.render_source(
-                    frame,
-                    split[0],
-                    focused && self.sub_focus == SubFocus::Left,
-                );
-                self.render_bytecode(
-                    frame,
-                    split[1],
-                    focused && self.sub_focus == SubFocus::Right,
-                );
+                let left_focused = focused && self.sub_focus == SubFocus::Left;
+                let right_focused = focused && self.sub_focus == SubFocus::Right;
+                self.render_source(frame, split[0], left_focused);
+                self.render_bytecode(frame, split[1], right_focused);
             }
             PanelMode::Aligned => {
                 let split = Layout::default()
                     .direction(Direction::Horizontal)
                     .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
                     .split(area);
+                let left_focused = focused && self.sub_focus == SubFocus::Left;
+                let right_focused = focused && self.sub_focus == SubFocus::Right;
+                let block_tmp = Block::default().borders(Borders::ALL);
+                self.last_visible_height = block_tmp.inner(split[0]).height as usize;
                 let rows = self.build_aligned_rows();
-                self.render_aligned_source(
-                    frame,
-                    split[0],
-                    &rows,
-                    focused && self.sub_focus == SubFocus::Left,
-                );
-                self.render_aligned_bytecode(
-                    frame,
-                    split[1],
-                    &rows,
-                    focused && self.sub_focus == SubFocus::Right,
-                );
+                self.render_aligned_source_immut(frame, split[0], &rows, left_focused);
+                self.render_aligned_bytecode(frame, split[1], &rows, right_focused);
             }
         }
     }
 
     // --- Source panel rendering ---
 
-    fn render_source(&self, frame: &mut Frame, area: Rect, focused: bool) {
+    fn render_source(&mut self, frame: &mut Frame, area: Rect, focused: bool) {
         let border_style = if focused {
             Style::default().fg(Color::Cyan)
         } else {
@@ -315,6 +366,7 @@ impl CodePanel {
 
         let inner = block.inner(area);
         let visible_height = inner.height as usize;
+        self.last_visible_height = visible_height;
 
         let source_lines: Vec<&str> = self.source.lines().collect();
         let line_offsets = compute_line_offsets(&self.source);
@@ -326,7 +378,11 @@ impl CodePanel {
             .skip(self.scroll)
             .take(visible_height)
             .map(|(line_idx, line_text)| {
-                self.build_source_line(&line_offsets, highlight_range, line_idx, line_text)
+                let mut line = self.build_source_line(&line_offsets, highlight_range, line_idx, line_text);
+                if focused && line_idx == self.focus_line {
+                    apply_focus_bg(&mut line);
+                }
+                line
             })
             .collect();
 
@@ -401,7 +457,7 @@ impl CodePanel {
 
     // --- Bytecode panel rendering ---
 
-    fn render_bytecode(&self, frame: &mut Frame, area: Rect, focused: bool) {
+    fn render_bytecode(&mut self, frame: &mut Frame, area: Rect, focused: bool) {
         let border_style = if focused {
             Style::default().fg(Color::Cyan)
         } else {
@@ -415,13 +471,21 @@ impl CodePanel {
 
         let inner = block.inner(area);
         let visible_height = inner.height as usize;
+        self.last_visible_height = visible_height;
 
         let lines: Vec<Line> = self
             .bytecode_lines
             .iter()
+            .enumerate()
             .skip(self.scroll)
             .take(visible_height)
-            .map(|bl| render_bytecode_line(bl, self.current_ip))
+            .map(|(idx, bl)| {
+                let mut line = render_bytecode_line(bl, self.current_ip);
+                if focused && idx == self.focus_line {
+                    apply_focus_bg(&mut line);
+                }
+                line
+            })
             .collect();
 
         super::render_lines(frame, area, block, &lines);
@@ -481,7 +545,7 @@ impl CodePanel {
         rows
     }
 
-    fn render_aligned_source(
+    fn render_aligned_source_immut(
         &self,
         frame: &mut Frame,
         area: Rect,
@@ -510,9 +574,10 @@ impl CodePanel {
 
         let lines: Vec<Line> = rows
             .iter()
+            .enumerate()
             .skip(self.scroll)
             .take(visible_height)
-            .map(|row| {
+            .map(|(row_idx, row)| {
                 let source_line_idx = match row {
                     AlignedRow::SourceWithBytecode {
                         source_line_idx, ..
@@ -522,11 +587,20 @@ impl CodePanel {
                 };
 
                 let Some(line_idx) = source_line_idx else {
-                    return Line::from(Span::styled("      \u{2502}", gutter_style));
+                    let mut line = Line::from(Span::styled("      \u{2502}", gutter_style));
+                    if focused && row_idx == self.focus_line {
+                        apply_focus_bg(&mut line);
+                    }
+                    return line;
                 };
 
                 let line_text = source_lines.get(line_idx).copied().unwrap_or("");
-                self.build_source_line(&line_offsets, highlight_range, line_idx, line_text)
+                let mut line =
+                    self.build_source_line(&line_offsets, highlight_range, line_idx, line_text);
+                if focused && row_idx == self.focus_line {
+                    apply_focus_bg(&mut line);
+                }
+                line
             })
             .collect();
 
@@ -556,19 +630,24 @@ impl CodePanel {
 
         let lines: Vec<Line> = rows
             .iter()
+            .enumerate()
             .skip(self.scroll)
             .take(visible_height)
-            .map(|row| {
+            .map(|(row_idx, row)| {
                 let bytecode = match row {
                     AlignedRow::SourceWithBytecode { bytecode, .. }
                     | AlignedRow::BytecodeOnly { bytecode } => Some(*bytecode),
                     AlignedRow::SourceOnly { .. } => None,
                 };
 
-                match bytecode {
+                let mut line = match bytecode {
                     Some(bl) => render_bytecode_line(bl, self.current_ip),
                     None => Line::from(""),
+                };
+                if focused && row_idx == self.focus_line {
+                    apply_focus_bg(&mut line);
                 }
+                line
             })
             .collect();
 
@@ -587,6 +666,14 @@ enum AlignedRow<'a> {
     BytecodeOnly {
         bytecode: &'a BytecodeLine,
     },
+}
+
+fn apply_focus_bg(line: &mut Line<'_>) {
+    for span in &mut line.spans {
+        if span.style.bg.is_none() {
+            span.style = span.style.bg(Color::Rgb(0x36, 0x3a, 0x4f));
+        }
+    }
 }
 
 fn render_bytecode_line(bl: &BytecodeLine, current_ip: usize) -> Line<'_> {
