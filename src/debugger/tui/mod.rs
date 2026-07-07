@@ -164,7 +164,11 @@ impl App {
         if forward {
             self.active_panel = (self.active_panel + 1) % NUM_PANELS;
         } else {
-            self.active_panel = (self.active_panel + NUM_PANELS - 1) % NUM_PANELS;
+            let prev = (self.active_panel + NUM_PANELS - 1) % NUM_PANELS;
+            self.active_panel = prev;
+            if prev == PANEL_CODE {
+                self.code_panel.focus_rightmost();
+            }
         }
     }
 }
@@ -284,22 +288,6 @@ fn run_event_loop(
                     app.show_help = true;
                     continue;
                 }
-                KeyEvent {
-                    code: KeyCode::Char('h') | KeyCode::Left,
-                    modifiers: KeyModifiers::NONE,
-                    ..
-                } => {
-                    app.cycle_focus(false);
-                    continue;
-                }
-                KeyEvent {
-                    code: KeyCode::Char('l') | KeyCode::Right,
-                    modifiers: KeyModifiers::NONE,
-                    ..
-                } => {
-                    app.cycle_focus(true);
-                    continue;
-                }
                 _ => {}
             }
 
@@ -312,8 +300,27 @@ fn run_event_loop(
                 _ => KeyResult::Ignored,
             };
 
-            if let KeyResult::Command(cmd) = result {
-                let _ = cmd_tx.send(cmd);
+            match result {
+                KeyResult::Command(cmd) => {
+                    let _ = cmd_tx.send(cmd);
+                }
+                KeyResult::Ignored => {
+                    // h/l not consumed by panel → cycle App focus
+                    match key {
+                        KeyEvent {
+                            code: KeyCode::Char('l') | KeyCode::Right,
+                            modifiers: KeyModifiers::NONE,
+                            ..
+                        } => app.cycle_focus(true),
+                        KeyEvent {
+                            code: KeyCode::Char('h') | KeyCode::Left,
+                            modifiers: KeyModifiers::NONE,
+                            ..
+                        } => app.cycle_focus(false),
+                        _ => {}
+                    }
+                }
+                KeyResult::Consumed => {}
             }
         }
     }

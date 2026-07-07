@@ -46,8 +46,15 @@ impl PanelMode {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SubFocus {
+    Left,
+    Right,
+}
+
 pub(crate) struct CodePanel {
     mode: PanelMode,
+    sub_focus: SubFocus,
     scroll: usize,
     // Cached per-chunk data
     cached_chunk: Option<ChunkIndex>,
@@ -74,6 +81,7 @@ impl CodePanel {
     pub(crate) fn new() -> Self {
         Self {
             mode: PanelMode::Source,
+            sub_focus: SubFocus::Left,
             scroll: 0,
             cached_chunk: None,
             source_map: SourceMap {
@@ -137,12 +145,39 @@ impl CodePanel {
         self.cached_chunk = Some(chunk_index);
     }
 
+    fn has_split(&self) -> bool {
+        matches!(self.mode, PanelMode::Split | PanelMode::Aligned)
+    }
+
+    pub(crate) fn focus_rightmost(&mut self) {
+        if self.has_split() {
+            self.sub_focus = SubFocus::Right;
+        }
+    }
+
     pub(crate) fn handle_key(&mut self, key: KeyEvent) -> KeyResult {
         match key {
+            KeyEvent {
+                code: KeyCode::Char('l') | KeyCode::Right,
+                modifiers: KeyModifiers::NONE,
+                ..
+            } if self.has_split() && self.sub_focus == SubFocus::Left => {
+                self.sub_focus = SubFocus::Right;
+                KeyResult::Consumed
+            }
+            KeyEvent {
+                code: KeyCode::Char('h') | KeyCode::Left,
+                modifiers: KeyModifiers::NONE,
+                ..
+            } if self.has_split() && self.sub_focus == SubFocus::Right => {
+                self.sub_focus = SubFocus::Left;
+                KeyResult::Consumed
+            }
             KeyEvent {
                 code: KeyCode::Tab, ..
             } => {
                 self.mode = self.mode.cycle();
+                self.sub_focus = SubFocus::Left;
                 KeyResult::Consumed
             }
             KeyEvent {
@@ -230,8 +265,16 @@ impl CodePanel {
                     .direction(Direction::Horizontal)
                     .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
                     .split(area);
-                self.render_source(frame, split[0], focused);
-                self.render_bytecode(frame, split[1], false);
+                self.render_source(
+                    frame,
+                    split[0],
+                    focused && self.sub_focus == SubFocus::Left,
+                );
+                self.render_bytecode(
+                    frame,
+                    split[1],
+                    focused && self.sub_focus == SubFocus::Right,
+                );
             }
             PanelMode::Aligned => {
                 let split = Layout::default()
@@ -239,8 +282,18 @@ impl CodePanel {
                     .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
                     .split(area);
                 let rows = self.build_aligned_rows();
-                self.render_aligned_source(frame, split[0], &rows, focused);
-                self.render_aligned_bytecode(frame, split[1], &rows, false);
+                self.render_aligned_source(
+                    frame,
+                    split[0],
+                    &rows,
+                    focused && self.sub_focus == SubFocus::Left,
+                );
+                self.render_aligned_bytecode(
+                    frame,
+                    split[1],
+                    &rows,
+                    focused && self.sub_focus == SubFocus::Right,
+                );
             }
         }
     }
