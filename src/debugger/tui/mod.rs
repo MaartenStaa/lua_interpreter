@@ -183,6 +183,7 @@ pub(crate) struct App {
     active_panel: u8,
     left_scroll: usize,
     right_scroll: usize,
+    focus_lines: Vec<usize>,
     status: String,
     show_help: bool,
     quit: bool,
@@ -198,6 +199,7 @@ impl App {
             active_panel: 0,
             left_scroll: 0,
             right_scroll: 0,
+            focus_lines: vec![0; 5],
             status: "Waiting for VM...".to_string(),
             show_help: false,
             quit: false,
@@ -298,7 +300,7 @@ impl App {
         *scroll = scroll.saturating_sub(amount);
     }
 
-    fn render(&self, frame: &mut Frame) {
+    fn render(&mut self, frame: &mut Frame) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Min(5), Constraint::Length(1)])
@@ -398,13 +400,14 @@ impl App {
         }
     }
 
-    fn render_right_panels(&self, frame: &mut Frame, area: Rect) {
+    fn render_right_panels(&mut self, frame: &mut Frame, area: Rect) {
         state_panel::render_state_panel(
             frame,
             area,
             self.snapshot.as_ref(),
             self.right_scroll,
             self.active_panel,
+            &mut self.focus_lines,
             &self.changes,
         );
     }
@@ -576,14 +579,24 @@ fn run_event_loop(
                     modifiers: KeyModifiers::NONE,
                     ..
                 } => {
-                    app.scroll_down(1);
+                    if app.active_panel < 2 {
+                        app.scroll_down(1);
+                    } else {
+                        app.focus_lines[app.active_panel as usize] =
+                            app.focus_lines[app.active_panel as usize].saturating_add(1);
+                    }
                 }
                 KeyEvent {
                     code: KeyCode::Char('k') | KeyCode::Up,
                     modifiers: KeyModifiers::NONE,
                     ..
                 } => {
-                    app.scroll_up(1);
+                    if app.active_panel < 2 {
+                        app.scroll_up(1);
+                    } else {
+                        app.focus_lines[app.active_panel as usize] =
+                            app.focus_lines[app.active_panel as usize].saturating_sub(1);
+                    }
                 }
                 KeyEvent {
                     code: KeyCode::Char('h') | KeyCode::Left,

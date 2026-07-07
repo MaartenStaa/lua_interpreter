@@ -26,7 +26,8 @@ pub(super) fn render_state_panel(
     area: Rect,
     snapshot: Option<&StateSnapshot>,
     _scroll: usize,
-    focused: u8,
+    focused_panel: u8,
+    focus_lines: &mut [usize],
     changes: &ChangeTracker,
 ) {
     let rows = Layout::default()
@@ -42,9 +43,29 @@ pub(super) fn render_state_panel(
     let locals_area = rows[1];
     let stack_area = rows[2];
 
-    render_call_stack_panel(frame, call_stack_area, snapshot, focused == 2);
-    render_locals_panel(frame, locals_area, snapshot, changes, focused == 3);
-    render_stack_panel(frame, stack_area, snapshot, changes, focused == 4);
+    render_call_stack_panel(
+        frame,
+        call_stack_area,
+        snapshot,
+        focused_panel == 2,
+        &mut focus_lines[2],
+    );
+    render_locals_panel(
+        frame,
+        locals_area,
+        snapshot,
+        changes,
+        focused_panel == 3,
+        &mut focus_lines[3],
+    );
+    render_stack_panel(
+        frame,
+        stack_area,
+        snapshot,
+        changes,
+        focused_panel == 4,
+        &mut focus_lines[4],
+    );
 }
 
 fn panel(focused: bool, title: &str) -> Block<'_> {
@@ -65,6 +86,7 @@ fn render_call_stack_panel(
     area: Rect,
     snapshot: Option<&StateSnapshot>,
     focused: bool,
+    focus_line: &mut usize,
 ) {
     let block = panel(focused, " Call stack ");
     let Some(snapshot) = snapshot else {
@@ -95,6 +117,8 @@ fn render_call_stack_panel(
         lines.push(Line::from(Span::styled(label, style)));
     }
 
+    apply_focus_to_lines(&mut lines, focused, focus_line);
+
     super::render_lines(frame, area, block, &lines);
 }
 
@@ -104,6 +128,7 @@ fn render_locals_panel(
     snapshot: Option<&StateSnapshot>,
     changes: &ChangeTracker,
     focused: bool,
+    focus_line: &mut usize,
 ) {
     let block = panel(focused, " Locals ");
     let Some(snapshot) = snapshot else {
@@ -134,6 +159,8 @@ fn render_locals_panel(
         }
     }
 
+    apply_focus_to_lines(&mut lines, focused, focus_line);
+
     super::render_lines(frame, area, block, &lines);
 }
 
@@ -143,6 +170,7 @@ fn render_stack_panel(
     snapshot: Option<&StateSnapshot>,
     changes: &ChangeTracker,
     focused: bool,
+    focus_line: &mut usize,
 ) {
     let block = panel(focused, " Registers ");
     let Some(snapshot) = snapshot else {
@@ -166,5 +194,23 @@ fn render_stack_panel(
         ]));
     }
 
+    apply_focus_to_lines(&mut lines, focused, focus_line);
+
     super::render_lines(frame, area, block, &lines);
+}
+
+fn apply_focus_to_lines(lines: &mut Vec<Line>, focused: bool, focus_line: &mut usize) {
+    if *focus_line >= lines.len() {
+        *focus_line = lines.len().saturating_sub(1);
+    }
+
+    if !focused {
+        return;
+    }
+
+    if let Some(line) = lines.get_mut(*focus_line) {
+        for span in &mut line.spans {
+            span.style = span.style.bg(Color::Rgb(0x36, 0x3a, 0x4f));
+        }
+    }
 }
