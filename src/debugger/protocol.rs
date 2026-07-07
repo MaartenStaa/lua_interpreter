@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use tree_sitter::Point;
 
-use crate::vm::ChunkIndex;
+use crate::{value::LuaValue, vm::ChunkIndex};
 
 #[derive(Debug, Clone)]
 pub struct HighlightSpan {
@@ -35,37 +35,11 @@ pub enum Breakpoint {
     SourceLine { filename: String, line: usize },
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum DisplayValue {
-    Nil,
-    Boolean(bool),
-    Integer(i64),
-    Float(f64),
-    String(String),
-    Object {
-        type_name: &'static str,
-        summary: String,
-    },
-}
-
-impl std::fmt::Display for DisplayValue {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Nil => write!(f, "nil"),
-            Self::Boolean(b) => write!(f, "{b}"),
-            Self::Integer(i) => write!(f, "{i}"),
-            Self::Float(v) => write!(f, "{v}"),
-            Self::String(s) => write!(f, "\"{s}\""),
-            Self::Object { type_name, summary } => write!(f, "{type_name}: {summary}"),
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct LocalVar {
     pub name: String,
     pub register: u8,
-    pub value: DisplayValue,
+    pub value: LuaValue,
 }
 
 #[derive(Debug, Clone)]
@@ -113,7 +87,7 @@ pub struct StateSnapshot {
     pub bytecode_lines: Vec<BytecodeLine>,
     pub current_span: Option<(usize, usize)>,
     pub call_stack: Vec<CallFrameSnapshot>,
-    pub frame_stack: Vec<DisplayValue>,
+    pub frame_stack: Vec<LuaValue>,
     pub breakpoints: Vec<Breakpoint>,
     pub source_map: SourceMap,
     pub source_spans: Vec<HighlightSpan>,

@@ -18,7 +18,7 @@ use super::{
     breakpoint::BreakpointSet,
     protocol::{
         Breakpoint, BytecodeLine, CallFrameKindSnapshot, CallFrameSnapshot, DebugCommand,
-        DebugEvent, DisplayValue, HighlightSpan, LocalVar, StateSnapshot,
+        DebugEvent, HighlightSpan, LocalVar, StateSnapshot,
     },
     source_map::build_source_map,
 };
@@ -286,9 +286,9 @@ impl DebuggerController {
             .map(|var| {
                 let reg = var.register as usize;
                 let value = if frame_pointer + reg < state.stack.len() {
-                    value_to_display(&state.stack[frame_pointer + reg])
+                    state.get(reg)
                 } else {
-                    DisplayValue::Nil
+                    LuaValue::NIL
                 };
                 LocalVar {
                     name: String::from_utf8_lossy(&var.name).into_owned(),
@@ -299,17 +299,13 @@ impl DebuggerController {
             .collect()
     }
 
-    fn build_frame_stack(state: &LuaState) -> Vec<DisplayValue> {
+    fn build_frame_stack(state: &LuaState) -> Vec<LuaValue> {
         if state.call_stack_index == 0 {
             return vec![];
         }
         let frame = &state.call_stack[state.call_stack_index - 1];
-        let start = frame.frame_pointer;
-        let end = (start + frame.max_registers as usize).min(state.stack.len());
-        state.stack[start..end]
-            .iter()
-            .map(value_to_display)
-            .collect()
+        let end = state.stack.len().min(frame.max_registers as usize);
+        (0..end).map(|r| state.get(r)).collect()
     }
 }
 
@@ -497,33 +493,4 @@ fn build_highlight_spans(source: &[u8]) -> Vec<HighlightSpan> {
 
     spans.sort_by_key(|s| s.start);
     spans
-}
-
-fn value_to_display(value: &LuaValue) -> DisplayValue {
-    if value.is_nil() {
-        return DisplayValue::Nil;
-    }
-    if value.is_bool() {
-        return DisplayValue::Boolean(unsafe { value.as_bool() });
-    }
-    if value.is_float() {
-        return DisplayValue::Float(unsafe { value.as_float() });
-    }
-    if value.is_integer() {
-        return DisplayValue::Integer(unsafe { value.as_integer() });
-    }
-    if value.is_string() {
-        let s = unsafe { value.as_string() };
-        return DisplayValue::String(String::from_utf8_lossy(s).into_owned());
-    }
-    if value.is_object() {
-        let type_name = value.type_name();
-        let summary = format!("{value}");
-        return DisplayValue::Object { type_name, summary };
-    }
-    if value.is_upvalue() {
-        let inner = unsafe { value.as_upvalue() }.read().unwrap();
-        return value_to_display(&inner.0);
-    }
-    DisplayValue::Nil
 }
