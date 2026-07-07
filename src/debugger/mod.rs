@@ -8,14 +8,10 @@ use std::sync::mpsc;
 
 use crate::state::LuaState;
 
-use protocol::{Breakpoint, DebugCommand, DebugEvent};
 use controller::DebuggerController;
+use protocol::{Breakpoint, DebugCommand, DebugEvent};
 
-pub fn launch_debugger(
-    mut state: LuaState,
-    breakpoints: Vec<Breakpoint>,
-    break_on_start: bool,
-) {
+pub fn launch_debugger(mut state: LuaState, breakpoints: Vec<Breakpoint>, break_on_start: bool) {
     let (cmd_tx, cmd_rx) = mpsc::channel::<DebugCommand>();
     let (evt_tx, evt_rx) = mpsc::channel::<DebugEvent>();
 
@@ -25,9 +21,7 @@ pub fn launch_debugger(
     };
     state.debugger = Some(controller);
 
-    let tui_handle = std::thread::spawn(move || {
-        tui::run_tui(cmd_tx, evt_rx)
-    });
+    let tui_handle = std::thread::spawn(move || tui::run_tui(&cmd_tx, &evt_rx));
 
     match state.run() {
         Ok(_) => {
@@ -49,6 +43,7 @@ pub fn launch_debugger(
     }
 }
 
+#[must_use]
 pub fn parse_breakpoint(s: &str) -> Option<Breakpoint> {
     if let Some(rest) = s.strip_prefix("c:") {
         let parts: Vec<&str> = rest.splitn(2, ':').collect();

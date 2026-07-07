@@ -269,8 +269,8 @@ impl App {
 }
 
 pub(crate) fn run_tui(
-    cmd_tx: Sender<DebugCommand>,
-    evt_rx: Receiver<DebugEvent>,
+    cmd_tx: &Sender<DebugCommand>,
+    evt_rx: &Receiver<DebugEvent>,
 ) -> std::io::Result<()> {
     let hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -281,7 +281,7 @@ pub(crate) fn run_tui(
     let mut terminal = ratatui::init();
     let mut app = App::new();
 
-    let result = run_event_loop(&mut terminal, &mut app, &cmd_tx, &evt_rx);
+    let result = run_event_loop(&mut terminal, &mut app, cmd_tx, evt_rx);
 
     ratatui::restore();
     result
@@ -297,7 +297,7 @@ fn run_event_loop(
         while let Ok(evt) = evt_rx.try_recv() {
             match evt {
                 DebugEvent::Paused(snapshot) => {
-                    app.update_snapshot(snapshot);
+                    app.update_snapshot(*snapshot);
                 }
                 DebugEvent::Completed => {
                     app.status = "Execution completed. Press q to exit.".to_string();

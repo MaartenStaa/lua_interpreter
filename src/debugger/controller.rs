@@ -73,14 +73,9 @@ impl DebuggerController {
         ip: usize,
     ) -> crate::Result<()> {
         let should_pause = match self.mode {
-            RunMode::Paused => true,
-            RunMode::Step => true,
-            RunMode::StepOver { target_depth } => {
-                state.call_stack_index <= target_depth
-            }
-            RunMode::StepOut { target_depth } => {
-                state.call_stack_index < target_depth
-            }
+            RunMode::Paused | RunMode::Step => true,
+            RunMode::StepOver { target_depth } => state.call_stack_index <= target_depth,
+            RunMode::StepOut { target_depth } => state.call_stack_index < target_depth,
             RunMode::Continue => self.breakpoints.is_hit(chunk_index, ip),
         };
 
@@ -89,7 +84,7 @@ impl DebuggerController {
         }
 
         let snapshot = self.build_snapshot(state, chunk_index, ip);
-        let _ = self.evt_tx.send(DebugEvent::Paused(snapshot));
+        let _ = self.evt_tx.send(DebugEvent::Paused(Box::new(snapshot)));
 
         self.wait_for_command(state)
     }
@@ -130,13 +125,13 @@ impl DebuggerController {
                     let global = state.global.read().unwrap();
                     self.breakpoints.add(bp, &global.chunks);
                     let snapshot = self.build_snapshot_with_global(state, &global);
-                    let _ = self.evt_tx.send(DebugEvent::Paused(snapshot));
+                    let _ = self.evt_tx.send(DebugEvent::Paused(Box::new(snapshot)));
                 }
                 Ok(DebugCommand::RemoveBreakpoint(bp)) => {
                     self.breakpoints.remove(&bp);
                     let global = state.global.read().unwrap();
                     let snapshot = self.build_snapshot_with_global(state, &global);
-                    let _ = self.evt_tx.send(DebugEvent::Paused(snapshot));
+                    let _ = self.evt_tx.send(DebugEvent::Paused(Box::new(snapshot)));
                 }
                 Ok(DebugCommand::Quit) => {
                     return Err(lua_error!("debugger: execution terminated by user"));

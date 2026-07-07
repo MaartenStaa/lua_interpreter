@@ -1,5 +1,3 @@
-use std::mem::size_of;
-
 use crate::{
     chunk::Chunk,
     error::RuntimeError,

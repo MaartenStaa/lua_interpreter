@@ -24,7 +24,7 @@ pub enum DebugCommand {
 
 #[derive(Debug)]
 pub enum DebugEvent {
-    Paused(StateSnapshot),
+    Paused(Box<StateSnapshot>),
     Completed,
     Error(String),
 }
