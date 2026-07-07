@@ -445,7 +445,10 @@ impl Compiler {
                                 from_register: current_register + preinit_from,
                                 to_register: current_register + preinit_to - 1,
                             },
-                            None,
+                            names
+                                .first()
+                                .map(|n| n.span)
+                                .and_then(|s| names.last().map(|n| n.span).map(|e| s.union(e))),
                         );
                     }
                 } else if num_expressions == 0 {
@@ -455,7 +458,10 @@ impl Compiler {
                             from_register: current_register,
                             to_register: current_register + num_names as u8 - 1,
                         },
-                        None,
+                        names
+                            .first()
+                            .map(|n| n.span)
+                            .and_then(|s| names.last().map(|n| n.span).map(|e| s.union(e))),
                     );
                 }
 
