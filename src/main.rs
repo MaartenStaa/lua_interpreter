@@ -17,14 +17,6 @@ struct Input {
     /// The Lua source file to run
     filename: Option<PathBuf>,
 
-    /// Debug the lexer, printing out each token. Does not parse or execute the file.
-    #[clap(long, default_value = "false")]
-    debug_lexer: bool,
-
-    /// Debug the parser, printing out the AST. Does not execute the file.
-    #[clap(long, default_value = "false")]
-    debug_parser: bool,
-
     /// Disable the optimizer, e.g. skipping constant folding.
     #[clap(long, default_value = "false")]
     disable_optimizer: bool,
@@ -43,12 +35,15 @@ struct Input {
 
 #[derive(Subcommand, Debug)]
 enum Command {
+    /// Debug the lexer, printing out each token. Does not parse or execute the file.
+    DebugLexer,
+
+    /// Debug the parser, printing out the AST. Does not execute the file.
+    DebugParser,
+
     #[cfg(feature = "debugger")]
     /// Launch the interactive debugger.
     Debug {
-        /// The Lua source file to debug
-        filename: PathBuf,
-
         /// Pause on the very first instruction.
         #[clap(long, default_value = "false")]
         break_start: bool,
@@ -60,28 +55,13 @@ enum Command {
 }
 
 fn main() {
-    let input = Input::parse();
-
-    #[cfg(feature = "debugger")]
-    if let Some(Command::Debug {
-        filename,
-        break_start,
-        breakpoint: breakpoint_args,
-    }) = input.command
-    {
-        run_debugger(filename, break_start, breakpoint_args);
-        return;
-    }
-
     let Input {
         filename,
-        debug_lexer,
-        debug_parser,
+        command,
         disable_optimizer,
         print_bytecode,
         trace_vm,
-        ..
-    } = input;
+    } = Input::parse();
 
     let Some(filename) = filename else {
         eprintln!("error: a filename is required when not using a subcommand");
@@ -97,20 +77,30 @@ fn main() {
         .file_name()
         .map_or_else(|| b"<file>".into(), |n| n.as_bytes().into());
 
-    if debug_lexer {
-        let lexer = Lexer::new(&chunk_name, &source);
+    if let Some(command) = command {
+        match command {
+            Command::DebugLexer => {
+                let lexer = Lexer::new(&chunk_name, &source);
 
-        run_debug_lexer(lexer, &filename, &source);
-        return;
+                run_debug_lexer(lexer, &filename, &source);
+                return;
+            }
+            Command::DebugParser => {
+                run_debug_parser(parser::Parser::new(&chunk_name, &source));
+                return;
+            }
+            #[cfg(feature = "debugger")]
+            Command::Debug {
+                break_start,
+                breakpoint: breakpoint_args,
+            } => {
+                run_debugger(&filename, break_start, &breakpoint_args);
+                return;
+            }
+        }
     }
 
-    let mut parser = parser::Parser::new(&chunk_name, &source);
-    if debug_parser {
-        run_debug_parser(parser);
-        return;
-    }
-
-    let ast = match parser.parse() {
+    let ast = match parser::Parser::new(&chunk_name, &source).parse() {
         Ok(ast) => ast,
         Err(e) => {
             eprintln!("{e:?}");
@@ -195,7 +185,7 @@ fn run_debug_parser(mut parser: parser::Parser) {
 }
 
 #[cfg(feature = "debugger")]
-fn run_debugger(filename: PathBuf, break_start: bool, breakpoint_args: Vec<String>) {
+fn run_debugger(filename: &Path, break_start: bool, breakpoint_args: &[String]) {
     use lua_interpreter::debugger;
 
     let Ok(filename) = filename.canonicalize() else {
