@@ -33,6 +33,7 @@ enum PanelMode {
     Source,
     Bytecode,
     Split,
+    Aligned,
 }
 
 impl PanelMode {
@@ -40,7 +41,8 @@ impl PanelMode {
         match self {
             Self::Source => Self::Bytecode,
             Self::Bytecode => Self::Split,
-            Self::Split => Self::Source,
+            Self::Split => Self::Aligned,
+            Self::Aligned => Self::Source,
         }
     }
 
@@ -49,6 +51,7 @@ impl PanelMode {
             Self::Source => "Source",
             Self::Bytecode => "Bytecode",
             Self::Split => "Source | Bytecode",
+            Self::Aligned => "Aligned",
         }
     }
 }
@@ -99,7 +102,7 @@ impl App {
         }
 
         match self.panel_mode {
-            PanelMode::Bytecode => {
+            PanelMode::Bytecode | PanelMode::Aligned => {
                 self.left_scroll = snapshot.current_ip.saturating_sub(5);
             }
             PanelMode::Split | PanelMode::Source => {}
@@ -201,6 +204,20 @@ impl App {
                     .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
                     .split(area);
                 source::render_source_panel(
+                    frame,
+                    split[0],
+                    snapshot,
+                    self.left_scroll,
+                    self.active_panel == ActivePanel::Left,
+                );
+                bytecode::render_bytecode_panel(frame, split[1], snapshot, self.left_scroll, false);
+            }
+            PanelMode::Aligned => {
+                let split = Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+                    .split(area);
+                source::render_aligned_source_panel(
                     frame,
                     split[0],
                     snapshot,

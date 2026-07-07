@@ -446,6 +446,115 @@ fn highlight_style(kind: &str) -> Style {
     style
 }
 
+pub(super) fn render_aligned_source_panel(
+    frame: &mut Frame,
+    area: Rect,
+    snapshot: &StateSnapshot,
+    scroll: usize,
+    focused: bool,
+) {
+    let border_style = if focused {
+        Style::default().fg(Color::Cyan)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+
+    let title = snapshot.filename.as_deref().unwrap_or("Source");
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(border_style)
+        .title(format!(" {title} (aligned) "));
+
+    let inner = block.inner(area);
+    let visible_height = inner.height as usize;
+
+    let source_lines: Vec<&str> = snapshot.source.lines().collect();
+    let line_offsets = compute_line_offsets(&snapshot.source);
+
+    let highlight_range = snapshot.current_span.map(|(start, end)| {
+        let start_line = offset_to_line(&line_offsets, start);
+        let start_col = start - line_offsets[start_line];
+        let end_line = offset_to_line(&line_offsets, end);
+        let end_col = end - line_offsets[end_line];
+        (start_line, start_col, end_line, end_col)
+    });
+
+    let breakpoint_lines: Vec<usize> = snapshot
+        .breakpoints
+        .iter()
+        .filter_map(|bp| {
+            if let crate::debugger::protocol::Breakpoint::SourceLine { line, .. } = bp {
+                Some(*line)
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    let gutter_style = Style::default().fg(Color::DarkGray);
+
+    let mut all_lines: Vec<Line> = Vec::with_capacity(snapshot.bytecode_lines.len());
+    let mut last_source_line: Option<usize> = None;
+
+    for bl in &snapshot.bytecode_lines {
+        let source_line = bl.source_line;
+        let is_first_for_line = source_line != last_source_line && source_line.is_some();
+        last_source_line = source_line;
+
+        if is_first_for_line {
+            let line_idx = source_line.unwrap() - 1;
+            let line_num = source_line.unwrap();
+            let line_text = source_lines.get(line_idx).copied().unwrap_or("");
+
+            let has_breakpoint = breakpoint_lines.contains(&line_num);
+            let bp_marker = if has_breakpoint { "*" } else { " " };
+            let bp_style = Style::default().fg(Color::Red);
+            let gutter = format!("{line_num:>4} │ ");
+
+            let is_in_expr_highlight =
+                highlight_range.is_some_and(|(sl, _, el, _)| line_idx >= sl && line_idx <= el);
+
+            let expr_col_start = highlight_range.and_then(|(sl, sc, _, _)| {
+                if line_idx == sl {
+                    Some(sc)
+                } else if is_in_expr_highlight {
+                    Some(0)
+                } else {
+                    None
+                }
+            });
+            let expr_col_end = highlight_range.and_then(|(_, _, el, ec)| {
+                if line_idx == el {
+                    Some(ec.min(line_text.len()))
+                } else if is_in_expr_highlight {
+                    Some(line_text.len())
+                } else {
+                    None
+                }
+            });
+
+            let mut spans = vec![
+                Span::styled(bp_marker, bp_style),
+                Span::styled(gutter, gutter_style),
+            ];
+            spans.extend(highlight_line(
+                line_text,
+                line_idx,
+                &snapshot.source_spans,
+                expr_col_start,
+                expr_col_end,
+            ));
+            all_lines.push(Line::from(spans));
+        } else {
+            all_lines.push(Line::from(Span::styled("     │", gutter_style)));
+        }
+    }
+
+    let visible: Vec<Line> = all_lines.into_iter().skip(scroll).take(visible_height).collect();
+    super::render_lines(frame, area, block, &visible);
+}
+
 fn compute_line_offsets(source: &str) -> Vec<usize> {
     let mut offsets = vec![0];
     for (i, ch) in source.char_indices() {

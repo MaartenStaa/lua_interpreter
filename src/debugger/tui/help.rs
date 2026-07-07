@@ -47,7 +47,7 @@ pub(super) fn render_help_overlay(frame: &mut Frame) {
         Line::from(""),
         help_line(
             "  Tab",
-            "Cycle: Source / Bytecode / Split",
+            "Cycle: Source / Bytecode / Split / Aligned",
             key_style,
             desc_style,
         ),
