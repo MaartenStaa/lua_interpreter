@@ -41,6 +41,7 @@ fn change_intensity(changed_at: Instant) -> f32 {
 
 // --- Scrollable list state ---
 
+#[derive(Debug)]
 struct ListState {
     focus: usize,
     scroll: usize,
@@ -91,6 +92,7 @@ impl ListState {
 
 type TreePath = Vec<String>;
 
+#[derive(Debug, Clone)]
 struct TreeRow {
     path: TreePath,
     depth: usize,
@@ -100,6 +102,7 @@ struct TreeRow {
     expanded: bool,
 }
 
+#[derive(Debug)]
 struct TreeView {
     expanded: HashSet<TreePath>,
 }
@@ -326,10 +329,12 @@ impl CallStackPanel {
 
 // --- Locals Panel ---
 
+#[derive(Debug)]
 pub(crate) struct LocalsPanel {
     list: ListState,
     tree: TreeView,
     rows: Vec<TreeRow>,
+    entries: Vec<(String, LuaValue)>,
     changed: HashSet<String>,
     changed_at: Option<Instant>,
     prev_displays: Vec<(String, String)>,
@@ -341,10 +346,20 @@ impl LocalsPanel {
             list: ListState::new(),
             tree: TreeView::new(),
             rows: Vec::new(),
+            entries: Vec::new(),
             changed: HashSet::new(),
             changed_at: None,
             prev_displays: Vec::new(),
         }
+    }
+
+    fn rebuild_rows(&mut self) {
+        self.rows.clear();
+        for (name, value) in &self.entries {
+            self.tree
+                .flatten_value(name.clone(), value, &vec![name.clone()], 0, &mut self.rows);
+        }
+        self.list.clamp(self.rows.len());
     }
 
     pub(crate) fn update(&mut self, state: &VmState) {
@@ -401,20 +416,14 @@ impl LocalsPanel {
         let valid_roots: HashSet<String> = entries.iter().map(|(n, _)| n.clone()).collect();
         self.tree.prune_stale(&valid_roots);
 
-        // Rebuild flattened rows
-        self.rows.clear();
-        for (name, value) in &entries {
-            self.tree
-                .flatten_value(name.clone(), value, &vec![name.clone()], 0, &mut self.rows);
-        }
-
         // Store displays for next diff
         self.prev_displays = entries
             .iter()
             .map(|(n, v)| (n.clone(), format!("{v}")))
             .collect();
 
-        self.list.clamp(self.rows.len());
+        self.entries = entries;
+        self.rebuild_rows();
     }
 
     pub(crate) fn handle_key(&mut self, key: KeyEvent) -> KeyResult {
@@ -459,7 +468,9 @@ impl LocalsPanel {
                 if let Some(row) = self.rows.get(self.list.focus)
                     && row.expandable
                 {
-                    self.tree.toggle(&row.path);
+                    let path = row.path.clone();
+                    self.tree.toggle(&path);
+                    self.rebuild_rows();
                     KeyResult::Consumed
                 } else {
                     KeyResult::Ignored
@@ -488,7 +499,7 @@ impl LocalsPanel {
             .enumerate()
             .skip(list.scroll)
             .take(visible_height)
-            .map(|(i, row)| {
+            .flat_map(|(i, row)| {
                 let root = row.path.first().map_or("", String::as_str);
                 let is_changed = intensity > 0.0 && self.changed.contains(root);
                 let value_fg = if is_changed {
@@ -517,6 +528,7 @@ pub(crate) struct RegistersPanel {
     list: ListState,
     tree: TreeView,
     rows: Vec<TreeRow>,
+    entries: Vec<(String, LuaValue)>,
     changed: HashSet<usize>,
     changed_at: Option<Instant>,
     prev_displays: Vec<String>,
@@ -528,10 +540,20 @@ impl RegistersPanel {
             list: ListState::new(),
             tree: TreeView::new(),
             rows: Vec::new(),
+            entries: Vec::new(),
             changed: HashSet::new(),
             changed_at: None,
             prev_displays: Vec::new(),
         }
+    }
+
+    fn rebuild_rows(&mut self) {
+        self.rows.clear();
+        for (name, value) in &self.entries {
+            self.tree
+                .flatten_value(name.clone(), value, &vec![name.clone()], 0, &mut self.rows);
+        }
+        self.list.clamp(self.rows.len());
     }
 
     pub(crate) fn update(&mut self, state: &VmState) {
@@ -579,15 +601,10 @@ impl RegistersPanel {
         let valid_roots: HashSet<String> = entries.iter().map(|(n, _)| n.clone()).collect();
         self.tree.prune_stale(&valid_roots);
 
-        self.rows.clear();
-        for (name, value) in &entries {
-            self.tree
-                .flatten_value(name.clone(), value, &vec![name.clone()], 0, &mut self.rows);
-        }
-
         self.prev_displays = entries.iter().map(|(_, v)| format!("{v}")).collect();
 
-        self.list.clamp(self.rows.len());
+        self.entries = entries;
+        self.rebuild_rows();
     }
 
     pub(crate) fn handle_key(&mut self, key: KeyEvent) -> KeyResult {
@@ -632,7 +649,9 @@ impl RegistersPanel {
                 if let Some(row) = self.rows.get(self.list.focus)
                     && row.expandable
                 {
-                    self.tree.toggle(&row.path);
+                    let path = row.path.clone();
+                    self.tree.toggle(&path);
+                    self.rebuild_rows();
                     KeyResult::Consumed
                 } else {
                     KeyResult::Ignored
@@ -661,7 +680,7 @@ impl RegistersPanel {
             .enumerate()
             .skip(list.scroll)
             .take(visible_height)
-            .map(|(i, row)| {
+            .flat_map(|(i, row)| {
                 let root_idx: usize = row
                     .path
                     .first()
@@ -733,7 +752,7 @@ impl StatePanels {
 
 // --- Rendering helpers ---
 
-fn render_tree_row<'a>(row: &TreeRow, value_fg: Color, bg: Option<Color>) -> Line<'a> {
+fn render_tree_row<'a>(row: &TreeRow, value_fg: Color, bg: Option<Color>) -> Vec<Line<'a>> {
     let indent = "  ".repeat(row.depth);
     let toggle = if row.expandable {
         if row.expanded {
@@ -745,12 +764,25 @@ fn render_tree_row<'a>(row: &TreeRow, value_fg: Color, bg: Option<Color>) -> Lin
         "  "
     };
 
-    Line::from(vec![
+    let result = vec![Line::from(vec![
         styled_span(format!("  {indent}{toggle}"), Color::DarkGray, bg),
         styled_span(format!("{} ", row.label), Color::Yellow, bg),
         styled_span("= ".to_string(), Color::DarkGray, bg),
         styled_span(row.display.clone(), value_fg, bg),
-    ])
+    ])];
+
+    // if let Some(value) = &row.value {
+    //     let debug_text = format!("{:#?}", value);
+    //     for l in debug_text.lines() {
+    //         result.push(Line::from(styled_span(
+    //             format!("  {indent}  {l}"),
+    //             Color::DarkGray,
+    //             bg,
+    //         )));
+    //     }
+    // }
+
+    result
 }
 
 fn panel_block(focused: bool, title: &str) -> Block<'_> {
