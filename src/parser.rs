@@ -73,6 +73,7 @@ impl<'name, 'source> Parser<'name, 'source> {
 
         let return_statement = match self.lexer.peek()? {
             Some(token) if token.kind == TokenKind::Return => {
+                let return_span = token.span;
                 self.lexer.next();
                 let mut return_statement = Vec::new();
                 while let Some(expression) = self
@@ -96,14 +97,17 @@ impl<'name, 'source> Parser<'name, 'source> {
                     _ => {}
                 }
 
-                Some(return_statement)
+                Some(ReturnStatement {
+                    return_span,
+                    values: return_statement,
+                })
             }
             _ => None,
         };
 
         let end = return_statement
             .as_ref()
-            .and_then(|r| r.last().map(|e| e.span.end))
+            .and_then(|r| r.values.last().map(|e| e.span.end))
             .or_else(|| statements.last().map(|s| s.span.end))
             .unwrap_or(start);
 
@@ -111,6 +115,7 @@ impl<'name, 'source> Parser<'name, 'source> {
             node: Block {
                 statements,
                 return_statement,
+                end_span: None,
             },
             span: Span::new(start, end),
         })
@@ -148,7 +153,7 @@ impl<'name, 'source> Parser<'name, 'source> {
                     let name_span = name.span;
                     Ok(Some(TokenTree::new(
                         Statement::Goto(name),
-                        Span::new(span.start, name_span.end),
+                        span.union(name_span),
                     )))
                 }
                 Some(Token {
@@ -160,10 +165,9 @@ impl<'name, 'source> Parser<'name, 'source> {
                     let name = self.parse_name().wrap_err("in label")?;
                     let double_colon_token =
                         self.lexer.expect(|k| k == &TokenKind::DoubleColon, "::")?;
-                    let end = double_colon_token.span.end;
                     Ok(Some(TokenTree::new(
                         Statement::Label(name),
-                        Span::new(span.start, end),
+                        span.union(double_colon_token.span),
                     )))
                 }
                 Some(Token {
@@ -180,22 +184,24 @@ impl<'name, 'source> Parser<'name, 'source> {
                     kind: TokenKind::Do,
                     span,
                 }) => {
-                    let Span { start, end: do_end } = *span;
+                    let span = *span;
+                    let Span { end: do_end, .. } = span;
                     self.lexer.next();
-                    let block = self
+                    let mut block = self
                         .parse_block(do_end, inside_vararg_function)
                         .wrap_err("in do statement")?;
                     let end_token = self.lexer.expect(|k| k == &TokenKind::End, "end")?;
+                    block.node.end_span = Some(end_token.span);
                     Ok(Some(TokenTree::new(
                         Statement::Block(block),
-                        Span::new(start, end_token.span.end),
+                        span.union(end_token.span),
                     )))
                 }
                 Some(Token {
                     kind: TokenKind::While,
                     span,
                 }) => {
-                    let Span { start, .. } = *span;
+                    let span = *span;
                     self.lexer.next();
                     let condition = self
                         .expect_expression(inside_vararg_function)
@@ -207,17 +213,17 @@ impl<'name, 'source> Parser<'name, 'source> {
                     let end_token = self.lexer.expect(|k| k == &TokenKind::End, "end")?;
                     Ok(Some(TokenTree::new(
                         Statement::While { condition, block },
-                        Span::new(start, end_token.span.end),
+                        span.union(end_token.span),
                     )))
                 }
                 Some(Token {
                     kind: TokenKind::Repeat,
                     span,
                 }) => {
+                    let span = *span;
                     let Span {
-                        start,
-                        end: repeat_end,
-                    } = *span;
+                        end: repeat_end, ..
+                    } = span;
                     self.lexer.next();
                     let block = self
                         .parse_block(repeat_end, inside_vararg_function)
@@ -226,17 +232,17 @@ impl<'name, 'source> Parser<'name, 'source> {
                     let condition = self
                         .expect_expression(inside_vararg_function)
                         .wrap_err("in repeat statement")?;
-                    let end = condition.span.end;
+                    let condition_span = condition.span;
                     Ok(Some(TokenTree::new(
                         Statement::Repeat { block, condition },
-                        Span::new(start, end),
+                        span.union(condition_span),
                     )))
                 }
                 Some(Token {
                     kind: TokenKind::If,
                     span,
                 }) => {
-                    let Span { start, .. } = *span;
+                    let span = *span;
                     self.lexer.next();
                     let condition = self
                         .expect_expression(inside_vararg_function)
@@ -288,14 +294,15 @@ impl<'name, 'source> Parser<'name, 'source> {
                             else_ifs,
                             else_block,
                         },
-                        Span::new(start, end_token.span.end),
+                        span.union(end_token.span),
                     )))
                 }
                 Some(Token {
                     kind: TokenKind::Function,
                     span,
                 }) => {
-                    let start = span.start;
+                    let span = *span;
+                    let Span { start, .. } = span;
                     self.lexer.next();
                     let (name, method_name) = {
                         let name = self.parse_name().wrap_err("in function declaration")?;
@@ -374,7 +381,7 @@ impl<'name, 'source> Parser<'name, 'source> {
                                 function_def_span,
                             )],
                         },
-                        Span::new(start, function_def_span.end),
+                        span.union(function_def_span),
                     )))
                 }
                 Some(Token {
@@ -453,10 +460,13 @@ impl<'name, 'source> Parser<'name, 'source> {
                 match self.lexer.peek()? {
                     Some(token) if token.kind == TokenKind::Comma => {
                         self.lexer.next();
-                        attributed_names.push(AttributedName {
-                            name,
-                            attribute: None,
-                        });
+                        attributed_names.push((
+                            AttributedName {
+                                name,
+                                attribute: None,
+                            },
+                            None,
+                        ));
                         continue;
                     }
                     Some(Token {
@@ -492,12 +502,15 @@ impl<'name, 'source> Parser<'name, 'source> {
                             attr_token.span,
                         );
 
-                        self.lexer.expect(|k| k == &TokenKind::Greater, ">")?;
+                        let gt_token = self.lexer.expect(|k| k == &TokenKind::Greater, ">")?;
 
-                        attributed_names.push(AttributedName {
-                            name,
-                            attribute: Some(attr),
-                        });
+                        attributed_names.push((
+                            AttributedName {
+                                name,
+                                attribute: Some(attr),
+                            },
+                            Some(gt_token.span),
+                        ));
 
                         match self.lexer.peek()? {
                             Some(token) if token.kind == TokenKind::Comma => {
@@ -508,10 +521,13 @@ impl<'name, 'source> Parser<'name, 'source> {
                         }
                     }
                     _ => {
-                        attributed_names.push(AttributedName {
-                            name,
-                            attribute: None,
-                        });
+                        attributed_names.push((
+                            AttributedName {
+                                name,
+                                attribute: None,
+                            },
+                            None,
+                        ));
                         break;
                     }
                 }
@@ -542,15 +558,14 @@ impl<'name, 'source> Parser<'name, 'source> {
 
             let attributed_names: Vec<_> = attributed_names
                 .into_iter()
-                .map(|n| {
-                    let start = n.name.span.start;
-                    let end = n.attribute.as_ref().map_or(n.name.span.end, |a| a.span.end);
+                .map(|(n, gt_token_span)| {
+                    let span = gt_token_span.map_or(n.name.span, |s| n.name.span.union(s));
                     TokenTree::new(
                         AttributedName {
                             name: n.name,
                             attribute: n.attribute,
                         },
-                        Span::new(start, end),
+                        span,
                     )
                 })
                 .collect();
@@ -699,14 +714,16 @@ impl<'name, 'source> Parser<'name, 'source> {
         let start = prefix_expression.span.start;
 
         match self.lexer.peek()? {
-            Some(Token {
-                kind: TokenKind::Comma,
-                ..
-            })
-            | Some(Token {
-                kind: TokenKind::Equals,
-                ..
-            }) => {
+            Some(
+                Token {
+                    kind: TokenKind::Comma,
+                    ..
+                }
+                | Token {
+                    kind: TokenKind::Equals,
+                    ..
+                },
+            ) => {
                 let mut prefix_expressions = vec![prefix_expression];
                 while let Some(Token {
                     kind: TokenKind::Comma,
@@ -1519,10 +1536,11 @@ impl<'name, 'source> Parser<'name, 'source> {
         }
 
         let close_paren = self.lexer.expect(|k| k == &TokenKind::CloseParen, ")")?;
-        let block = self
+        let mut block = self
             .parse_block_inner(close_paren.span.end, varargs.is_some())
             .wrap_err("in function definition")?;
         let end_token = self.lexer.expect(|k| k == &TokenKind::End, "end")?;
+        block.node.end_span = Some(end_token.span);
 
         Ok(TokenTree::new(
             FunctionDef {

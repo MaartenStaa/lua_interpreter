@@ -12,10 +12,11 @@ pub fn optimize(program: TokenTree<Block>) -> TokenTree<Block> {
                 .into_iter()
                 .map(optimize_statement)
                 .collect(),
-            return_statement: program
-                .node
-                .return_statement
-                .map(|exprs| exprs.into_iter().map(optimize_expression).collect()),
+            return_statement: program.node.return_statement.map(|s| ReturnStatement {
+                values: s.values.into_iter().map(optimize_expression).collect(),
+                return_span: s.return_span,
+            }),
+            end_span: program.node.end_span,
         },
         span,
     )

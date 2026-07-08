@@ -10,8 +10,8 @@ use crate::{
     GlobalState, LuaState,
     ast::{
         BinaryOperator, Block, Expression, Field, ForCondition, FunctionCall, FunctionDef, Literal,
-        LocalAttribute, Name, Number, NumericFor, PrefixExpression, Statement, TableConstructor,
-        TokenTree, UnaryOperator, Variable,
+        LocalAttribute, Name, Number, NumericFor, PrefixExpression, ReturnStatement, Statement,
+        TableConstructor, TokenTree, UnaryOperator, Variable,
     },
     bytecode::{Bytecode, JumpToUndecidedAddress},
     chunk::{Chunk, ChunkUpValue, LocalVarInfo},
@@ -124,7 +124,7 @@ impl Compiler {
             global_state,
             chunk: Chunk::new(
                 chunk_name,
-                filename.map(|f| f.into()),
+                filename.map(std::convert::Into::into),
                 source,
                 parameters.len() as u8,
                 has_varargs,
@@ -176,7 +176,7 @@ impl Compiler {
             global_state,
             chunk: Chunk::new(
                 chunk_name,
-                filename.map(|f| f.into()),
+                filename.map(std::convert::Into::into),
                 source,
                 parameters.len() as u8,
                 has_varargs,
@@ -223,6 +223,7 @@ impl Compiler {
         // We might have some initial locals from function args
         let initial_locals = self.frame.locals.len();
         let has_return = ast.node.return_statement.is_some();
+        let end_span = ast.node.end_span;
 
         self.compile_block(
             ast,
@@ -236,7 +237,7 @@ impl Compiler {
 
         if !has_return {
             // Add implicit final return
-            self.push_bytecode(Bytecode::Return0, None);
+            self.push_bytecode(Bytecode::Return0, end_span);
         }
 
         debug_assert!(
@@ -372,11 +373,11 @@ impl Compiler {
 
         if let Some(return_statement) = ast.node.return_statement {
             let mut handled_as_tail_call = false;
-            if return_statement.len() == 1
+            if return_statement.values.len() == 1
                 && let Expression::PrefixExpression(TokenTree {
                     node: PrefixExpression::FunctionCall(function_call),
                     ..
-                }) = &return_statement[0].node
+                }) = &return_statement.values[0].node
                 && self.compile_tail_call(function_call.clone())?
             {
                 handled_as_tail_call = true;
@@ -388,7 +389,7 @@ impl Compiler {
         }
 
         if options.new_scope {
-            self.end_scope();
+            self.end_scope(ast.node.end_span);
             Ok(block_result.with_new_locals(None))
         } else {
             Ok(block_result)
@@ -860,6 +861,7 @@ impl Compiler {
                 let start_addr = self.get_current_addr();
 
                 let loop_scope_depth = self.begin_scope();
+                let end_span = block.node.end_span;
                 let block_result = self.compile_block(
                     block,
                     is_final_statement,
@@ -887,7 +889,7 @@ impl Compiler {
                     None,
                 );
 
-                self.end_scope();
+                self.end_scope(end_span);
 
                 for break_ in block_result.breaks {
                     self.patch_addr_placeholder(break_.addr);
@@ -913,6 +915,7 @@ impl Compiler {
                 self.release_registers_from(current_register);
 
                 let loop_scope_depth = self.begin_scope();
+                let end_span = block.node.end_span;
                 let block_result = self.compile_block(
                     block,
                     is_final_statement,
@@ -922,7 +925,7 @@ impl Compiler {
                         new_scope: false,
                     },
                 )?;
-                self.end_scope();
+                self.end_scope(end_span);
 
                 self.push_bytecode(
                     Bytecode::Jmp {
@@ -1249,6 +1252,7 @@ impl Compiler {
                     }
                 };
 
+                let end_span = block.node.end_span;
                 let block_result = self.compile_block(
                     block,
                     is_final_statement,
@@ -1270,7 +1274,7 @@ impl Compiler {
                 // Patch the false condition jump
                 self.patch_addr_placeholder(jmp_exit_loop_addr);
 
-                self.end_scope();
+                self.end_scope(end_span);
 
                 // Patch any break jumps
                 for jump in block_result.breaks {
@@ -1381,29 +1385,32 @@ impl Compiler {
         })
     }
 
-    fn compile_return_statement(
-        &mut self,
-        return_statement: Vec<TokenTree<Expression>>,
-    ) -> crate::Result {
+    fn compile_return_statement(&mut self, return_statement: ReturnStatement) -> crate::Result {
         let has_to_close_values = !self.to_close.is_empty();
-        if return_statement.is_empty() {
+        if return_statement.values.is_empty() {
             if has_to_close_values {
-                self.push_bytecode(Bytecode::Close { from_register: 0 }, None);
+                self.push_bytecode(
+                    Bytecode::Close { from_register: 0 },
+                    Some(return_statement.return_span),
+                );
             }
-            self.push_bytecode(Bytecode::Return0, None);
+            self.push_bytecode(Bytecode::Return0, Some(return_statement.return_span));
             return Ok(());
         }
 
         let (num_returns, is_variable) = (
-            return_statement.len(),
-            Self::expression_list_can_be_multres(&return_statement),
+            return_statement.values.len(),
+            Self::expression_list_can_be_multres(&return_statement.values),
         );
 
         let register = self.register_index;
-        let expression_list_length = self.compile_expression_list(return_statement, None)?;
+        let expression_list_length = self.compile_expression_list(return_statement.values, None)?;
 
         if has_to_close_values {
-            self.push_bytecode(Bytecode::Close { from_register: 0 }, None);
+            self.push_bytecode(
+                Bytecode::Close { from_register: 0 },
+                Some(return_statement.return_span),
+            );
         }
 
         if num_returns == 1 && !is_variable {
@@ -1411,7 +1418,7 @@ impl Compiler {
                 Bytecode::Return1 {
                     src_register: register,
                 },
-                None,
+                Some(return_statement.return_span),
             );
         } else {
             self.push_bytecode(
@@ -1425,7 +1432,7 @@ impl Compiler {
                         num_fixed_values: num_returns as u8 - 1,
                     },
                 },
-                None,
+                Some(return_statement.return_span),
             );
         }
 
@@ -2593,7 +2600,7 @@ impl Compiler {
         self.scope_depth
     }
 
-    fn end_scope(&mut self) {
+    fn end_scope(&mut self, end_span: Option<Span>) {
         let scope_id = self.scope_id();
         self.scope_ids.pop();
         let parent_scope_id = self.scope_id();
@@ -2664,7 +2671,7 @@ impl Compiler {
                 Bytecode::Close {
                     from_register: starting_register,
                 },
-                None,
+                end_span,
             );
 
             self.to_close.truncate(at);
@@ -2684,14 +2691,6 @@ impl Compiler {
             start_ip: self.chunk.get_current_addr() as usize,
             end_ip: usize::MAX,
         });
-        let local = Local {
-            name: name.clone(),
-            register,
-            depth: self.scope_depth,
-            span,
-            attributes,
-            local_var_index,
-        };
 
         let index = self.frame.locals.len() as u8;
         debug_assert!(
@@ -2699,6 +2698,15 @@ impl Compiler {
             "registers must be allocated sequentially (index: {index}, register: {register}), when adding local {}",
             String::from_utf8_lossy(&name),
         );
+
+        let local = Local {
+            name,
+            register,
+            depth: self.scope_depth,
+            span,
+            attributes,
+            local_var_index,
+        };
         self.frame.locals.push(local);
 
         if attributes & (LuaVariableAttribute::ToBeClosed as u8) != 0 {
