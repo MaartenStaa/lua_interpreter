@@ -14,10 +14,11 @@ use ratatui::{
 
 use crate::{
     debugger::protocol::{FrameKind, VmState},
-    value::{LuaObject, LuaValue},
+    value::{LuaObject, LuaTable, LuaValue, UserData},
 };
 
 use super::KeyResult;
+use super::colors::*;
 
 const HIGHLIGHT_DURATION: Duration = Duration::from_millis(600);
 
@@ -97,7 +98,7 @@ struct TreeRow {
     path: TreePath,
     depth: usize,
     label: String,
-    display: String,
+    display: Vec<Span<'static>>,
     expandable: bool,
     expanded: bool,
 }
@@ -137,12 +138,7 @@ impl TreeView {
     ) {
         let expandable = is_expandable(value);
         let expanded = expandable && self.expanded.contains(path);
-
-        let display = if expandable {
-            format_table_summary(value)
-        } else {
-            format!("{value}")
-        };
+        let display = format_value(value);
 
         rows.push(TreeRow {
             path: path.clone(),
@@ -200,20 +196,81 @@ fn is_expandable(value: &LuaValue) -> bool {
     matches!(&*obj, LuaObject::Table(t) if !t.is_empty())
 }
 
-fn format_table_summary(value: &LuaValue) -> String {
-    if !value.is_object() {
-        return format!("{value}");
+fn format_table_summary(object: &LuaObject, table: &LuaTable) -> Vec<Span<'static>> {
+    let count = table.len();
+    let mut result = vec![
+        Span::styled("table", COLOR_LAVENDER),
+        Span::raw(": "),
+        Span::styled(format!("{object:012p}"), COLOR_BLUE),
+    ];
+    if table.is_sequence() {
+        result.push(Span::styled(
+            format!(" ({count} item{})", if count == 1 { "" } else { "s" }),
+            COLOR_OVERLAY2,
+        ));
+    } else {
+        result.push(Span::styled(
+            format!(" ({count} field{})", if count == 1 { "" } else { "s" }),
+            COLOR_OVERLAY2,
+        ));
     }
-    let obj_lock = unsafe { value.as_object() };
-    let Ok(obj) = obj_lock.read() else {
-        return format!("{value}");
-    };
-    match &*obj {
-        LuaObject::Table(table) => {
-            let count = table.iter().filter(|(_, v)| !v.is_nil()).count();
-            format!("table ({count} fields)")
+    result
+}
+
+fn format_value(value: &LuaValue) -> Vec<Span<'static>> {
+    if value.is_nil() || value.is_bool() || value.is_number() {
+        vec![Span::styled(
+            value.to_string(),
+            Style::default().fg(COLOR_PEACH),
+        )]
+    } else if value.is_string() {
+        let s = unsafe { value.as_string() };
+        let s = String::from_utf8_lossy(s);
+        vec![Span::styled(format!("\"{s}\""), COLOR_GREEN)]
+    } else if value.is_object() {
+        let obj_lock = unsafe { value.as_object() };
+        let Ok(obj) = obj_lock.read() else {
+            return vec![Span::styled("<locked>".to_string(), COLOR_RED)];
+        };
+        match &*obj {
+            LuaObject::Table(table) => format_table_summary(&obj, table),
+            LuaObject::UserData(UserData::Light(_)) => {
+                vec![Span::styled("light userdata", COLOR_PINK)]
+            }
+            LuaObject::UserData(UserData::Full {
+                type_name, data, ..
+            }) => {
+                vec![
+                    Span::styled(type_name.clone(), COLOR_PINK),
+                    Span::raw(": "),
+                    Span::styled(format!("{data:012p}"), COLOR_BLUE),
+                    Span::styled(" (userdata)", COLOR_OVERLAY2),
+                ]
+            }
+            obj @ LuaObject::Closure(closure) => {
+                vec![
+                    Span::styled("function", COLOR_MAUVE),
+                    Span::raw(": "),
+                    Span::styled(format!("{obj:012p}"), COLOR_BLUE),
+                    Span::styled(format!(" ({:04})", closure.chunk), COLOR_OVERLAY2),
+                ]
+            }
+            LuaObject::NativeFunction(name, func) => {
+                vec![
+                    Span::styled("native function", COLOR_MAUVE),
+                    Span::raw(": "),
+                    Span::styled(format!("{func:012p}"), COLOR_BLUE),
+                    Span::styled(format!(" ({name})"), COLOR_OVERLAY2),
+                ]
+            }
+            obj @ LuaObject::Thread(_) => vec![
+                Span::styled("thread", COLOR_MAUVE),
+                Span::raw(": "),
+                Span::styled(format!("{obj:012p}"), COLOR_BLUE),
+            ],
         }
-        _ => format!("{value}"),
+    } else {
+        vec![styled_span(format!("{value}"), Color::White, None)]
     }
 }
 
@@ -502,11 +559,7 @@ impl LocalsPanel {
             .flat_map(|(i, row)| {
                 let root = row.path.first().map_or("", String::as_str);
                 let is_changed = intensity > 0.0 && self.changed.contains(root);
-                let value_fg = if is_changed {
-                    change_color(intensity)
-                } else {
-                    Color::White
-                };
+                let value_fg = is_changed.then(|| change_color(intensity));
 
                 let bg = if focused && i == self.list.focus {
                     Some(Color::Rgb(0x36, 0x3a, 0x4f))
@@ -688,11 +741,7 @@ impl RegistersPanel {
                     .and_then(|n| n.parse().ok())
                     .unwrap_or(usize::MAX);
                 let is_changed = intensity > 0.0 && self.changed.contains(&root_idx);
-                let value_fg = if is_changed {
-                    change_color(intensity)
-                } else {
-                    Color::White
-                };
+                let value_fg = is_changed.then(|| change_color(intensity));
 
                 let bg = if focused && i == self.list.focus {
                     Some(Color::Rgb(0x36, 0x3a, 0x4f))
@@ -752,7 +801,7 @@ impl StatePanels {
 
 // --- Rendering helpers ---
 
-fn render_tree_row<'a>(row: &TreeRow, value_fg: Color, bg: Option<Color>) -> Vec<Line<'a>> {
+fn render_tree_row<'a>(row: &TreeRow, value_fg: Option<Color>, bg: Option<Color>) -> Vec<Line<'a>> {
     let indent = "  ".repeat(row.depth);
     let toggle = if row.expandable {
         if row.expanded {
@@ -764,12 +813,21 @@ fn render_tree_row<'a>(row: &TreeRow, value_fg: Color, bg: Option<Color>) -> Vec
         "  "
     };
 
-    let result = vec![Line::from(vec![
+    let mut line = vec![
         styled_span(format!("  {indent}{toggle}"), Color::DarkGray, bg),
         styled_span(format!("{} ", row.label), Color::Yellow, bg),
         styled_span("= ".to_string(), Color::DarkGray, bg),
-        styled_span(row.display.clone(), value_fg, bg),
-    ])];
+    ];
+    line.extend(row.display.iter().cloned().map(|mut s| {
+        if let Some(bg) = bg {
+            s.style = s.style.bg(bg);
+        }
+        if let Some(fg) = value_fg {
+            s.style = s.style.fg(fg);
+        }
+        s
+    }));
+    let result = vec![Line::from(line)];
 
     // if let Some(value) = &row.value {
     //     let debug_text = format!("{:#?}", value);

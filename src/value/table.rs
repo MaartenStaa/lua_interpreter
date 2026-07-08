@@ -72,6 +72,10 @@ impl LuaTable {
         self.fields.get(key).filter(|v| !v.is_nil())
     }
 
+    pub fn is_sequence(&self) -> bool {
+        self.is_sequence
+    }
+
     pub fn is_empty(&self) -> bool {
         self.fields.is_empty() || self.fields.values().all(LuaValue::is_nil)
     }

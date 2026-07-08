@@ -1,5 +1,6 @@
 mod bytecode_fmt;
 mod code_panel;
+mod colors;
 mod help;
 mod state_panel;
 
