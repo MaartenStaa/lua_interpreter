@@ -813,6 +813,14 @@ fn highlight_line<'a>(
             iter.next();
         }
 
+        if hl_col_end <= col {
+            // We've already printed this text, this can happen if a subslice of the
+            // previous node is returned again as a different `kind`, e.g.
+            // "foo" <- string
+            //  foo  <- string.regexp
+            continue;
+        }
+
         if hl_col_start > col && hl.start.row == line_idx {
             assert!(
                 hl_col_start <= line.len(),
