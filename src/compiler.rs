@@ -1853,12 +1853,9 @@ impl Compiler {
                                 index: upval_index, ..
                             } = self.frame.resolve_name(&name.node.0)
                         {
-                            if let Expression::Literal(TokenTree {
-                                node: Literal::String(key),
-                                ..
-                            }) = index.node
+                            if let Expression::Literal(TokenTree { node: literal, .. }) = index.node
                             {
-                                let const_index = self.get_const_index(LuaConst::String(key));
+                                let const_index = self.register_const(literal);
                                 let index_r = self.take_register();
 
                                 self.push_bytecode(
@@ -1889,10 +1886,8 @@ impl Compiler {
                                 );
                                 index_r
                             }
-                        } else if let Expression::Literal(TokenTree {
-                            node: Literal::String(key),
-                            ..
-                        }) = index.node
+                        } else if let Expression::Literal(TokenTree { node: literal, .. }) =
+                            index.node
                         {
                             let current_r = self.register_index;
                             let table_r = self
@@ -1902,7 +1897,7 @@ impl Compiler {
                                     ExpressionResultMode::Amount(1),
                                 )?
                                 .get_register();
-                            let const_index = self.get_const_index(LuaConst::String(key));
+                            let const_index = self.register_const(literal);
                             let dest_r = if table_r == current_r {
                                 table_r
                             } else {
@@ -2215,14 +2210,10 @@ impl Compiler {
     fn compile_load_literal(&mut self, literal: Literal, span: Option<Span>) -> u8 {
         let register = self.take_register();
         let const_index = match literal {
-            Literal::Nil => self.get_const_index(LuaConst::Nil),
-            Literal::Boolean(b) => self.get_const_index(LuaConst::Boolean(b)),
             Literal::Number(Number::Float(f)) => {
                 if let Ok(i) = f.integer_repr()
-                    && i >= i16::MIN.into()
-                    && i <= i16::MAX.into()
+                    && let Ok(short) = i16::try_from(i)
                 {
-                    let short = i as i16;
                     self.push_bytecode(
                         Bytecode::LoadShortFloat {
                             register,
@@ -2236,22 +2227,22 @@ impl Compiler {
 
                 self.get_const_index(LuaConst::Number(LuaNumber::Float(f)))
             }
-            Literal::Number(Number::Integer(i)) if i >= i16::MIN.into() && i <= i16::MAX.into() => {
-                let short = i as i16;
-                self.push_bytecode(
-                    Bytecode::LoadShort {
-                        register,
-                        value: short,
-                    },
-                    span,
-                );
-
-                return register;
-            }
             Literal::Number(Number::Integer(i)) => {
+                if let Ok(short) = i16::try_from(i) {
+                    self.push_bytecode(
+                        Bytecode::LoadShort {
+                            register,
+                            value: short,
+                        },
+                        span,
+                    );
+
+                    return register;
+                }
+
                 self.get_const_index(LuaConst::Number(LuaNumber::Integer(i)))
             }
-            Literal::String(s) => self.get_const_index(LuaConst::String(s)),
+            literal => self.register_const(literal),
         };
 
         self.push_bytecode(
@@ -2263,6 +2254,21 @@ impl Compiler {
         );
 
         register
+    }
+
+    /// Given a literal, return the index of the constant in the chunk's constant pool.
+    fn register_const(&mut self, literal: Literal) -> ConstIndex {
+        match literal {
+            Literal::Nil => self.get_const_index(LuaConst::Nil),
+            Literal::Boolean(b) => self.get_const_index(LuaConst::Boolean(b)),
+            Literal::Number(Number::Float(f)) => {
+                self.get_const_index(LuaConst::Number(LuaNumber::Float(f)))
+            }
+            Literal::Number(Number::Integer(i)) => {
+                self.get_const_index(LuaConst::Number(LuaNumber::Integer(i)))
+            }
+            Literal::String(s) => self.get_const_index(LuaConst::String(s)),
+        }
     }
 
     fn compile_binary_operator(
