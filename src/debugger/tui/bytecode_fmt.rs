@@ -27,7 +27,7 @@ pub(crate) fn build_bytecode_lines(
         .enumerate()
         .map(|(ip, instr)| {
             let address = format!("{chunk_index}:{ip:04}");
-            let raw = format!("0x{:02x} {:#010x}", instr.opcode().raw(), instr.raw());
+            let raw = format!("{:#010x}", instr.raw());
             let opcode_name = opcode_display_name(instr.opcode());
             let operands = format_operands(chunk, *instr);
             BytecodeLine {
