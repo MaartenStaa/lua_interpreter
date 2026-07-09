@@ -295,7 +295,18 @@ fn run_event_loop(
             // Delegate to focused panel
             let result = match app.active_panel {
                 PANEL_CODE => app.code_panel.handle_key(key),
-                PANEL_CALL_STACK => app.state_panels.call_stack.handle_key(key),
+                PANEL_CALL_STACK => {
+                    let prev = app.state_panels.call_stack.selected_frame;
+                    let result = app.state_panels.call_stack.handle_key(key);
+                    if app.state_panels.call_stack.selected_frame != prev {
+                        if let Some(state) = &app.vm_state {
+                            let sel = app.state_panels.call_stack.selected_frame;
+                            app.state_panels.locals.update(state, sel);
+                            app.state_panels.registers.update(state, sel);
+                        }
+                    }
+                    result
+                }
                 PANEL_LOCALS => app.state_panels.locals.handle_key(key),
                 PANEL_REGISTERS => app.state_panels.registers.handle_key(key),
                 _ => KeyResult::Ignored,

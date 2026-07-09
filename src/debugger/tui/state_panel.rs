@@ -287,10 +287,12 @@ fn format_key(key: &LuaValue) -> String {
 pub(crate) struct CallStackPanel {
     list: ListState,
     entries: Vec<CallStackEntry>,
+    pub(crate) selected_frame: Option<usize>,
 }
 
 struct CallStackEntry {
     label: String,
+    frame_index: usize,
     is_top: bool,
 }
 
@@ -299,10 +301,16 @@ impl CallStackPanel {
         Self {
             list: ListState::new(),
             entries: Vec::new(),
+            selected_frame: None,
         }
     }
 
     pub(crate) fn update(&mut self, state: &VmState) {
+        if let Some(idx) = self.selected_frame {
+            if idx >= state.call_stack.len() {
+                self.selected_frame = None;
+            }
+        }
         self.entries = state
             .call_stack
             .iter()
@@ -310,17 +318,20 @@ impl CallStackPanel {
             .rev()
             .map(|(i, frame)| {
                 let is_top = i == state.call_stack.len() - 1;
-                let marker = if is_top { ">" } else { " " };
                 let label = match &frame.kind {
                     FrameKind::Lua { chunk, ip } => {
                         let name = &state.chunks[*chunk as usize].name;
-                        format!("{marker} #{i} {name}:{ip}")
+                        format!("#{i} {name}:{ip}")
                     }
                     FrameKind::Native { name } => {
-                        format!("{marker} #{i} [native] {name}")
+                        format!("#{i} [native] {name}")
                     }
                 };
-                CallStackEntry { label, is_top }
+                CallStackEntry {
+                    label,
+                    frame_index: i,
+                    is_top,
+                }
             })
             .collect();
 
@@ -346,6 +357,33 @@ impl CallStackPanel {
                 self.list.move_focus(-1, len);
                 KeyResult::Consumed
             }
+            KeyEvent {
+                code: KeyCode::Char('d'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            } => {
+                self.list.move_focus(10, len);
+                KeyResult::Consumed
+            }
+            KeyEvent {
+                code: KeyCode::Char('u'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            } => {
+                self.list.move_focus(-10, len);
+                KeyResult::Consumed
+            }
+            KeyEvent {
+                code: KeyCode::Enter,
+                ..
+            } => {
+                if let Some(entry) = self.entries.get(self.list.focus) {
+                    self.selected_frame = Some(entry.frame_index);
+                    KeyResult::Consumed
+                } else {
+                    KeyResult::Ignored
+                }
+            }
             _ => KeyResult::Ignored,
         }
     }
@@ -368,15 +406,26 @@ impl CallStackPanel {
             .skip(list.scroll)
             .take(visible_height)
             .map(|(i, entry)| {
+                let is_selected = self.selected_frame == Some(entry.frame_index);
+                let is_inspected = self.selected_frame.is_none() && entry.is_top || is_selected;
+                let marker = if entry.is_top {
+                    ">"
+                } else if is_inspected {
+                    "►"
+                } else {
+                    " "
+                };
                 let mut style = if entry.is_top {
                     Style::default().fg(Color::Yellow)
+                } else if is_inspected {
+                    Style::default().fg(Color::Cyan)
                 } else {
                     Style::default().fg(Color::White)
                 };
                 if focused && i == self.list.focus {
                     style = style.bg(Color::Rgb(0x36, 0x3a, 0x4f));
                 }
-                Line::from(Span::styled(&entry.label, style))
+                Line::from(Span::styled(format!("{marker} {}", entry.label), style))
             })
             .collect();
 
@@ -419,17 +468,22 @@ impl LocalsPanel {
         self.list.clamp(self.rows.len());
     }
 
-    pub(crate) fn update(&mut self, state: &VmState) {
+    pub(crate) fn update(&mut self, state: &VmState, selected_frame: Option<usize>) {
         let mut entries: Vec<(String, LuaValue)> = Vec::new();
 
-        if let Some(top_frame) = state.call_stack.last()
-            && let FrameKind::Lua { chunk, ip } = &top_frame.kind
+        let frame = match selected_frame {
+            Some(idx) => state.call_stack.get(idx),
+            None => state.call_stack.last(),
+        };
+
+        if let Some(frame) = frame
+            && let FrameKind::Lua { chunk, ip } = &frame.kind
         {
             let chunk_snap = &state.chunks[*chunk as usize];
             let nil = LuaValue::NIL;
             for var in &chunk_snap.local_vars {
                 if *ip >= var.start_ip && *ip <= var.end_ip {
-                    let abs_idx = top_frame.frame_pointer + var.register as usize;
+                    let abs_idx = frame.frame_pointer + var.register as usize;
                     let value = state.stack.get(abs_idx).unwrap_or(&nil);
                     let value = if value.is_upvalue() {
                         unsafe { value.as_upvalue() }.read().unwrap().0.clone()
@@ -609,15 +663,20 @@ impl RegistersPanel {
         self.list.clamp(self.rows.len());
     }
 
-    pub(crate) fn update(&mut self, state: &VmState) {
+    pub(crate) fn update(&mut self, state: &VmState, selected_frame: Option<usize>) {
         let mut entries: Vec<(String, LuaValue)> = Vec::new();
 
-        if let Some(top_frame) = state.call_stack.last() {
+        let frame = match selected_frame {
+            Some(idx) => state.call_stack.get(idx),
+            None => state.call_stack.last(),
+        };
+
+        if let Some(frame) = frame {
             let end = state
                 .stack
                 .len()
-                .min(top_frame.frame_pointer + top_frame.max_registers as usize);
-            for (i, abs_idx) in (top_frame.frame_pointer..end).enumerate() {
+                .min(frame.frame_pointer + frame.max_registers as usize);
+            for (i, abs_idx) in (frame.frame_pointer..end).enumerate() {
                 let value = &state.stack[abs_idx];
                 let value = if value.is_upvalue() {
                     unsafe { value.as_upvalue() }.read().unwrap().0.clone()
@@ -776,8 +835,9 @@ impl StatePanels {
 
     pub(crate) fn update(&mut self, state: &VmState) {
         self.call_stack.update(state);
-        self.locals.update(state);
-        self.registers.update(state);
+        let selected = self.call_stack.selected_frame;
+        self.locals.update(state, selected);
+        self.registers.update(state, selected);
     }
 
     pub(crate) fn render(&self, frame: &mut Frame, area: Rect, active_panel: usize) {
