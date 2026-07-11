@@ -138,8 +138,7 @@ impl CodePanel {
             PanelMode::Source | PanelMode::Split => {
                 self.current_source_line().unwrap_or(0).saturating_sub(1)
             }
-            PanelMode::Bytecode => self.current_ip,
-            PanelMode::Aligned => self.current_ip,
+            PanelMode::Bytecode | PanelMode::Aligned => self.current_ip,
         }
     }
 
