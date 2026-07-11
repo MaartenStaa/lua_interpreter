@@ -1766,7 +1766,7 @@ impl Compiler {
                                 ExpressionResultMode::Amount(1),
                             )?
                             .get_register();
-                        self.compile_binary_operator(op, dest_r, lhs_r, rhs_r, expression.span);
+                        self.compile_binary_operator(&op, dest_r, lhs_r, rhs_r, expression.span);
 
                         self.release_registers_from(dest_r + 1);
 
@@ -2273,97 +2273,67 @@ impl Compiler {
 
     fn compile_binary_operator(
         &mut self,
-        op: TokenTree<BinaryOperator>,
+        op: &TokenTree<BinaryOperator>,
         dest_register: u8,
         left_register: u8,
         right_register: u8,
         span: Span,
     ) {
+        macro_rules! binary_op {
+            ($op:expr; $($left:ident $(=> $right:ident)?),*; $($rest:tt)*) => {
+                match $op {
+                    // binary_op!(_expand; $($left $(=> $right)?),*),
+                    $(
+                        BinaryOperator::$left => binary_op!(_expand; $left $(=> $right)?),
+                    )*
+                    $($rest)*,
+                }
+            };
+            (_expand; $ast:ident => $bytecode:ident) => {
+                Bytecode::$bytecode {
+                    dest_register,
+                    left_register,
+                    right_register,
+                }
+            };
+            (_expand; $ast:ident) => {
+                Bytecode::$ast {
+                    dest_register,
+                    left_register,
+                    right_register,
+                }
+            };
+            (_expand; ) => {
+                // Terminal case for recursion, do nothing
+            };
+        }
         self.push_bytecode(
-            match op.node {
+            binary_op!(
+                op.node;
+
                 // Arithmetic
-                BinaryOperator::Add => Bytecode::Add {
-                    dest_register,
-                    left_register,
-                    right_register,
-                },
-                BinaryOperator::Sub => Bytecode::Sub {
-                    dest_register,
-                    left_register,
-                    right_register,
-                },
-                BinaryOperator::Mul => Bytecode::Mul {
-                    dest_register,
-                    left_register,
-                    right_register,
-                },
-                BinaryOperator::Div => Bytecode::Div {
-                    dest_register,
-                    left_register,
-                    right_register,
-                },
-                BinaryOperator::Mod => Bytecode::Mod {
-                    dest_register,
-                    left_register,
-                    right_register,
-                },
-                BinaryOperator::Pow => Bytecode::Pow {
-                    dest_register,
-                    left_register,
-                    right_register,
-                },
-                BinaryOperator::FloorDiv => Bytecode::IDiv {
-                    dest_register,
-                    left_register,
-                    right_register,
-                },
-                BinaryOperator::BitwiseAnd => Bytecode::Band {
-                    dest_register,
-                    left_register,
-                    right_register,
-                },
-                BinaryOperator::BitwiseOr => Bytecode::Bor {
-                    dest_register,
-                    left_register,
-                    right_register,
-                },
-                BinaryOperator::BitwiseXor => Bytecode::Bxor {
-                    dest_register,
-                    left_register,
-                    right_register,
-                },
-                BinaryOperator::ShiftLeft => Bytecode::Shl {
-                    dest_register,
-                    left_register,
-                    right_register,
-                },
-                BinaryOperator::ShiftRight => Bytecode::Shr {
-                    dest_register,
-                    left_register,
-                    right_register,
-                },
+                Add,
+                Sub,
+                Mul,
+                Div,
+                Mod,
+                Pow,
+                FloorDiv => IDiv,
+                BitwiseAnd => Band,
+                BitwiseOr => Bor,
+                BitwiseXor => Bxor,
+                ShiftLeft => Shl,
+                ShiftRight => Shr,
 
                 // Comparison
-                BinaryOperator::Equal => Bytecode::Eq {
-                    dest_register,
-                    left_register,
-                    right_register,
-                },
-                BinaryOperator::NotEqual => Bytecode::Ne {
-                    dest_register,
-                    left_register,
-                    right_register,
-                },
-                BinaryOperator::LessThan => Bytecode::Lt {
-                    dest_register,
-                    left_register,
-                    right_register,
-                },
-                BinaryOperator::LessThanOrEqual => Bytecode::Le {
-                    dest_register,
-                    left_register,
-                    right_register,
-                },
+                Equal => Eq,
+                NotEqual => Ne,
+                LessThan => Lt,
+                LessThanOrEqual => Le,
+
+                // Strings
+                Concat;
+
                 // https://www.lua.org/manual/5.4/manual.html#3.4.4
                 // A comparison a > b is translated to b < a and a >= b is translated to b <= a.
                 BinaryOperator::GreaterThan => Bytecode::Lt {
@@ -2377,20 +2347,13 @@ impl Compiler {
                     right_register: left_register,
                 },
 
-                // Strings
-                BinaryOperator::Concat => Bytecode::Concat {
-                    dest_register,
-                    left_register,
-                    right_register,
-                },
-
                 // Logical
                 BinaryOperator::And | BinaryOperator::Or => {
                     unreachable!(
                         "short-circuiting logical operators should be handled in compile_expression"
                     );
                 }
-            },
+            ),
             Some(span),
         );
     }
