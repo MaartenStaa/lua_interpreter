@@ -23,7 +23,7 @@ use crate::{
         variable::{Local, Upvalue},
     },
     debug,
-    error::{RuntimeError, lua_error},
+    error::lua_error,
     parser::Parser,
     token::Span,
     value::{IntegerRepr, LuaConst, LuaNumber, LuaString, LuaTable, LuaVariableAttribute},
@@ -948,7 +948,12 @@ impl Compiler {
             Statement::For { condition, block } => {
                 let loop_scope_depth = self.begin_scope();
 
-                let (continue_addr, jmp_exit_loop_addr) = match condition.node {
+                enum LoopTail {
+                    Jmp(JumpAddr),
+                    ForLoop { base_register: u8, body_addr: JumpAddr },
+                }
+
+                let (loop_tail, jmp_exit_loop_addr) = match condition.node {
                     ForCondition::NumericFor(numeric_for) => {
                         let NumericFor {
                             name,
@@ -957,25 +962,18 @@ impl Compiler {
                             step,
                         } = *numeric_for;
 
-                        // FIXME: Coerce all to float if initial and step are floats
-
-                        // let limit_r = self.frames.last_mut().unwrap().take_register();
-                        // let step_r = self.frames.last_mut().unwrap().take_register();
-                        // let limit_r = self.frames.last_mut().unwrap().take_register();
-
-                        // Define the initial value and variable
-                        let ident_r = self
+                        // R[base]   = initial value (loop variable)
+                        // R[base+1] = limit
+                        // R[base+2] = step
+                        let base_r = self
                             .compile_expression(
                                 initial,
                                 ExpressionMode::Copy,
                                 ExpressionResultMode::Amount(1),
                             )?
                             .get_register();
-                        self.add_local(name.node.0, ident_r, 0, Some(name.span));
+                        self.add_local(name.node.0, base_r, 0, Some(name.span));
 
-                        // Create fake variables to hold the limit and step. Note that we use
-                        // variable names that are invalid in Lua to avoid conflicts with user
-                        // variables.
                         let limit_r = self
                             .compile_expression(
                                 limit,
@@ -986,7 +984,6 @@ impl Compiler {
                         self.add_local(b"#limit".into(), limit_r, 0, None);
 
                         let step_r = if let Some(step) = step {
-                            let step_span = step.span;
                             let step_r = self
                                 .compile_expression(
                                     step,
@@ -995,38 +992,6 @@ impl Compiler {
                                 )?
                                 .get_register();
                             self.add_local(b"#step".into(), step_r, 0, None);
-
-                            // Raise an error if the step value is equal to zero
-                            let zero_r = self
-                                .compile_load_literal(Literal::Number(Number::Integer(0)), None);
-                            self.push_bytecode(
-                                Bytecode::Eq {
-                                    dest_register: zero_r,
-                                    left_register: step_r,
-                                    right_register: zero_r,
-                                },
-                                None,
-                            );
-                            let jmp_false_addr = self.push_undecided_jump(
-                                JumpToUndecidedAddress::JmpFalse {
-                                    condition_register: zero_r,
-                                },
-                                None,
-                            );
-
-                            // Raise error
-                            self.push_bytecode(
-                                Bytecode::Error {
-                                    code: RuntimeError::ForLoopLimitIsZero,
-                                },
-                                Some(step_span),
-                            );
-
-                            // Release `zero_r`.
-                            self.release_register();
-
-                            // Otherwise, move past it
-                            self.patch_addr_placeholder(jmp_false_addr);
                             step_r
                         } else {
                             let step_r = self
@@ -1035,100 +1000,27 @@ impl Compiler {
                             step_r
                         };
 
-                        // Create a "variable" to remember whether this is a decreasing loop.
-                        // TODO: Optimization, if the step is statically known (e.g. the default of
-                        // 1, or a constant integer value), we don't need to do any of this.
-                        let zero_r =
-                            self.compile_load_literal(Literal::Number(Number::Integer(0)), None);
-                        let decreasing_r = zero_r; // We can reuse this slot
-                        self.add_local(b"#decreasing".into(), decreasing_r, 0, None);
-                        self.push_bytecode(
-                            Bytecode::Lt {
-                                dest_register: decreasing_r,
-                                left_register: step_r,
-                                right_register: zero_r,
+                        debug_assert_eq!(limit_r, base_r + 1);
+                        debug_assert_eq!(step_r, base_r + 2);
+
+                        // ForPrep validates types, coerces to float if needed, checks step != 0,
+                        // and jumps to exit if the initial value already exceeds the limit.
+                        let forprep_addr = self.push_undecided_jump(
+                            JumpToUndecidedAddress::ForPrep {
+                                base_register: base_r,
                             },
                             None,
                         );
 
-                        // Label to jump back to the start of the loop
-                        let condition_addr = self.get_current_addr();
+                        let body_addr = self.get_current_addr();
 
-                        // Evaluate the limit
-                        // Choose either "<=" or ">=" depending on whether the loop is increasing
-                        // or decreasing.
-                        let jmp_decreasing = self.push_undecided_jump(
-                            JumpToUndecidedAddress::JmpTrue {
-                                condition_register: decreasing_r,
+                        (
+                            LoopTail::ForLoop {
+                                base_register: base_r,
+                                body_addr,
                             },
-                            None,
-                        );
-
-                        let limit_eval_r = self.take_register();
-
-                        // Loop is increasing, check if ident <= limit
-                        self.push_bytecode(
-                            Bytecode::Le {
-                                dest_register: limit_eval_r,
-                                left_register: ident_r,
-                                right_register: limit_r,
-                            },
-                            None,
-                        );
-                        let jmp_after_le =
-                            self.push_undecided_jump(JumpToUndecidedAddress::Jmp, None);
-
-                        self.patch_addr_placeholder(jmp_decreasing);
-
-                        // Loop is decreasing, check if limit <= ident
-                        self.push_bytecode(
-                            Bytecode::Le {
-                                dest_register: limit_eval_r,
-                                left_register: limit_r,
-                                right_register: ident_r,
-                            },
-                            None,
-                        );
-
-                        self.patch_addr_placeholder(jmp_after_le);
-
-                        let jmp_false_addr = self.push_undecided_jump(
-                            JumpToUndecidedAddress::JmpFalse {
-                                condition_register: limit_eval_r,
-                            },
-                            None,
-                        );
-
-                        // Jump into the loop
-                        let inside_block_jump =
-                            self.push_undecided_jump(JumpToUndecidedAddress::Jmp, None);
-
-                        // Compile the step
-                        let step_addr = self.get_current_addr();
-                        self.push_bytecode(
-                            Bytecode::Add {
-                                dest_register: ident_r,
-                                left_register: ident_r,
-                                right_register: step_r,
-                            },
-                            None,
-                        );
-
-                        // After step, jump to the condition
-                        self.push_bytecode(
-                            Bytecode::Jmp {
-                                address: condition_addr,
-                            },
-                            None,
-                        );
-
-                        // Path the inside block jump
-                        self.patch_addr_placeholder(inside_block_jump);
-
-                        // Release the limit_eval_r register.
-                        self.release_register();
-
-                        (step_addr, jmp_false_addr)
+                            forprep_addr,
+                        )
                     }
                     ForCondition::GenericFor { names, expressions } => {
                         // Evaluate the expressions and keep no more than 4
@@ -1248,7 +1140,7 @@ impl Compiler {
 
                         self.release_register();
 
-                        (step_addr, jmp_true_addr)
+                        (LoopTail::Jmp(step_addr), jmp_true_addr)
                     }
                 };
 
@@ -1263,15 +1155,30 @@ impl Compiler {
                     },
                 )?;
 
-                // Jump back to the step evaluation
-                self.push_bytecode(
-                    Bytecode::Jmp {
-                        address: continue_addr,
-                    },
-                    None,
-                );
+                match loop_tail {
+                    LoopTail::Jmp(continue_addr) => {
+                        self.push_bytecode(
+                            Bytecode::Jmp {
+                                address: continue_addr,
+                            },
+                            None,
+                        );
+                    }
+                    LoopTail::ForLoop {
+                        base_register,
+                        body_addr,
+                    } => {
+                        self.push_bytecode(
+                            Bytecode::ForLoop {
+                                base_register,
+                                address: body_addr,
+                            },
+                            None,
+                        );
+                    }
+                }
 
-                // Patch the false condition jump
+                // Patch the exit jump (ForPrep or JmpTrue/JmpFalse)
                 self.patch_addr_placeholder(jmp_exit_loop_addr);
 
                 self.end_scope(end_span);

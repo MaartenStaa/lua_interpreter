@@ -7,7 +7,7 @@ mod function;
 pub(crate) mod metatables;
 mod number;
 mod object;
-mod string;
+pub(crate) mod string;
 mod table;
 mod upvalue;
 mod userdata;

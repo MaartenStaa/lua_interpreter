@@ -99,7 +99,8 @@ fn opcode_display_name(opcode: OpCode) -> String {
         OpCode::JmpTrue => "JMP_TRUE",
         OpCode::JmpFalse => "JMP_FALSE",
         OpCode::JmpClose => "JMP_CLOSE",
-        OpCode::Error => "ERROR",
+        OpCode::ForPrep => "FOR_PREP",
+        OpCode::ForLoop => "FOR_LOOP",
     }
     .to_string()
 }
@@ -185,6 +186,8 @@ fn format_operands(chunk: &ChunkSnapshot, instr: Instruction) -> String {
         OpCode::JmpTrue | OpCode::JmpFalse | OpCode::JmpClose => {
             format!("{} {:04}", r(instr.a()), instr.bc())
         }
-        OpCode::Error => format!("{}", instr.a()),
+        OpCode::ForPrep | OpCode::ForLoop => {
+            format!("{} {:04}", r(instr.a()), instr.bc())
+        }
     }
 }

@@ -75,8 +75,9 @@ pub enum OpCode {
     JmpFalse,
     JmpClose,
 
-    // Other
-    Error,
+    // Loops
+    ForPrep,
+    ForLoop,
 }
 
 impl From<OpCode> for u8 {

@@ -8,12 +8,12 @@ use std::{
 use crate::{
     ExecutionResult, ThreadStatus,
     chunk::{Chunk, RegisterName},
-    error::{IntoLuaError, RuntimeError, lua_error},
+    error::lua_error,
     instruction::OpCode,
     state::LuaState,
     value::{
-        LuaClosure, LuaConst, LuaObject, LuaString, LuaTable, LuaValue, NativeLuaFunction, UpValue,
-        metatables,
+        LuaClosure, LuaConst, LuaNumber, LuaObject, LuaString, LuaTable, LuaValue,
+        NativeLuaFunction, UpValue, metatables, string::coerce_number,
     },
     vm::{
         call_frame::{CallFrame, PoppedCallFrame},
@@ -1055,10 +1055,89 @@ impl LuaState {
                     continue;
                 }
 
-                // Other
-                OpCode::Error => {
-                    let error_type = instruction.a();
-                    return Err(RuntimeError::try_from(error_type)?).into_lua_error();
+                // Loops
+                OpCode::ForPrep => {
+                    let base = instruction.a();
+                    let exit_addr = instruction.bc();
+
+                    let mut initial_num = coerce_number(self.get(base))
+                        .map_err(|_| lua_error!("'for' initial value must be a number"))?;
+                    let mut limit_num = coerce_number(self.get(base + 1))
+                        .map_err(|_| lua_error!("'for' limit must be a number"))?;
+                    let mut step_num = coerce_number(self.get(base + 2))
+                        .map_err(|_| lua_error!("'for' step must be a number"))?;
+
+                    // Coerce all to float if any is a float
+                    if matches!(
+                        (&initial_num, &limit_num, &step_num),
+                        (LuaNumber::Float(_), _, _)
+                            | (_, LuaNumber::Float(_), _)
+                            | (_, _, LuaNumber::Float(_))
+                    ) {
+                        initial_num = LuaNumber::Float(f64::from(initial_num));
+                        limit_num = LuaNumber::Float(f64::from(limit_num));
+                        step_num = LuaNumber::Float(f64::from(step_num));
+                    }
+
+                    // Write back coerced values
+                    self.set(base, LuaValue::from_number(&initial_num));
+                    self.set(base + 1, LuaValue::from_number(&limit_num));
+                    self.set(base + 2, LuaValue::from_number(&step_num));
+
+                    let step_is_zero = match &step_num {
+                        LuaNumber::Integer(n) => *n == 0,
+                        LuaNumber::Float(n) => *n == 0.0,
+                    };
+                    if step_is_zero {
+                        return Err(lua_error!("'for' step is zero"));
+                    }
+
+                    let step_positive = match &step_num {
+                        LuaNumber::Integer(n) => *n > 0,
+                        LuaNumber::Float(n) => *n > 0.0,
+                    };
+
+                    let skip = if step_positive {
+                        initial_num > limit_num
+                    } else {
+                        initial_num < limit_num
+                    };
+
+                    if skip {
+                        self.call_frame_mut().set_ip(exit_addr as usize);
+                        continue;
+                    }
+                }
+                OpCode::ForLoop => {
+                    let base = instruction.a();
+                    let body_addr = instruction.bc();
+
+                    let i = self.get(base);
+                    let limit = self.get(base + 1);
+                    let step = self.get(base + 2);
+
+                    let i_num = unsafe { i.as_number() };
+                    let step_num = unsafe { step.as_number() };
+                    let limit_num = unsafe { limit.as_number() };
+
+                    let new_i = &i_num + &step_num;
+                    self.set(base, LuaValue::from_number(&new_i));
+
+                    let step_positive = match &step_num {
+                        LuaNumber::Integer(n) => *n > 0,
+                        LuaNumber::Float(n) => *n > 0.0,
+                    };
+
+                    let in_range = if step_positive {
+                        new_i <= limit_num
+                    } else {
+                        new_i >= limit_num
+                    };
+
+                    if in_range {
+                        self.call_frame_mut().set_ip(body_addr as usize);
+                        continue;
+                    }
                 }
             }
 

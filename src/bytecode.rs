@@ -1,5 +1,4 @@
 use crate::compiler::ExpressionResultMode;
-use crate::error::RuntimeError;
 use crate::instruction::Instruction;
 use crate::vm::{ChunkIndex, ConstIndex, JumpAddr};
 
@@ -272,6 +271,23 @@ pub(crate) enum Bytecode {
         num_fixed_values: u8,
     },
 
+    // Loops
+    /// Prepare a numeric for loop. Validates that all three values (initial, limit, step) in
+    /// consecutive registers starting at `base_register` are numbers, coerces to float if any is
+    /// a float, checks that step is not zero, and jumps to `address` if the initial value already
+    /// exceeds the limit.
+    ForPrep {
+        base_register: u8,
+        address: JumpAddr,
+    },
+    /// Numeric for loop step. Increments R[base_register] by R[base_register+2] (the step), then
+    /// checks if the loop variable is still within the limit. If so, jumps to `address` (the loop
+    /// body). Otherwise falls through (exits the loop).
+    ForLoop {
+        base_register: u8,
+        address: JumpAddr,
+    },
+
     // Control
     Jmp {
         address: JumpAddr,
@@ -287,11 +303,6 @@ pub(crate) enum Bytecode {
     JmpClose {
         close_from_register: u8,
         address: JumpAddr,
-    },
-
-    // Other
-    Error {
-        code: RuntimeError,
     },
 }
 
@@ -738,6 +749,20 @@ impl Bytecode {
                 bytes!(ReturnM, from_register, num_fixed_values)
             }
 
+            // Loops
+            Self::ForPrep {
+                base_register,
+                address,
+            } => {
+                bytes!(ForPrep, base_register, bytes = address)
+            }
+            Self::ForLoop {
+                base_register,
+                address,
+            } => {
+                bytes!(ForLoop, base_register, bytes = address)
+            }
+
             // Control
             Self::Jmp { address } => {
                 bytes!(Jmp, bytes = address)
@@ -760,11 +785,6 @@ impl Bytecode {
             } => {
                 bytes!(JmpClose, close_from_register, bytes = address)
             }
-
-            // Other
-            Self::Error { code } => {
-                bytes!(Error, code as u8)
-            }
         }
     }
 }
@@ -775,6 +795,7 @@ pub(crate) enum JumpToUndecidedAddress {
     JmpTrue { condition_register: u8 },
     JmpFalse { condition_register: u8 },
     JmpClose { close_from_register: u8 },
+    ForPrep { base_register: u8 },
 }
 
 impl JumpToUndecidedAddress {
@@ -793,6 +814,10 @@ impl JumpToUndecidedAddress {
                 close_from_register,
             } => Bytecode::JmpClose {
                 close_from_register,
+                address,
+            },
+            JumpToUndecidedAddress::ForPrep { base_register } => Bytecode::ForPrep {
+                base_register,
                 address,
             },
         }

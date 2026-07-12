@@ -1,6 +1,5 @@
 use crate::{
     chunk::Chunk,
-    error::RuntimeError,
     instruction::{Instruction, OpCode},
     value::LuaConst,
     vm::{ChunkIndex, ConstIndex, JumpAddr},
@@ -446,12 +445,18 @@ pub(crate) fn print_instruction(
             eprintln!("{offset:04}");
         }
 
-        // Other
-        OpCode::Error => {
-            let error_code = instruction.a();
-            let error = RuntimeError::try_from(error_code).expect("valid error code");
-            instr!("ERROR");
-            eprintln!("{error:?}");
+        // Loops
+        OpCode::ForPrep => {
+            let offset: JumpAddr = instruction.bc();
+            instr!("FOR_PREP");
+            reg!();
+            eprintln!("{offset:04}");
+        }
+        OpCode::ForLoop => {
+            let offset: JumpAddr = instruction.bc();
+            instr!("FOR_LOOP");
+            reg!();
+            eprintln!("{offset:04}");
         }
     }
 }
