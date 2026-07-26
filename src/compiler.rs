@@ -950,7 +950,10 @@ impl Compiler {
 
                 enum LoopTail {
                     Jmp(JumpAddr),
-                    ForLoop { base_register: u8, body_addr: JumpAddr },
+                    ForLoop {
+                        base_register: u8,
+                        body_addr: JumpAddr,
+                    },
                 }
 
                 let (loop_tail, jmp_exit_loop_addr) = match condition.node {

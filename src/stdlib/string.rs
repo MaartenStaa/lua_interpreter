@@ -380,9 +380,7 @@ fn gmatch_iter(state: &mut LuaState) -> crate::Result<usize> {
                                     None => state.set(i - 1, LuaValue::NIL),
                                 }
                             }
-                            return Ok(
-                                regex.captures_len() - 1
-                            );
+                            return Ok(regex.captures_len() - 1);
                         }
                         lua_return!(state; LuaValue::from_string(full_match.as_bytes()))
                     }
