@@ -811,6 +811,10 @@ mod tests {
         assert!(small_int.is_integer());
         assert_eq!(unsafe { small_int.as_integer() }, 42);
 
+        let small_neg_int = LuaValue::from_integer(-42);
+        assert!(small_neg_int.is_integer());
+        assert_eq!(unsafe { small_neg_int.as_integer() }, -42);
+
         let large_int = LuaValue::from_integer(1 << 50);
         assert!(large_int.is_integer());
         assert_eq!(unsafe { large_int.as_integer() }, 1 << 50);
