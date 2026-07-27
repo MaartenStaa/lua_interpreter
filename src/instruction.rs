@@ -128,9 +128,9 @@ impl Instruction {
     pub(crate) fn create(opcode: OpCode, a: u8, b: u8, c: u8) -> Self {
         let opcode_byte = opcode as u32;
         let instruction_value = (opcode_byte & 0xFF)
-            | ((a as u32 & 0xFF) << 8)
-            | ((b as u32 & 0xFF) << 16)
-            | ((c as u32 & 0xFF) << 24);
+            | ((u32::from(a) & 0xFF) << 8)
+            | ((u32::from(b) & 0xFF) << 16)
+            | ((u32::from(c) & 0xFF) << 24);
         Self(instruction_value)
     }
 
@@ -138,7 +138,7 @@ impl Instruction {
     pub(crate) fn create_bc(opcode: OpCode, a: u8, bc: u16) -> Self {
         let opcode_byte = opcode as u32;
         let instruction_value =
-            (opcode_byte & 0xFF) | ((a as u32 & 0xFF) << 8) | ((bc as u32 & 0xFFFF) << 16);
+            (opcode_byte & 0xFF) | ((u32::from(a) & 0xFF) << 8) | ((u32::from(bc) & 0xFFFF) << 16);
         Self(instruction_value)
     }
 
@@ -169,7 +169,7 @@ impl Instruction {
     /// Sets the second and third operands of the instruction as a single 16-bit value.
     /// Used for jump instructions, which get patched later on after the bytecode is generated.
     pub(crate) fn set_bc(&mut self, bc: u16) {
-        self.0 = (self.0 & 0x0000FFFF) | ((bc as u32 & 0xFFFF) << 16);
+        self.0 = (self.0 & 0x0000_FFFF) | ((u32::from(bc) & 0xFFFF) << 16);
     }
 
     pub(crate) fn raw(self) -> u32 {

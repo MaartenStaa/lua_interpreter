@@ -69,6 +69,11 @@ impl PartialEq for LuaNumber {
 }
 
 pub trait IntegerRepr {
+    /// Convert this value to an integer representation, if possible.
+    ///
+    /// # Errors
+    ///
+    /// If the value cannot be represented as an integer, an error is returned.
     fn integer_repr(&self) -> crate::Result<i64>;
 }
 

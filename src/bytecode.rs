@@ -280,7 +280,7 @@ pub(crate) enum Bytecode {
         base_register: u8,
         address: JumpAddr,
     },
-    /// Numeric for loop step. Increments R[base_register] by R[base_register+2] (the step), then
+    /// Numeric for loop step. Increments R[`base_register`] by R[`base_register`+2] (the step), then
     /// checks if the loop variable is still within the limit. If so, jumps to `address` (the loop
     /// body). Otherwise falls through (exits the loop).
     ForLoop {

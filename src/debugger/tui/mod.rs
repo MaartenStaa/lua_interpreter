@@ -298,12 +298,12 @@ fn run_event_loop(
                 PANEL_CALL_STACK => {
                     let prev = app.state_panels.call_stack.selected_frame;
                     let result = app.state_panels.call_stack.handle_key(key);
-                    if app.state_panels.call_stack.selected_frame != prev {
-                        if let Some(state) = &app.vm_state {
-                            let sel = app.state_panels.call_stack.selected_frame;
-                            app.state_panels.locals.update(state, sel);
-                            app.state_panels.registers.update(state, sel);
-                        }
+                    if app.state_panels.call_stack.selected_frame != prev
+                        && let Some(state) = &app.vm_state
+                    {
+                        let sel = app.state_panels.call_stack.selected_frame;
+                        app.state_panels.locals.update(state, sel);
+                        app.state_panels.registers.update(state, sel);
                     }
                     result
                 }

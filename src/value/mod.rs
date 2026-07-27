@@ -209,7 +209,7 @@ impl LuaValue {
 
     #[must_use]
     pub fn from_bool(b: bool) -> Self {
-        Self::tagged(1, b as u64)
+        Self::tagged(1, u64::from(b))
     }
 
     #[must_use]
@@ -220,7 +220,7 @@ impl LuaValue {
     #[must_use]
     pub fn from_integer(i: i64) -> Self {
         if (Self::SMALL_INT_MIN..=Self::SMALL_INT_MAX).contains(&i) {
-            Self::tagged(3, (i as u64) & Self::VALUE_MASK)
+            Self::tagged(3, i.cast_unsigned() & Self::VALUE_MASK)
         } else {
             let ptr = Box::into_raw(Box::new(i));
             debug_assert!(
@@ -314,7 +314,7 @@ impl LuaValue {
             LuaValueType::Nil => OldLuaValue::Nil,
             LuaValueType::SmallInteger => {
                 // Sign-extend from 49 bits to 64 bits
-                let extended = ((value as i64) << 15) >> 15;
+                let extended = (value.cast_signed() << 15) >> 15;
                 OldLuaValue::Number(LuaNumber::Integer(extended))
             }
             LuaValueType::LargeInteger => {
@@ -414,7 +414,7 @@ impl LuaValue {
         debug_assert!(self.is_integer(), "not an integer");
         let value = self.get_value_bits();
         if self.get_type_tag() == LuaValueType::SmallInteger {
-            ((value as i64) << 15) >> 15
+            (value.cast_signed() << 15) >> 15
         } else {
             unsafe { *(value as *const i64) }
         }
@@ -514,6 +514,14 @@ impl Drop for LuaValue {
 impl LuaValue {
     /// Turn the value into a string, using the `__tostring` metamethod if it exists.
     /// Falls back on this type's `Display` implementation if the metamethod does not exist.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    ///
+    /// - The `__tostring` metamethod exists but is not a function.
+    /// - The `__tostring` metamethod returns an error.
+    /// - The `__tostring` metamethod returns a value that is not a string.
     pub fn cast_to_string(&self, state: &mut LuaState) -> crate::Result<LuaString> {
         let __tostring = self.get_metavalue(&metatables::TOSTRING_KEY);
         if let Some(__tostring) = __tostring {
@@ -569,7 +577,8 @@ impl Debug for LuaValue {
             // case where values are self-referential.
             OldLuaValue::Object(o) => match o.try_write() {
                 Ok(o) => {
-                    write!(f, "{o:?}")
+                    f.debug_struct("object").field("0", &o).finish()
+                    // write!(f, "{o:?}")
                 }
                 Err(e) => {
                     write!(f, "object<{o:012p}>: <locked: {e}>")
@@ -698,6 +707,12 @@ impl LuaValue {
         }
     };
 
+    /// Returns the size of this value in bytes, including any heap allocations.
+    ///
+    /// # Panics
+    ///
+    /// Panics when failing to acquire a read lock on an object or upvalue.
+    #[must_use]
     pub fn size_bytes(&self) -> u64 {
         (size_of::<Self>() as u64)
             + match self.get_type() {
@@ -715,6 +730,12 @@ impl LuaValue {
             }
     }
 
+    /// Get the type name of this value as a string, e.g. "nil", "boolean", "number", "string", "table", etc.
+    ///
+    /// # Panics
+    ///
+    /// Panics when failing to acquire a read lock on an object or upvalue.
+    #[must_use]
     pub fn type_name(&self) -> &'static str {
         match self.get_type() {
             LuaValueType::Nil => "nil",
@@ -751,6 +772,12 @@ impl Display for LuaValue {
 }
 
 impl LuaValue {
+    /// Checks if the value is a table. Returns `false` for non-object values.
+    ///
+    /// # Panics
+    ///
+    /// Panics when failing to acquire a read lock on an object.
+    #[must_use]
     pub fn is_table(&self) -> bool {
         if !self.is_object() {
             return false;

@@ -18,6 +18,7 @@ pub struct Lexer<'name, 'source> {
 }
 
 impl<'name, 'source> Lexer<'name, 'source> {
+    #[must_use]
     pub fn new(chunk_name: &'name [u8], source: &'source [u8]) -> Self {
         Self {
             chunk_name,
@@ -28,6 +29,7 @@ impl<'name, 'source> Lexer<'name, 'source> {
         }
     }
 
+    #[must_use]
     pub fn label_at_current_position(&self, message: &str) -> LabeledSpan {
         let mut position = self.position;
         if let Some(peeked) = &self.peeked {
@@ -37,6 +39,7 @@ impl<'name, 'source> Lexer<'name, 'source> {
         LabeledSpan::at(position..position, message)
     }
 
+    #[must_use]
     pub fn with_source_code(&self, report: LuaError) -> Box<LuaError> {
         Box::new(
             report.with_source_code(
@@ -79,7 +82,7 @@ macro_rules! token {
     };
 }
 
-impl<'path, 'source> Iterator for Lexer<'path, 'source> {
+impl<'source> Iterator for Lexer<'_, 'source> {
     type Item = crate::Result<Token<'source>>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -253,9 +256,7 @@ impl<'path, 'source> Iterator for Lexer<'path, 'source> {
                 State::Number => self
                     .parse_number(c_start)
                     .wrap_err("when parsing number literal"),
-                State::Ident => self
-                    .parse_ident(c_start)
-                    .wrap_err("when parsing identifier"),
+                State::Ident => Ok(self.parse_ident(c_start)),
                 State::Dot => self
                     .parse_dot(c_start)
                     .wrap_err("when parsing dot operator or number literal"),
@@ -263,18 +264,18 @@ impl<'path, 'source> Iterator for Lexer<'path, 'source> {
                     option_a,
                     option_b,
                     next_does_not_match,
-                } => self.parse_maybe_multi_character_operator(
+                } => Ok(self.parse_maybe_multi_character_operator(
                     c_start,
                     option_a,
                     option_b,
                     next_does_not_match,
-                ),
+                )),
             });
         }
     }
 }
 
-impl<'path, 'source> Lexer<'path, 'source> {
+impl<'source> Lexer<'_, 'source> {
     pub fn peek(&mut self) -> crate::Result<Option<&Token<'source>>> {
         if self.peeked.is_none() {
             self.peeked = self.next().transpose()?;
@@ -283,6 +284,13 @@ impl<'path, 'source> Lexer<'path, 'source> {
         Ok(self.peeked.as_ref())
     }
 
+    /// Reads the next token, and calls the given `matcher` function to ensure it is of the
+    /// expected type. If so, returns `Ok(token)`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `matcher` returns `false`, if there is no next token, or if the lexer
+    /// found an error when lexing the next token.
     pub fn expect<F>(&mut self, matcher: F, expected: &str) -> crate::Result<Token<'source>>
     where
         F: FnOnce(&'_ TokenKind) -> bool,
@@ -337,7 +345,7 @@ impl<'path, 'source> Lexer<'path, 'source> {
         self.rest = &self.rest[line_break..];
     }
 
-    fn parse_ident(&mut self, start: usize) -> crate::Result<Token<'source>> {
+    fn parse_ident(&mut self, start: usize) -> Token<'source> {
         let mut chars = self.rest.iter().peekable();
         while let Some(c) = chars.peek() {
             if matches!(c, b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_') {
@@ -382,13 +390,13 @@ impl<'path, 'source> Lexer<'path, 'source> {
             ident => TokenKind::Identifier(ident),
         };
 
-        Ok(Token {
+        Token {
             kind,
             span: Span {
                 start,
                 end: self.position,
             },
-        })
+        }
     }
 
     fn parse_string(
@@ -426,14 +434,13 @@ impl<'path, 'source> Lexer<'path, 'source> {
                     b'a' => b'\x07',
                     b'b' => b'\x08',
                     b'f' => b'\x0C',
-                    b'n' => b'\n',
+                    b'n' | b'\n' => b'\n',
                     b'r' => b'\r',
                     b't' => b'\t',
                     b'v' => b'\x0B',
                     b'\\' => b'\\',
                     b'"' => b'"',
                     b'\'' => b'\'',
-                    b'\n' => b'\n',
                     b'z' => {
                         // Skip whitespace
                         let mut skipped = 0;
@@ -498,7 +505,7 @@ impl<'path, 'source> Lexer<'path, 'source> {
                         }
 
                         // Lua allows any value up to 2^31 - 1, so account for up to 8 hex digits
-                        let max_hex_value: u64 = 0x7FFFFFFF >> 4;
+                        let max_hex_value: u64 = 0x7FFF_FFFF >> 4;
                         let mut hex: u64 = 0;
                         let mut n = 0;
                         let mut seen_close_brace = false;
@@ -538,7 +545,7 @@ impl<'path, 'source> Lexer<'path, 'source> {
                                 )));
                             }
 
-                            hex = (hex << 4) + c.to_digit(16).unwrap() as u64;
+                            hex = (hex << 4) + u64::from(c.to_digit(16).unwrap());
                             n += 1;
                         }
 
@@ -595,13 +602,13 @@ impl<'path, 'source> Lexer<'path, 'source> {
                         continue;
                     }
                     _ if c.is_ascii_digit() => {
-                        let mut i: u32 = c.to_digit(10).unwrap() as u32;
+                        let mut i: u32 = u32::from(c.to_digit(10).unwrap());
                         let mut n = 1;
                         for _ in 0..2 {
                             match chars.peek() {
                                 Some(c) if c.is_ascii_digit() => {
                                     // digits[i as usize] = *c;
-                                    i = i * 10 + c.to_digit(10).unwrap() as u32;
+                                    i = i * 10 + u32::from(c.to_digit(10).unwrap());
                                     n += 1;
                                     chars.next();
                                 }
@@ -612,7 +619,7 @@ impl<'path, 'source> Lexer<'path, 'source> {
                         // We'll advance for `c` below, so subtract 1 here
                         self.position += n - 1;
 
-                        if i > u8::MAX as u32 {
+                        if i > u32::from(u8::MAX) {
                             return Err(self.with_source_code(*lua_error!(
                                 labels = vec![LabeledSpan::at(
                                     self.position - n..self.position + 1,
@@ -718,7 +725,7 @@ impl<'path, 'source> Lexer<'path, 'source> {
                 if let Some(equals) = long_form {
                     format!("expected ]{}]", "=".repeat(equals as usize))
                 } else {
-                    format!("expected {}", starting_character)
+                    format!("expected {starting_character}")
                 }
             )],
             "unexpected end of string"
@@ -805,7 +812,7 @@ impl<'path, 'source> Lexer<'path, 'source> {
         option_a: MultiCharacterOperatorOption<'source>,
         option_b: Option<MultiCharacterOperatorOption<'source>>,
         next_does_not_match: TokenKind<'source>,
-    ) -> crate::Result<Token<'source>> {
+    ) -> Token<'source> {
         let mut chars = self.rest.iter().peekable();
         match (chars.peek(), option_b) {
             (Some(&next), Some(option_b)) if *next == option_b.next => {
@@ -814,13 +821,13 @@ impl<'path, 'source> Lexer<'path, 'source> {
                 self.position += width;
                 self.rest = &self.rest[width..];
 
-                Ok(Token {
+                Token {
                     kind: option_b.next_matches,
                     span: Span {
                         start,
                         end: self.position,
                     },
-                })
+                }
             }
             (Some(&next), _) if *next == option_a.next => {
                 chars.next();
@@ -828,21 +835,21 @@ impl<'path, 'source> Lexer<'path, 'source> {
                 self.position += width;
                 self.rest = &self.rest[width..];
 
-                Ok(Token {
+                Token {
                     kind: option_a.next_matches,
                     span: Span {
                         start,
                         end: self.position,
                     },
-                })
+                }
             }
-            _ => Ok(Token {
+            _ => Token {
                 kind: next_does_not_match,
                 span: Span {
                     start,
                     end: self.position,
                 },
-            }),
+            },
         }
     }
 }
@@ -866,7 +873,7 @@ mod tests {
             ("345", TokenKind::Integer(345)),
             ("5e3", TokenKind::Float(5000.0)),
             ("0xff", TokenKind::Integer(255)),
-            ("0xBEBADA", TokenKind::Integer(0xBEBADA)),
+            ("0xBEBADA", TokenKind::Integer(0x00BE_BADA)),
             ("3.0", TokenKind::Float(3.0)),
             #[allow(clippy::approx_constant)]
             ("3.1416", TokenKind::Float(3.1416)),
@@ -875,10 +882,13 @@ mod tests {
             #[allow(clippy::approx_constant)]
             ("0.31416E1", TokenKind::Float(3.1416)),
             ("34e1", TokenKind::Float(340.0)),
-            ("0x0.1E", TokenKind::Float(0.1171875)),
+            ("0x0.1E", TokenKind::Float(0.117_187_5)),
             ("0xA23p-4", TokenKind::Float(162.1875)),
             #[allow(clippy::approx_constant)]
-            ("0X1.921FB54442D18P+1", TokenKind::Float(3.141592653589793)),
+            (
+                "0X1.921FB54442D18P+1",
+                TokenKind::Float(3.141_592_653_589_793),
+            ),
             ("0x.0p-3", TokenKind::Float(0.0)),
         ] {
             let mut lexer = Lexer::new(b"test.lua", input.as_bytes());
@@ -938,7 +948,7 @@ mod tests {
             assert!(token.is_none(), "when parsing '{input}'");
 
             // Also check that we can find tokens after the comment
-            let input = format!("{} 3", input);
+            let input = format!("{input} 3");
             let mut lexer = Lexer::new(b"test.lua", input.as_bytes());
             let token = lexer.next().unwrap().unwrap();
             assert_eq!(token.kind, TokenKind::Integer(3));

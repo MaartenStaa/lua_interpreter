@@ -33,7 +33,7 @@ fn getenv(state: &mut LuaState) -> crate::Result<usize> {
     let name_os_str = OsString::from(String::from_utf8_lossy(name.as_slice()).to_string());
 
     if let Ok(value) = std::env::var(name_os_str) {
-        lua_return!(state; value.into())
+        lua_return!(state; value.into());
     }
     lua_return!(state)
 }

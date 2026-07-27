@@ -9,7 +9,7 @@ use crate::{
 pub(crate) struct Frame {
     pub(crate) locals: Vec<Local>,
     pub(crate) upvalues: HashMap<LuaString, Upvalue>,
-    parent_frame: *mut Frame,
+    parent: *mut Frame,
 }
 
 #[derive(Debug)]
@@ -69,21 +69,21 @@ impl Frame {
         Self {
             locals: vec![],
             upvalues: HashMap::new(),
-            parent_frame: std::ptr::null_mut(),
+            parent: std::ptr::null_mut(),
         }
     }
 
-    pub(crate) fn with_parent(parent_frame: *mut Self) -> Self {
+    pub(crate) fn with_parent(parent: *mut Self) -> Self {
         Self {
             locals: vec![],
             upvalues: HashMap::new(),
-            parent_frame,
+            parent,
         }
     }
 
     /// Try to resolve a name to either a local or an upvalue.
     pub(crate) fn resolve_name<'a>(&'a mut self, name: &LuaString) -> ResolvedName<'a> {
-        Self::resolve_name_inner(&self.locals, &mut self.upvalues, self.parent_frame, name)
+        Self::resolve_name_inner(&self.locals, &mut self.upvalues, self.parent, name)
     }
 
     /// Find a local by its name, returning its register index and a reference to it.
@@ -92,7 +92,7 @@ impl Frame {
     }
 
     fn resolve_upvalue(&mut self, name: &LuaString) -> Option<ResolvedUpvalue> {
-        Self::resolve_upvalue_inner(&self.locals, &mut self.upvalues, self.parent_frame, name)
+        Self::resolve_upvalue_inner(&self.locals, &mut self.upvalues, self.parent, name)
     }
 
     /// Add a new upvalue to this frame.
@@ -215,7 +215,7 @@ mod tests {
             depth: 0,
             span: None,
             attributes: 0,
-            local_var_index: 0,
+            var_index: 0,
         });
         assert!(matches!(
             frame1.resolve_name(&b"x".into()),
@@ -229,7 +229,7 @@ mod tests {
             depth: 0,
             span: None,
             attributes: 0,
-            local_var_index: 0,
+            var_index: 0,
         });
         assert!(matches!(
             frame1.resolve_name(&b"foo".into()),
@@ -277,7 +277,7 @@ mod tests {
             depth: 0,
             span: None,
             attributes: 0,
-            local_var_index: 0,
+            var_index: 0,
         });
 
         // From frame3, we can resolve the local `x` from the grandparent, its source is an upvalue

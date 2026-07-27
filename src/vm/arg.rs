@@ -56,6 +56,11 @@ impl LuaState {
 
     /// Ensure that the argument at the given index for the current function call exists. Like
     /// [`Self::arg`], but returns an error if the index is out of bounds.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the index is out of bounds, i.e. not enough arguments were passed to
+    /// the function call.
     pub fn ensure_arg(&self, index: usize) -> crate::Result<LuaValue> {
         let num_args = self.call_frame().num_args;
         if index >= num_args {
@@ -76,8 +81,18 @@ impl LuaState {
         self.get_ref(index + 1)
     }
 
+    /// Try to get the argument at the given index as a [`Callable`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the argument is not a callable type (i.e. a closure or a native
+    /// function), or if no argument value was passed at the given index.
+    ///
+    /// # Panics
+    ///
+    /// Panics when failing to read the read-write lock of the argument object.
     pub fn arg_as_callable(&self, index: usize) -> crate::Result<Callable> {
-        match self.try_arg(0) {
+        match self.try_arg(index) {
             Some(v) if v.is_object() => {
                 let o = &*unsafe { v.as_object() }.read().unwrap();
                 let r: Result<Callable, _> = o.try_into();
@@ -119,6 +134,10 @@ impl LuaState {
     /// Try to get the argument at the given index for the current function call as an integer. If
     /// the argument is a float, it will be converted to an integer if possible. Returns an error
     /// if the argument is not a number or cannot be converted to an integer.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the argument is not a number or cannot be converted to an integer.
     pub fn arg_as_integer(&self, index: usize) -> crate::Result<i64> {
         self.arg_as_number(index)?
             .integer_repr()
@@ -130,6 +149,10 @@ impl LuaState {
     /// [`Option::None`] if the index is out of bounds (>= the number of passed arguments), or if
     /// the argument is [`LuaValue::NIL`]. Returns an error if the argument is not a number or
     /// cannot be converted to an integer.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the argument is not a number or cannot be converted to an integer.
     pub fn try_arg_as_integer(&self, index: usize) -> crate::Result<Option<i64>> {
         match self.try_arg_as_number(index)? {
             Some(n) => Ok(Some(n.integer_repr().map_err(|err| {
@@ -147,6 +170,11 @@ macro_rules! impl_arg_type {
                 /// Get the argument at the given index for the current function call, and convert
                 /// it to the given type. Returns an error if the argument is not of the expected
                 /// type.
+                ///
+                /// # Errors
+                ///
+                /// Returns an error if the argument is not of the expected type, or if no value was
+                /// passed (i.e. `index` is greater than or equal to the number of arguments passed).
                 pub fn [<arg_as_ $type>](&self, index: usize) -> crate::Result<$owned_result> {
                     match self.try_arg(index) {
                         Some(v) if v.[<is_ $type>]() => Ok(unsafe { v.[<$conversion _ $type>]() }),
@@ -161,6 +189,10 @@ macro_rules! impl_arg_type {
                 /// convert it to the given type. Returns [`Option::None`] if the index is out of
                 /// bounds (>= the number of passed arguments), or if the argument is
                 /// [`LuaValue::NIL`]. Returns an error if the argument is not of the expected type.
+                ///
+                /// # Errors
+                ///
+                /// Returns an error if the argument is not of the expected type.
                 pub fn [<try_arg_as_ $type>](&self, index: usize) -> crate::Result<Option<$owned_result>> {
                     match self.try_arg(index) {
                         Some(v) if v.[<is_ $type>]() => Ok(Some(unsafe { v.[<$conversion _ $type>]() })),
@@ -203,6 +235,15 @@ macro_rules! impl_arg_object_type {
                 /// Get the argument at the given index for the current function call, and convert
                 /// it to the given type. Returns an error if the argument is not of the expected
                 /// type.
+                ///
+                /// # Errors
+                ///
+                /// Returns an error if the argument is not of the expected type, or if no value was
+                /// passed (i.e. `index` is greater than or equal to the number of arguments passed).
+                ///
+                /// # Panics
+                ///
+                /// Panics when failing to read the read-write lock of the argument object.
                 pub fn [<with_arg_as_ $name>]<F, R>(&self, index: usize, callback: F) -> crate::Result<R>
                 where
                     F: FnOnce(&$owned_result) -> crate::Result<R>
@@ -222,6 +263,15 @@ macro_rules! impl_arg_object_type {
                 /// Get the argument at the given index for the current function call, and convert
                 /// it to the given type. Returns an error if the argument is not of the expected
                 /// type.
+                ///
+                /// # Errors
+                ///
+                /// Returns an error if the argument is not of the expected type, or if no value was
+                /// passed (i.e. `index` is greater than or equal to the number of arguments passed).
+                ///
+                /// # Panics
+                ///
+                /// Panics when failing to read the read-write lock of the argument object.
                 pub fn [<with_arg_as_mut_ $name>]<F, R>(&self, index: usize, callback: F) -> crate::Result<R>
                 where
                     F: FnOnce(&mut $owned_result) -> crate::Result<R>
@@ -241,6 +291,14 @@ macro_rules! impl_arg_object_type {
                 /// Get the argument at the given index for the current function call, and convert
                 /// it to the given type. Returns an error if the argument is not of the expected
                 /// type.
+                ///
+                /// # Errors
+                ///
+                /// Returns an error if the argument is not of the expected type.
+                ///
+                /// # Panics
+                ///
+                /// Panics when failing to read the read-write lock of the argument object.
                 pub fn [<try_with_arg_as_ $name>]<F, R>(&self, index: usize, callback: F) -> crate::Result<Option<R>>
                 where
                     F: FnOnce(&$owned_result) -> crate::Result<R>
@@ -261,6 +319,14 @@ macro_rules! impl_arg_object_type {
                 /// Get the argument at the given index for the current function call, and convert
                 /// it to the given type. Returns an error if the argument is not of the expected
                 /// type.
+                ///
+                /// # Errors
+                ///
+                /// Returns an error if the argument is not of the expected type.
+                ///
+                /// # Panics
+                ///
+                /// Panics when failing to read the read-write lock of the argument object.
                 pub fn [<try_with_arg_as_mut_ $name>]<F, R>(&self, index: usize, callback: F) -> crate::Result<Option<R>>
                 where
                     F: FnOnce(&mut $owned_result) -> crate::Result<R>

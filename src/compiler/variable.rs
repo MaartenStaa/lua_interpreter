@@ -11,7 +11,7 @@ pub(crate) struct Local {
     pub(crate) depth: u8,
     pub(crate) span: Option<Span>,
     pub(crate) attributes: u8,
-    pub(crate) local_var_index: usize,
+    pub(crate) var_index: usize,
 }
 
 impl Local {

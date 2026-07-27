@@ -168,9 +168,9 @@ impl CodePanel {
     fn move_focus(&mut self, delta: isize) {
         let max = self.total_rows().saturating_sub(1);
         if delta > 0 {
-            self.focus_line = (self.focus_line + delta as usize).min(max);
+            self.focus_line = (self.focus_line + delta.cast_unsigned()).min(max);
         } else {
-            self.focus_line = self.focus_line.saturating_sub((-delta) as usize);
+            self.focus_line = self.focus_line.saturating_sub((-delta).cast_unsigned());
         }
         self.ensure_row_visible(self.focus_line);
     }

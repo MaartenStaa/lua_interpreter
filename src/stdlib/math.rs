@@ -235,7 +235,7 @@ fn random(state: &mut LuaState) -> crate::Result<usize> {
         ));
     }
     if m == n {
-        lua_return!(state; LuaValue::from_integer(m))
+        lua_return!(state; LuaValue::from_integer(m));
     }
 
     lua_return!(state; LuaValue::from_integer(
@@ -308,7 +308,7 @@ fn tointeger(state: &mut LuaState) -> crate::Result<usize> {
         Some(v) if v.is_string() => {
             let s = String::from_utf8_lossy(unsafe { v.as_string() });
             if let Ok(i) = s.parse::<i64>() {
-                lua_return!(state; LuaValue::from_integer(i))
+                lua_return!(state; LuaValue::from_integer(i));
             }
             lua_return!(state)
         }

@@ -62,9 +62,9 @@ impl ListState {
         }
         let old = self.focus;
         if delta > 0 {
-            self.focus = (self.focus + delta as usize).min(len - 1);
+            self.focus = (self.focus + delta.cast_unsigned()).min(len - 1);
         } else {
-            self.focus = self.focus.saturating_sub((-delta) as usize);
+            self.focus = self.focus.saturating_sub((-delta).cast_unsigned());
         }
         self.focus != old
     }
@@ -306,10 +306,10 @@ impl CallStackPanel {
     }
 
     pub(crate) fn update(&mut self, state: &VmState) {
-        if let Some(idx) = self.selected_frame {
-            if idx >= state.call_stack.len() {
-                self.selected_frame = None;
-            }
+        if let Some(idx) = self.selected_frame
+            && idx >= state.call_stack.len()
+        {
+            self.selected_frame = None;
         }
         self.entries = state
             .call_stack

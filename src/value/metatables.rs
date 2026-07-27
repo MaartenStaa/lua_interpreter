@@ -40,6 +40,12 @@ pub(crate) static NAME_KEY: LazyLock<LuaValue> = LazyLock::new(|| "__name".into(
 pub(crate) static TOSTRING_KEY: LazyLock<LuaValue> = LazyLock::new(|| "__tostring".into());
 
 impl LuaValue {
+    /// Get the metatable for this value, if any. Also resolves a type's global metatable, if
+    /// available. For example, for a string value, would return the metatable containing string methods.
+    ///
+    /// # Panics
+    ///
+    /// Panics when failing to acquire a read lock for this value's object.
     pub fn get_metatable(&self) -> Option<LuaValue> {
         if self.is_bool() {
             Some(GLOBAL_BOOLEAN_METATABLE.clone())
@@ -54,6 +60,15 @@ impl LuaValue {
         }
     }
 
+    /// Set the metatable for this object value.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if this value is not an object, of an upvalue that dereferences to an object.
+    ///
+    /// # Panics
+    ///
+    /// Panics when failing to acquire a write lock for this value's object or upvalue.
     pub fn set_metatable(&mut self, metatable: Option<LuaValue>) -> crate::Result<()> {
         match self {
             v if v.is_object() => unsafe { v.as_object() }
@@ -85,6 +100,11 @@ impl LuaObject {
         }
     }
 
+    /// Set the metatable for this object value.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if this object is not a table or full userdata.
     pub fn set_metatable(&mut self, metatable: Option<LuaValue>) -> crate::Result<()> {
         match self {
             LuaObject::Table(t) => {

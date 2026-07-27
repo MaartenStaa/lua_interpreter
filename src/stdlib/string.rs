@@ -186,7 +186,7 @@ fn byte(state: &mut LuaState) -> crate::Result<usize> {
     }
 
     for (r, i) in (i..=j).enumerate() {
-        state.set(r, (s[i as usize - 1] as i64).into());
+        state.set(r, i64::from(s[i as usize - 1]).into());
     }
     Ok((j - i + 1) as usize)
 }
@@ -227,7 +227,7 @@ fn find(state: &mut LuaState) -> crate::Result<usize> {
     };
 
     if init > s.len() as i64 + 1 {
-        lua_return!(state; LuaValue::NIL)
+        lua_return!(state; LuaValue::NIL);
     }
 
     if pattern.is_empty() {
@@ -346,7 +346,7 @@ fn gmatch_iter(state: &mut LuaState) -> crate::Result<usize> {
                             gmatch_state.last_match_empty = false;
                         }
                         gmatch_state.pos = abs_end;
-                        lua_return!(state; LuaValue::from_string(&gmatch_state.s[abs_start..abs_end]))
+                        lua_return!(state; LuaValue::from_string(&gmatch_state.s[abs_start..abs_end]));
                     }
                     lua_return!(state)
                 }
@@ -382,7 +382,7 @@ fn gmatch_iter(state: &mut LuaState) -> crate::Result<usize> {
                             }
                             return Ok(regex.captures_len() - 1);
                         }
-                        lua_return!(state; LuaValue::from_string(full_match.as_bytes()))
+                        lua_return!(state; LuaValue::from_string(full_match.as_bytes()));
                     }
                     lua_return!(state)
                 }
@@ -463,7 +463,7 @@ fn r#match(state: &mut LuaState) -> crate::Result<usize> {
     match pattern {
         LuaPattern::Plain(pattern) => {
             if let Some(start) = s.find(&pattern) {
-                lua_return!(state; LuaValue::from_string(&s[start..start + pattern.len()]))
+                lua_return!(state; LuaValue::from_string(&s[start..start + pattern.len()]));
             }
             lua_return!(state)
         }
@@ -472,9 +472,9 @@ fn r#match(state: &mut LuaState) -> crate::Result<usize> {
 
             if let Some(captures) = captures {
                 if let Some(capture) = captures.get(0) {
-                    lua_return!(state; LuaValue::from_string(capture.as_bytes()))
+                    lua_return!(state; LuaValue::from_string(capture.as_bytes()));
                 }
-                lua_return!(state; s.into())
+                lua_return!(state; s.into());
             }
             lua_return!(state)
         }
@@ -487,7 +487,7 @@ fn rep(state: &mut LuaState) -> crate::Result<usize> {
     let sep = state.try_arg_as_string(2)?;
     let sep = sep.as_ref().map_or(b"".as_slice(), |s| s.as_slice());
     if n < 1 {
-        lua_return!(state; LuaValue::from_string(LuaString::new()))
+        lua_return!(state; LuaValue::from_string(LuaString::new()));
     }
 
     let mut result = s.clone();
@@ -563,7 +563,12 @@ fn pack(state: &mut LuaState) -> crate::Result<usize> {
                     }
                 }
 
-                result.extend(pack_int(value as u64, is_little_endian, size, false));
+                result.extend(pack_int(
+                    value.cast_unsigned(),
+                    is_little_endian,
+                    size,
+                    false,
+                ));
             }
             PackOption::Float => {
                 let number = state.arg_as_number(param)?;
@@ -724,7 +729,7 @@ fn sub(state: &mut LuaState) -> crate::Result<usize> {
     };
 
     if i > j {
-        lua_return!(state; LuaValue::from_string(LuaString::new()))
+        lua_return!(state; LuaValue::from_string(LuaString::new()));
     }
 
     lua_return!(state; LuaValue::from_string(
@@ -825,7 +830,7 @@ fn unpack(state: &mut LuaState) -> crate::Result<usize> {
                 let mut buff = [0u8; size_of::<f32>()];
                 copy_bytes_fix_endian(&mut buff, &s[pos..], is_little_endian);
                 let float = f32::from_ne_bytes(buff);
-                result!(LuaNumber::Float(float as f64).into());
+                result!(LuaNumber::Float(f64::from(float)).into());
                 pos += size;
             }
             PackOption::Double | PackOption::LuaNumber => {

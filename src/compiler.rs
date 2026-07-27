@@ -248,7 +248,7 @@ impl Compiler {
 
         let end_ip = self.chunk.get_current_addr() as usize;
         for local in self.frame.locals.drain(..) {
-            self.chunk.local_vars[local.local_var_index].end_ip = end_ip;
+            self.chunk.local_vars[local.var_index].end_ip = end_ip;
         }
 
         // Get rid of the root frame, to resolve any pending gotos and such.
@@ -2500,7 +2500,7 @@ impl Compiler {
                 .is_some_and(|local| local.depth > self.scope_depth)
         {
             let local = self.frame.locals.pop().unwrap();
-            self.chunk.local_vars[local.local_var_index].end_ip = end_ip;
+            self.chunk.local_vars[local.var_index].end_ip = end_ip;
         }
 
         // If we have any gotos still pending, they're going to jump out of this scope. So we need
@@ -2584,7 +2584,7 @@ impl Compiler {
             depth: self.scope_depth,
             span,
             attributes,
-            local_var_index,
+            var_index: local_var_index,
         };
         self.frame.locals.push(local);
 

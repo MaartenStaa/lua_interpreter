@@ -39,7 +39,7 @@ impl ByteSliceExt for i64 {
             let digit = byte
                 .to_digit(radix)
                 .ok_or_else(|| lua_error!("invalid digit '{:0x}", byte))?;
-            result = result * radix as i64 + digit as i64;
+            result = result * i64::from(radix) + i64::from(digit);
         }
 
         Ok(result)

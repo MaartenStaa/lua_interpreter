@@ -102,10 +102,10 @@ fn getupvalue(state: &mut LuaState) -> crate::Result<usize> {
         lua_return!(state;
             name.into(),
             upvalue.read().unwrap().clone(),
-        )
-    } else {
-        Ok(0)
+        );
     }
+
+    Ok(0)
 }
 
 fn setmetatable(state: &mut LuaState) -> crate::Result<usize> {
@@ -124,9 +124,9 @@ fn upvalueid(state: &mut LuaState) -> crate::Result<usize> {
         } else if let Some(upvalue) = &closure.upvalues.get(&(n as usize)) {
             let id = (&*upvalue.read().unwrap()) as *const _ as i64;
             // TODO: This should be a "light userdata" value
-            lua_return!(state; id.into())
-        } else {
-            lua_return!(state)
+            lua_return!(state; id.into());
         }
+
+        lua_return!(state)
     })
 }

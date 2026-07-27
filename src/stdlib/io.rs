@@ -266,7 +266,7 @@ fn close(state: &mut LuaState) -> crate::Result<usize> {
         })?
         .is_some()
     {
-        lua_return!(state; LuaValue::from_bool(true))
+        lua_return!(state; LuaValue::from_bool(true));
     }
 
     let default = (*DEFAULT_OUTPUT.write().unwrap()).clone();
