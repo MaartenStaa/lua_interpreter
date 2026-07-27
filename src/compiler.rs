@@ -289,13 +289,19 @@ impl Compiler {
                 .collect()
         };
 
-        if self.print_bytecode {
-            debug::print_instructions(&self.chunk);
-        }
+        let chunk_index = if self.print_bytecode {
+            let chunk_index = self
+                .global_state
+                .write()
+                .unwrap()
+                .add_chunk(self.chunk.clone())?;
+            debug::print_instructions(&self.chunk, chunk_index);
+            chunk_index
+        } else {
+            self.global_state.write().unwrap().add_chunk(self.chunk)?
+        };
 
-        Ok(CompiledChunk {
-            chunk_index: self.global_state.write().unwrap().add_chunk(self.chunk)?,
-        })
+        Ok(CompiledChunk { chunk_index })
     }
 
     /// Push bytecode into the current chunk.
