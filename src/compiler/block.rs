@@ -1,6 +1,6 @@
 use crate::{error::lua_error, token::Span, value::LuaString, vm::JumpAddr};
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub(crate) struct BlockOptions {
     pub(crate) is_loop: bool,
     pub(crate) loop_scope_depth: u8,

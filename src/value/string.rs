@@ -1,26 +1,47 @@
 use std::{
+    borrow::Cow,
     fmt::{Debug, Display},
     iter::Copied,
     ops::{Deref, DerefMut},
 };
 
-use crate::{LuaState, error::lua_error, stdlib};
+use crate::{
+    LuaState,
+    error::lua_error,
+    macros::{lua_return, native_function},
+    stdlib,
+};
 
-use super::{LuaNumber, LuaObject, LuaTable, LuaValue, metatables};
+use super::{LuaNumber, LuaTable, LuaValue, metatables};
 
 #[derive(Clone, PartialEq, Eq, Hash, Default, PartialOrd)]
 pub struct LuaString(Vec<u8>);
 
 impl LuaString {
+    #[must_use]
     pub const fn new() -> Self {
         LuaString(Vec::new())
+    }
+
+    #[must_use]
+    pub fn from_bytes(bytes: Vec<u8>) -> Self {
+        LuaString(bytes)
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> Cow<'_, str> {
+        String::from_utf8_lossy(&self.0)
+    }
+
+    pub(crate) fn into_inner(self) -> Vec<u8> {
+        self.0
     }
 }
 
 impl Debug for LuaString {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match String::from_utf8(self.0.clone()) {
-            Ok(s) => write!(f, "{:?}", s),
+            Ok(s) => write!(f, "{s:?}"),
             Err(_) => write!(f, "{:?} (lossy)", String::from_utf8_lossy(&self.0)),
         }
     }
@@ -29,7 +50,7 @@ impl Debug for LuaString {
 impl Display for LuaString {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match String::from_utf8(self.0.clone()) {
-            Ok(s) => write!(f, "{}", s),
+            Ok(s) => write!(f, "{s}"),
             Err(_) => write!(f, "{}", String::from_utf8_lossy(&self.0)),
         }
     }
@@ -56,6 +77,18 @@ impl From<&[u8]> for LuaString {
 impl<const T: usize> From<&[u8; T]> for LuaString {
     fn from(value: &[u8; T]) -> Self {
         LuaString(value.to_vec())
+    }
+}
+
+impl From<Cow<'_, [u8]>> for LuaString {
+    fn from(value: Cow<'_, [u8]>) -> Self {
+        LuaString(value.into_owned())
+    }
+}
+
+impl From<Cow<'_, str>> for LuaString {
+    fn from(value: Cow<'_, str>) -> Self {
+        LuaString(value.into_owned().into_bytes())
     }
 }
 
@@ -108,50 +141,17 @@ pub(crate) fn get_string_metatable() -> LuaTable {
 
     metatable.insert(metatables::INDEX_KEY.clone(), stdlib::string());
 
-    metatable.insert(
-        metatables::ADD_KEY.clone(),
-        LuaObject::NativeFunction("add", add).into(),
-    );
-    metatable.insert(
-        metatables::SUB_KEY.clone(),
-        LuaObject::NativeFunction("sub", sub).into(),
-    );
-    metatable.insert(
-        metatables::MUL_KEY.clone(),
-        LuaObject::NativeFunction("mul", mul).into(),
-    );
-    metatable.insert(
-        metatables::DIV_KEY.clone(),
-        LuaObject::NativeFunction("div", div).into(),
-    );
-    metatable.insert(
-        metatables::MOD_KEY.clone(),
-        LuaObject::NativeFunction("mod", mod_).into(),
-    );
-    metatable.insert(
-        metatables::POW_KEY.clone(),
-        LuaObject::NativeFunction("pow", pow).into(),
-    );
-    metatable.insert(
-        metatables::UNM_KEY.clone(),
-        LuaObject::NativeFunction("unm", unm).into(),
-    );
-    metatable.insert(
-        metatables::IDIV_KEY.clone(),
-        LuaObject::NativeFunction("idiv", idiv).into(),
-    );
-    metatable.insert(
-        metatables::BAND_KEY.clone(),
-        LuaObject::NativeFunction("band", band).into(),
-    );
-    metatable.insert(
-        metatables::BOR_KEY.clone(),
-        LuaObject::NativeFunction("bor", bor).into(),
-    );
-    metatable.insert(
-        metatables::BXOR_KEY.clone(),
-        LuaObject::NativeFunction("bxor", bxor).into(),
-    );
+    metatable.insert(metatables::ADD_KEY.clone(), native_function!(add));
+    metatable.insert(metatables::SUB_KEY.clone(), native_function!(sub));
+    metatable.insert(metatables::MUL_KEY.clone(), native_function!(mul));
+    metatable.insert(metatables::DIV_KEY.clone(), native_function!(div));
+    metatable.insert(metatables::MOD_KEY.clone(), native_function!("mod", mod_));
+    metatable.insert(metatables::POW_KEY.clone(), native_function!(pow));
+    metatable.insert(metatables::UNM_KEY.clone(), native_function!(unm));
+    metatable.insert(metatables::IDIV_KEY.clone(), native_function!(idiv));
+    metatable.insert(metatables::BAND_KEY.clone(), native_function!(band));
+    metatable.insert(metatables::BOR_KEY.clone(), native_function!(bor));
+    metatable.insert(metatables::BXOR_KEY.clone(), native_function!(bxor));
 
     metatable
 }
@@ -160,19 +160,20 @@ pub(crate) fn coerce_number(value: LuaValue) -> crate::Result<LuaNumber> {
     // TODO: This should follow the same string parsing used in the lexer, with the addition of
     // trimming whitespace, and allowing a mark for the current locale (which is not part of the
     // grammar for lexing).
-    match value {
-        LuaValue::Number(n) => Ok(n),
-        LuaValue::String(s) => {
-            let s = String::from_utf8_lossy(&s);
-            match s.trim().parse::<i64>() {
-                Ok(n) => Ok(LuaNumber::Integer(n)),
-                Err(_) => match s.trim().parse::<f64>() {
-                    Ok(n) => Ok(LuaNumber::Float(n)),
-                    Err(_) => Err(lua_error!("expected number")),
-                },
-            }
+    if value.is_number() {
+        Ok(unsafe { value.as_number() })
+    } else if value.is_string() {
+        let bytes = unsafe { value.into_string() };
+        let s = String::from_utf8_lossy(&bytes);
+        match s.trim().parse::<i64>() {
+            Ok(n) => Ok(LuaNumber::Integer(n)),
+            Err(_) => match s.trim().parse::<f64>() {
+                Ok(n) => Ok(LuaNumber::Float(n)),
+                Err(_) => Err(lua_error!("expected number")),
+            },
         }
-        _ => Err(lua_error!("expected number")),
+    } else {
+        Err(lua_error!("expected number"))
     }
 }
 
@@ -190,72 +191,72 @@ fn value_numbers(state: &mut LuaState) -> crate::Result<(LuaNumber, LuaNumber)> 
     Ok((a, b))
 }
 
-fn add(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+fn add(state: &mut LuaState) -> crate::Result<usize> {
     let (a, b) = value_numbers(state)?;
 
-    Ok(vec![LuaValue::Number(a + b)])
+    lua_return!(state; LuaValue::from_number(a + b))
 }
 
-fn sub(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+fn sub(state: &mut LuaState) -> crate::Result<usize> {
     let (a, b) = value_numbers(state)?;
 
-    Ok(vec![LuaValue::Number(a - b)])
+    lua_return!(state; LuaValue::from_number(a - b))
 }
 
-fn mul(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+fn mul(state: &mut LuaState) -> crate::Result<usize> {
     let (a, b) = value_numbers(state)?;
 
-    Ok(vec![LuaValue::Number(a * b)])
+    lua_return!(state; LuaValue::from_number(a * b))
 }
 
-fn div(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+fn div(state: &mut LuaState) -> crate::Result<usize> {
     let (a, b) = value_numbers(state)?;
 
-    Ok(vec![LuaValue::Number(a / b)])
+    lua_return!(state; LuaValue::from_number(a / b))
 }
 
-fn mod_(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+fn mod_(state: &mut LuaState) -> crate::Result<usize> {
     let (a, b) = value_numbers(state)?;
 
-    Ok(vec![LuaValue::Number(a % b)])
+    lua_return!(state; LuaValue::from_number(a % b))
 }
 
-fn pow(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+fn pow(state: &mut LuaState) -> crate::Result<usize> {
     let (a, b) = value_numbers(state)?;
 
-    Ok(vec![LuaValue::Number(a.pow(&b))])
+    lua_return!(state; LuaValue::from_number(a.pow(&b)))
 }
 
-fn unm(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+fn unm(state: &mut LuaState) -> crate::Result<usize> {
     if state.num_args() != 1 {
         return Err(lua_error!("__unm expects 1 argument"));
     }
 
     let a = coerce_number(state.arg(0))?;
 
-    Ok(vec![LuaValue::Number(-a)])
+    lua_return!(state; LuaValue::from_number(-a))
 }
 
-fn idiv(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+fn idiv(state: &mut LuaState) -> crate::Result<usize> {
     let (a, b) = value_numbers(state)?;
 
-    Ok(vec![LuaValue::Number(a.idiv(&b))])
+    lua_return!(state; LuaValue::from_number(a.idiv(&b)))
 }
 
-fn band(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+fn band(state: &mut LuaState) -> crate::Result<usize> {
     let (a, b) = value_numbers(state)?;
 
-    Ok(vec![LuaValue::Number((a & b)?)])
+    lua_return!(state; LuaValue::from_number((a & b)?))
 }
 
-fn bor(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+fn bor(state: &mut LuaState) -> crate::Result<usize> {
     let (a, b) = value_numbers(state)?;
 
-    Ok(vec![LuaValue::Number((a | b)?)])
+    lua_return!(state; LuaValue::from_number((a | b)?))
 }
 
-fn bxor(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+fn bxor(state: &mut LuaState) -> crate::Result<usize> {
     let (a, b) = value_numbers(state)?;
 
-    Ok(vec![LuaValue::Number((a ^ b)?)])
+    lua_return!(state; LuaValue::from_number((a ^ b)?))
 }

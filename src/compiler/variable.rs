@@ -7,9 +7,11 @@ use crate::{
 #[derive(Debug, Clone)]
 pub(crate) struct Local {
     pub(crate) name: LuaString,
+    pub(crate) register: u8,
     pub(crate) depth: u8,
     pub(crate) span: Option<Span>,
     pub(crate) attributes: u8,
+    pub(crate) var_index: usize,
 }
 
 impl Local {

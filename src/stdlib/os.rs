@@ -4,62 +4,45 @@ use std::{ffi::OsString, sync::LazyLock};
 
 use crate::{
     error::lua_error,
+    macros::{lua_return, native_function},
     state::LuaState,
-    value::{LuaObject, LuaTable, LuaValue},
+    value::{LuaTable, LuaValue},
 };
 
 pub static OS: LazyLock<LuaValue> = LazyLock::new(|| {
     let mut os = LuaTable::new();
 
-    os.insert(
-        "clock".into(),
-        LuaObject::NativeFunction("os.clock", clock).into(),
-    );
-    os.insert(
-        "getenv".into(),
-        LuaObject::NativeFunction("os.getenv", getenv).into(),
-    );
-    os.insert(
-        "setlocale".into(),
-        LuaObject::NativeFunction("setlocale", setlocale).into(),
-    );
-    os.insert(
-        "time".into(),
-        LuaObject::NativeFunction("os.time", time).into(),
-    );
-    os.insert(
-        "tmpname".into(),
-        LuaObject::NativeFunction("tmpname", tmpname).into(),
-    );
-    os.insert(
-        "tmpname".into(),
-        LuaObject::NativeFunction("tmpname", tmpname).into(),
-    );
+    os.insert("clock".into(), native_function!("os"; clock));
+    os.insert("getenv".into(), native_function!("os"; getenv));
+    os.insert("setlocale".into(), native_function!("os"; setlocale));
+    os.insert("time".into(), native_function!("os"; time));
+    os.insert("tmpname".into(), native_function!("os"; tmpname));
+    os.insert("tmpname".into(), native_function!("os"; tmpname));
 
     os.into()
 });
 
 pub static CLOCK_START: LazyLock<ProcessTime> = LazyLock::new(ProcessTime::now);
 
-fn clock(_: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
-    Ok(vec![CLOCK_START.elapsed().as_secs_f64().into()])
+fn clock(state: &mut LuaState) -> crate::Result<usize> {
+    lua_return!(state; CLOCK_START.elapsed().as_secs_f64().into())
 }
 
-fn getenv(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+fn getenv(state: &mut LuaState) -> crate::Result<usize> {
     let name = state.arg_as_string(0)?;
     let name_os_str = OsString::from(String::from_utf8_lossy(name.as_slice()).to_string());
 
-    match std::env::var(name_os_str) {
-        Ok(value) => Ok(vec![value.into()]),
-        Err(_) => Ok(vec![LuaValue::Nil]),
+    if let Ok(value) = std::env::var(name_os_str) {
+        lua_return!(state; value.into());
     }
+    lua_return!(state)
 }
 
-fn setlocale(_: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
-    Ok(vec![LuaValue::Nil])
+fn setlocale(state: &mut LuaState) -> crate::Result<usize> {
+    lua_return!(state)
 }
 
-fn time(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+fn time(state: &mut LuaState) -> crate::Result<usize> {
     if state.num_args() > 0 {
         return Err(lua_error!(
             "passing arguments to 'os.time' is not yet supported"
@@ -69,10 +52,10 @@ fn time(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
     let epoch = chrono::DateTime::UNIX_EPOCH;
     let now = chrono::Utc::now();
 
-    Ok(vec![(now - epoch).num_seconds().into()])
+    lua_return!(state; (now - epoch).num_seconds().into())
 }
 
-fn tmpname(_: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+fn tmpname(state: &mut LuaState) -> crate::Result<usize> {
     let rng = rand::rng();
     let random_string: String = rng
         .sample_iter(distr::Alphanumeric)
@@ -81,7 +64,7 @@ fn tmpname(_: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
         .collect();
 
     let tmpdir = std::env::temp_dir();
-    let tmpname = tmpdir.join(format!("lua-{}", random_string));
+    let tmpname = tmpdir.join(format!("lua-{random_string}"));
 
-    Ok(vec![tmpname.to_string_lossy().to_string().into()])
+    lua_return!(state; tmpname.to_string_lossy().to_string().into())
 }

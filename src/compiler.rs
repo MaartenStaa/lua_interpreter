@@ -10,11 +10,11 @@ use crate::{
     GlobalState, LuaState,
     ast::{
         BinaryOperator, Block, Expression, Field, ForCondition, FunctionCall, FunctionDef, Literal,
-        LocalAttribute, Name, Number, NumericFor, PrefixExpression, Statement, TableConstructor,
-        TokenTree, UnaryOperator, Variable,
+        LocalAttribute, Name, Number, NumericFor, PrefixExpression, ReturnStatement, Statement,
+        TableConstructor, TokenTree, UnaryOperator, Variable,
     },
     bytecode::{Bytecode, JumpToUndecidedAddress},
-    chunk::{Chunk, ChunkUpValue},
+    chunk::{Chunk, ChunkUpValue, LocalVarInfo},
     compiler::{
         block::{BlockOptions, BlockResult, BreakJump, NewLocalsAfterGoto},
         expression::{ExpressionListLength, ExpressionMode, ExpressionResult, VariableMode},
@@ -22,11 +22,12 @@ use crate::{
         goto::{Goto, Label},
         variable::{Local, Upvalue},
     },
-    error::{RuntimeError, lua_error},
+    debug,
+    error::lua_error,
     parser::Parser,
     token::Span,
-    value::{LuaConst, LuaNumber, LuaString, LuaTable, LuaVariableAttribute},
-    vm::{ConstIndex, JumpAddr},
+    value::{IntegerRepr, LuaConst, LuaNumber, LuaString, LuaTable, LuaVariableAttribute},
+    vm::{ChunkIndex, ConstIndex, JumpAddr},
 };
 
 pub(crate) use expression::ExpressionResultMode;
@@ -100,11 +101,12 @@ pub struct Compiler {
     scope_starting_registers: Vec<u8>,
     register_index: u8,
     max_registers: u8,
+    print_bytecode: bool,
 }
 
 #[derive(Debug)]
 pub struct CompiledChunk {
-    pub chunk_index: ConstIndex,
+    pub chunk_index: ChunkIndex,
 }
 
 impl Compiler {
@@ -116,12 +118,13 @@ impl Compiler {
         source: Arc<Vec<u8>>,
         parameters: Vec<TokenTree<Name>>,
         has_varargs: bool,
+        print_bytecode: bool,
     ) -> Self {
         let mut result = Self {
             global_state,
             chunk: Chunk::new(
                 chunk_name,
-                filename.map(|f| f.into()),
+                filename.map(std::convert::Into::into),
                 source,
                 parameters.len() as u8,
                 has_varargs,
@@ -136,8 +139,9 @@ impl Compiler {
             scope_id_counter: 1,
             scope_ids: vec![0],
             scope_starting_registers: vec![0],
-            register_index: 0,
+            register_index: 1,
             max_registers: 0,
+            print_bytecode,
         };
 
         // Every main chunk has an `_ENV` upvalue.
@@ -166,12 +170,13 @@ impl Compiler {
         parameters: Vec<TokenTree<Name>>,
         has_varargs: bool,
         parent_frame: std::ptr::NonNull<Frame>,
+        print_bytecode: bool,
     ) -> Self {
         let mut result = Self {
             global_state,
             chunk: Chunk::new(
                 chunk_name,
-                filename.map(|f| f.into()),
+                filename.map(std::convert::Into::into),
                 source,
                 parameters.len() as u8,
                 has_varargs,
@@ -186,8 +191,9 @@ impl Compiler {
             scope_id_counter: 1,
             scope_ids: vec![0],
             scope_starting_registers: vec![0],
-            register_index: 0,
+            register_index: 1,
             max_registers: 0,
+            print_bytecode,
         };
 
         for param in parameters {
@@ -217,6 +223,7 @@ impl Compiler {
         // We might have some initial locals from function args
         let initial_locals = self.frame.locals.len();
         let has_return = ast.node.return_statement.is_some();
+        let end_span = ast.node.end_span;
 
         self.compile_block(
             ast,
@@ -230,7 +237,7 @@ impl Compiler {
 
         if !has_return {
             // Add implicit final return
-            self.push_bytecode(Bytecode::Return0, None);
+            self.push_bytecode(Bytecode::Return0, end_span);
         }
 
         debug_assert!(
@@ -238,6 +245,11 @@ impl Compiler {
             "all locals should be popped, found {:?}",
             self.frame.locals
         );
+
+        let end_ip = self.chunk.get_current_addr() as usize;
+        for local in self.frame.locals.drain(..) {
+            self.chunk.local_vars[local.var_index].end_ip = end_ip;
+        }
 
         // Get rid of the root frame, to resolve any pending gotos and such.
         if let Some((name, goto)) = self
@@ -260,7 +272,7 @@ impl Compiler {
         let mut chunk_upvalues: Vec<_> = (0..self.frame.upvalues.len())
             .map(|_| MaybeUninit::uninit())
             .collect();
-        for (name, upvalue) in self.frame.upvalues.iter() {
+        for (name, upvalue) in &self.frame.upvalues {
             chunk_upvalues[upvalue.index as usize].write(ChunkUpValue {
                 is_local: matches!(upvalue.source, UpvalueLocation::Local { .. }),
                 index: match upvalue.source {
@@ -277,14 +289,24 @@ impl Compiler {
                 .collect()
         };
 
-        Ok(CompiledChunk {
-            chunk_index: self.global_state.write().unwrap().add_chunk(self.chunk)?,
-        })
+        let chunk_index = if self.print_bytecode {
+            let chunk_index = self
+                .global_state
+                .write()
+                .unwrap()
+                .add_chunk(self.chunk.clone())?;
+            debug::print_instructions(&self.chunk, chunk_index);
+            chunk_index
+        } else {
+            self.global_state.write().unwrap().add_chunk(self.chunk)?
+        };
+
+        Ok(CompiledChunk { chunk_index })
     }
 
     /// Push bytecode into the current chunk.
     fn push_bytecode(&mut self, bytecode: Bytecode, span: Option<Span>) {
-        self.chunk.push_bytecode(bytecode, span)
+        self.chunk.push_bytecode(bytecode, span);
     }
 
     /// Push bytecode into the current chunk to jump to an undecided address.
@@ -301,7 +323,7 @@ impl Compiler {
     }
 
     fn patch_addr_placeholder(&mut self, index: JumpAddr) {
-        self.chunk.patch_addr_placeholder(index)
+        self.chunk.patch_addr_placeholder(index);
     }
 
     fn push_load_nil(&mut self, span: Option<Span>) -> u8 {
@@ -318,15 +340,11 @@ impl Compiler {
     }
 
     fn get_const_index(&mut self, lua_const: LuaConst) -> ConstIndex {
-        let global_state = self.global_state.read().unwrap();
-        if let Some(const_index) = global_state.lookup_const(&lua_const) {
+        if let Some(const_index) = self.chunk.lookup_const(&lua_const) {
             return const_index;
         }
 
-        // Release the read lock
-        drop(global_state);
-
-        self.global_state.write().unwrap().register_const(lua_const)
+        self.chunk.register_const(lua_const)
     }
 
     fn get_global_name_index(&mut self, name: LuaString) -> ConstIndex {
@@ -356,16 +374,16 @@ impl Compiler {
 
             let is_final_statement =
                 block_is_final_statement && i == num_statements - 1 && !has_return;
-            block_result.extend(self.compile_statement(statement, &options, is_final_statement)?);
+            block_result.extend(self.compile_statement(statement, options, is_final_statement)?);
         }
 
         if let Some(return_statement) = ast.node.return_statement {
             let mut handled_as_tail_call = false;
-            if return_statement.len() == 1
+            if return_statement.values.len() == 1
                 && let Expression::PrefixExpression(TokenTree {
                     node: PrefixExpression::FunctionCall(function_call),
                     ..
-                }) = &return_statement[0].node
+                }) = &return_statement.values[0].node
                 && self.compile_tail_call(function_call.clone())?
             {
                 handled_as_tail_call = true;
@@ -377,7 +395,7 @@ impl Compiler {
         }
 
         if options.new_scope {
-            self.end_scope()?;
+            self.end_scope(ast.node.end_span);
             Ok(block_result.with_new_locals(None))
         } else {
             Ok(block_result)
@@ -387,7 +405,7 @@ impl Compiler {
     fn compile_statement(
         &mut self,
         statement: TokenTree<Statement>,
-        options: &BlockOptions,
+        options: BlockOptions,
         is_final_statement: bool,
     ) -> crate::Result<BlockResult> {
         let span = statement.span;
@@ -399,7 +417,7 @@ impl Compiler {
                     return Ok(BlockResult::new());
                 }
 
-                self.compile_function_call(function_call, ExpressionResultMode::Multiple)?;
+                self.compile_function_call(function_call, ExpressionResultMode::Amount(0))?;
                 self.release_registers_from(current_register);
                 BlockResult::new()
             }
@@ -434,7 +452,10 @@ impl Compiler {
                                 from_register: current_register + preinit_from,
                                 to_register: current_register + preinit_to - 1,
                             },
-                            None,
+                            names
+                                .first()
+                                .map(|n| n.span)
+                                .and_then(|s| names.last().map(|n| n.span).map(|e| s.union(e))),
                         );
                     }
                 } else if num_expressions == 0 {
@@ -444,11 +465,14 @@ impl Compiler {
                             from_register: current_register,
                             to_register: current_register + num_names as u8 - 1,
                         },
-                        None,
+                        names
+                            .first()
+                            .map(|n| n.span)
+                            .and_then(|s| names.last().map(|n| n.span).map(|e| s.union(e))),
                     );
                 }
 
-                self.compile_expression_list(expressions)?;
+                self.compile_expression_list(expressions, Some(num_names))?;
 
                 for (index, name) in names.into_iter().enumerate() {
                     let name_register = current_register + index as u8;
@@ -516,7 +540,7 @@ impl Compiler {
                 BlockResult::new()
             }
             Statement::Assignment { varlist, explist } => {
-                self.compile_expression_list(explist)?;
+                self.compile_expression_list(explist, Some(varlist.len()))?;
 
                 for (index, variable) in varlist.into_iter().enumerate() {
                     match variable.node {
@@ -542,31 +566,29 @@ impl Compiler {
                                     let key_const_index =
                                         self.get_const_index(literal.node.clone().into());
 
-                                    match self.frame.resolve_name(&name.node.0) {
-                                        ResolvedName::Upvalue {
-                                            index: upval_index, ..
-                                        } => {
-                                            self.push_bytecode(
-                                                Bytecode::SetTableUpvalConstKey {
-                                                    table_upval_index: upval_index,
-                                                    key_const_index,
-                                                    value_register: current_register + index as u8,
-                                                },
-                                                Some(span),
-                                            );
-                                        }
-                                        _ => {
-                                            let target_r =
-                                                self.read_variable(name, VariableMode::Ref)?;
-                                            self.push_bytecode(
-                                                Bytecode::SetTableConstKey {
-                                                    table_register: target_r,
-                                                    key_const_index,
-                                                    value_register: current_register + index as u8,
-                                                },
-                                                Some(span),
-                                            );
-                                        }
+                                    if let ResolvedName::Upvalue {
+                                        index: upval_index, ..
+                                    } = self.frame.resolve_name(&name.node.0)
+                                    {
+                                        self.push_bytecode(
+                                            Bytecode::SetTableUpvalConstKey {
+                                                table_upval_index: upval_index,
+                                                key_const_index,
+                                                value_register: current_register + index as u8,
+                                            },
+                                            Some(span),
+                                        );
+                                    } else {
+                                        let target_r =
+                                            self.read_variable(name, VariableMode::Ref)?;
+                                        self.push_bytecode(
+                                            Bytecode::SetTableConstKey {
+                                                table_register: target_r,
+                                                key_const_index,
+                                                value_register: current_register + index as u8,
+                                            },
+                                            Some(span),
+                                        );
                                     }
                                 }
                                 (
@@ -596,7 +618,7 @@ impl Compiler {
                                         .compile_expression(
                                             target_index,
                                             ExpressionMode::Ref,
-                                            ExpressionResultMode::Single,
+                                            ExpressionResultMode::Amount(1),
                                         )?
                                         .get_register();
                                     self.push_bytecode(
@@ -613,14 +635,14 @@ impl Compiler {
                                         .compile_prefix_expression(
                                             target,
                                             ExpressionMode::Ref,
-                                            ExpressionResultMode::Single,
+                                            ExpressionResultMode::Amount(1),
                                         )?
                                         .get_register();
                                     let index_r = self
                                         .compile_expression(
                                             target_index,
                                             ExpressionMode::Ref,
-                                            ExpressionResultMode::Single,
+                                            ExpressionResultMode::Amount(1),
                                         )?
                                         .get_register();
                                     self.push_bytecode(
@@ -646,10 +668,11 @@ impl Compiler {
                                             ..
                                         }),
                                     ..
-                                } => match self.frame.resolve_name(&name.node.0) {
-                                    ResolvedName::Upvalue {
+                                } => {
+                                    if let ResolvedName::Upvalue {
                                         index: upval_index, ..
-                                    } => {
+                                    } = self.frame.resolve_name(&name.node.0)
+                                    {
                                         self.push_bytecode(
                                             Bytecode::SetTableUpvalConstKey {
                                                 table_upval_index: upval_index,
@@ -658,8 +681,7 @@ impl Compiler {
                                             },
                                             Some(span),
                                         );
-                                    }
-                                    _ => {
+                                    } else {
                                         let target_r =
                                             self.read_variable(name, VariableMode::Ref)?;
 
@@ -672,13 +694,13 @@ impl Compiler {
                                             Some(span),
                                         );
                                     }
-                                },
+                                }
                                 target => {
                                     let target_r = self
                                         .compile_prefix_expression(
                                             target,
                                             ExpressionMode::Ref,
-                                            ExpressionResultMode::Single,
+                                            ExpressionResultMode::Amount(1),
                                         )?
                                         .get_register();
 
@@ -712,7 +734,7 @@ impl Compiler {
                     .compile_expression(
                         condition,
                         ExpressionMode::Ref,
-                        ExpressionResultMode::Single,
+                        ExpressionResultMode::Amount(1),
                     )?
                     .get_register();
 
@@ -753,7 +775,7 @@ impl Compiler {
                         .compile_expression(
                             else_if.node.condition,
                             ExpressionMode::Ref,
-                            ExpressionResultMode::Single,
+                            ExpressionResultMode::Amount(1),
                         )?
                         .get_register();
                     // Jump to the end of the block if the condition is false
@@ -795,10 +817,10 @@ impl Compiler {
                             new_scope: true,
                         },
                     )?);
-                    if !block_has_return {
-                        Some(self.push_undecided_jump(JumpToUndecidedAddress::Jmp, None))
-                    } else {
+                    if block_has_return {
                         None
+                    } else {
+                        Some(self.push_undecided_jump(JumpToUndecidedAddress::Jmp, None))
                     }
                 } else {
                     None
@@ -845,6 +867,7 @@ impl Compiler {
                 let start_addr = self.get_current_addr();
 
                 let loop_scope_depth = self.begin_scope();
+                let end_span = block.node.end_span;
                 let block_result = self.compile_block(
                     block,
                     is_final_statement,
@@ -861,7 +884,7 @@ impl Compiler {
                     .compile_expression(
                         condition,
                         ExpressionMode::Ref,
-                        ExpressionResultMode::Single,
+                        ExpressionResultMode::Amount(1),
                     )?
                     .get_register();
                 self.push_bytecode(
@@ -872,7 +895,7 @@ impl Compiler {
                     None,
                 );
 
-                self.end_scope()?;
+                self.end_scope(end_span);
 
                 for break_ in block_result.breaks {
                     self.patch_addr_placeholder(break_.addr);
@@ -886,7 +909,7 @@ impl Compiler {
                     .compile_expression(
                         condition,
                         ExpressionMode::Ref,
-                        ExpressionResultMode::Single,
+                        ExpressionResultMode::Amount(1),
                     )?
                     .get_register();
                 let jmp_false_addr = self.push_undecided_jump(
@@ -898,6 +921,7 @@ impl Compiler {
                 self.release_registers_from(current_register);
 
                 let loop_scope_depth = self.begin_scope();
+                let end_span = block.node.end_span;
                 let block_result = self.compile_block(
                     block,
                     is_final_statement,
@@ -907,7 +931,7 @@ impl Compiler {
                         new_scope: false,
                     },
                 )?;
-                self.end_scope()?;
+                self.end_scope(end_span);
 
                 self.push_bytecode(
                     Bytecode::Jmp {
@@ -930,7 +954,15 @@ impl Compiler {
             Statement::For { condition, block } => {
                 let loop_scope_depth = self.begin_scope();
 
-                let (continue_addr, jmp_exit_loop_addr) = match condition.node {
+                enum LoopTail {
+                    Jmp(JumpAddr),
+                    ForLoop {
+                        base_register: u8,
+                        body_addr: JumpAddr,
+                    },
+                }
+
+                let (loop_tail, jmp_exit_loop_addr) = match condition.node {
                     ForCondition::NumericFor(numeric_for) => {
                         let NumericFor {
                             name,
@@ -939,76 +971,36 @@ impl Compiler {
                             step,
                         } = *numeric_for;
 
-                        // FIXME: Coerce all to float if initial and step are floats
-
-                        // let limit_r = self.frames.last_mut().unwrap().take_register();
-                        // let step_r = self.frames.last_mut().unwrap().take_register();
-                        // let limit_r = self.frames.last_mut().unwrap().take_register();
-
-                        // Define the initial value and variable
-                        let ident_r = self
+                        // R[base]   = initial value (loop variable)
+                        // R[base+1] = limit
+                        // R[base+2] = step
+                        let base_r = self
                             .compile_expression(
                                 initial,
                                 ExpressionMode::Copy,
-                                ExpressionResultMode::Single,
+                                ExpressionResultMode::Amount(1),
                             )?
                             .get_register();
-                        self.add_local(name.node.0, ident_r, 0, Some(name.span));
+                        self.add_local(name.node.0, base_r, 0, Some(name.span));
 
-                        // Create fake variables to hold the limit and step. Note that we use
-                        // variable names that are invalid in Lua to avoid conflicts with user
-                        // variables.
                         let limit_r = self
                             .compile_expression(
                                 limit,
                                 ExpressionMode::Copy,
-                                ExpressionResultMode::Single,
+                                ExpressionResultMode::Amount(1),
                             )?
                             .get_register();
                         self.add_local(b"#limit".into(), limit_r, 0, None);
 
                         let step_r = if let Some(step) = step {
-                            let step_span = step.span;
                             let step_r = self
                                 .compile_expression(
                                     step,
                                     ExpressionMode::Copy,
-                                    ExpressionResultMode::Single,
+                                    ExpressionResultMode::Amount(1),
                                 )?
                                 .get_register();
                             self.add_local(b"#step".into(), step_r, 0, None);
-
-                            // Raise an error if the step value is equal to zero
-                            let zero_r = self
-                                .compile_load_literal(Literal::Number(Number::Integer(0)), None);
-                            self.push_bytecode(
-                                Bytecode::Eq {
-                                    dest_register: zero_r,
-                                    left_register: step_r,
-                                    right_register: zero_r,
-                                },
-                                None,
-                            );
-                            let jmp_false_addr = self.push_undecided_jump(
-                                JumpToUndecidedAddress::JmpFalse {
-                                    condition_register: zero_r,
-                                },
-                                None,
-                            );
-
-                            // Raise error
-                            self.push_bytecode(
-                                Bytecode::Error {
-                                    code: RuntimeError::ForLoopLimitIsZero,
-                                },
-                                Some(step_span),
-                            );
-
-                            // Release `zero_r`.
-                            self.release_register();
-
-                            // Otherwise, move past it
-                            self.patch_addr_placeholder(jmp_false_addr);
                             step_r
                         } else {
                             let step_r = self
@@ -1017,100 +1009,27 @@ impl Compiler {
                             step_r
                         };
 
-                        // Create a "variable" to remember whether this is a decreasing loop.
-                        // TODO: Optimization, if the step is statically known (e.g. the default of
-                        // 1, or a constant integer value), we don't need to do any of this.
-                        let zero_r =
-                            self.compile_load_literal(Literal::Number(Number::Integer(0)), None);
-                        let decreasing_r = zero_r; // We can reuse this slot
-                        self.add_local(b"#decreasing".into(), decreasing_r, 0, None);
-                        self.push_bytecode(
-                            Bytecode::Lt {
-                                dest_register: decreasing_r,
-                                left_register: step_r,
-                                right_register: zero_r,
+                        debug_assert_eq!(limit_r, base_r + 1);
+                        debug_assert_eq!(step_r, base_r + 2);
+
+                        // ForPrep validates types, coerces to float if needed, checks step != 0,
+                        // and jumps to exit if the initial value already exceeds the limit.
+                        let forprep_addr = self.push_undecided_jump(
+                            JumpToUndecidedAddress::ForPrep {
+                                base_register: base_r,
                             },
                             None,
                         );
 
-                        // Label to jump back to the start of the loop
-                        let condition_addr = self.get_current_addr();
+                        let body_addr = self.get_current_addr();
 
-                        // Evaluate the limit
-                        // Choose either "<=" or ">=" depending on whether the loop is increasing
-                        // or decreasing.
-                        let jmp_decreasing = self.push_undecided_jump(
-                            JumpToUndecidedAddress::JmpTrue {
-                                condition_register: decreasing_r,
+                        (
+                            LoopTail::ForLoop {
+                                base_register: base_r,
+                                body_addr,
                             },
-                            None,
-                        );
-
-                        let limit_eval_r = self.take_register();
-
-                        // Loop is increasing, check if ident <= limit
-                        self.push_bytecode(
-                            Bytecode::Le {
-                                dest_register: limit_eval_r,
-                                left_register: ident_r,
-                                right_register: limit_r,
-                            },
-                            None,
-                        );
-                        let jmp_after_le =
-                            self.push_undecided_jump(JumpToUndecidedAddress::Jmp, None);
-
-                        self.patch_addr_placeholder(jmp_decreasing);
-
-                        // Loop is decreasing, check if limit <= ident
-                        self.push_bytecode(
-                            Bytecode::Le {
-                                dest_register: limit_eval_r,
-                                left_register: limit_r,
-                                right_register: ident_r,
-                            },
-                            None,
-                        );
-
-                        self.patch_addr_placeholder(jmp_after_le);
-
-                        let jmp_false_addr = self.push_undecided_jump(
-                            JumpToUndecidedAddress::JmpFalse {
-                                condition_register: limit_eval_r,
-                            },
-                            None,
-                        );
-
-                        // Jump into the loop
-                        let inside_block_jump =
-                            self.push_undecided_jump(JumpToUndecidedAddress::Jmp, None);
-
-                        // Compile the step
-                        let step_addr = self.get_current_addr();
-                        self.push_bytecode(
-                            Bytecode::Add {
-                                dest_register: ident_r,
-                                left_register: ident_r,
-                                right_register: step_r,
-                            },
-                            None,
-                        );
-
-                        // After step, jump to the condition
-                        self.push_bytecode(
-                            Bytecode::Jmp {
-                                address: condition_addr,
-                            },
-                            None,
-                        );
-
-                        // Path the inside block jump
-                        self.patch_addr_placeholder(inside_block_jump);
-
-                        // Release the limit_eval_r register.
-                        self.release_register();
-
-                        (step_addr, jmp_false_addr)
+                            forprep_addr,
+                        )
                     }
                     ForCondition::GenericFor { names, expressions } => {
                         // Evaluate the expressions and keep no more than 4
@@ -1122,7 +1041,7 @@ impl Compiler {
                             },
                             None,
                         );
-                        self.compile_expression_list(expressions)?;
+                        self.compile_expression_list(expressions, Some(4))?;
                         self.set_register_index(current_register + 4);
 
                         // Save the result as locals: the iterator function, the state, the initial
@@ -1188,7 +1107,7 @@ impl Compiler {
                         self.push_bytecode(
                             Bytecode::Call {
                                 func_register: func_r,
-                                result_mode: ExpressionResultMode::Multiple,
+                                result_mode: ExpressionResultMode::Multres,
                                 num_args: 2,
                             },
                             None,
@@ -1230,10 +1149,11 @@ impl Compiler {
 
                         self.release_register();
 
-                        (step_addr, jmp_true_addr)
+                        (LoopTail::Jmp(step_addr), jmp_true_addr)
                     }
                 };
 
+                let end_span = block.node.end_span;
                 let block_result = self.compile_block(
                     block,
                     is_final_statement,
@@ -1244,18 +1164,33 @@ impl Compiler {
                     },
                 )?;
 
-                // Jump back to the step evaluation
-                self.push_bytecode(
-                    Bytecode::Jmp {
-                        address: continue_addr,
-                    },
-                    None,
-                );
+                match loop_tail {
+                    LoopTail::Jmp(continue_addr) => {
+                        self.push_bytecode(
+                            Bytecode::Jmp {
+                                address: continue_addr,
+                            },
+                            None,
+                        );
+                    }
+                    LoopTail::ForLoop {
+                        base_register,
+                        body_addr,
+                    } => {
+                        self.push_bytecode(
+                            Bytecode::ForLoop {
+                                base_register,
+                                address: body_addr,
+                            },
+                            None,
+                        );
+                    }
+                }
 
-                // Patch the false condition jump
+                // Patch the exit jump (ForPrep or JmpTrue/JmpFalse)
                 self.patch_addr_placeholder(jmp_exit_loop_addr);
 
-                self.end_scope()?;
+                self.end_scope(end_span);
 
                 // Patch any break jumps
                 for jump in block_result.breaks {
@@ -1275,34 +1210,30 @@ impl Compiler {
             )?,
             Statement::Goto(name) => {
                 let label = self.labels.get(&name.node.0);
-                match label {
-                    Some(label) => {
-                        self.push_bytecode(
-                            Bytecode::JmpClose {
-                                address: label.addr,
-                                close_from_register: label.current_register,
-                            },
-                            Some(span),
-                        );
-                    }
-                    None => {
-                        // Add to frame to resolve the jump later
-                        // Note that we don't use JmpClose, since we might jump forward into the
-                        // same scope, so the to-be-closed variables should still be valid in that
-                        // case.
-                        let addr =
-                            self.push_undecided_jump(JumpToUndecidedAddress::Jmp, Some(span));
+                if let Some(label) = label {
+                    self.push_bytecode(
+                        Bytecode::JmpClose {
+                            address: label.addr,
+                            close_from_register: label.current_register,
+                        },
+                        Some(span),
+                    );
+                } else {
+                    // Add to frame to resolve the jump later
+                    // Note that we don't use JmpClose, since we might jump forward into the
+                    // same scope, so the to-be-closed variables should still be valid in that
+                    // case.
+                    let addr = self.push_undecided_jump(JumpToUndecidedAddress::Jmp, Some(span));
 
-                        let scope_id = self.scope_id();
-                        let goto = Goto {
-                            addr,
-                            span,
-                            depth: self.scope_depth,
-                            current_register: self.register_index,
-                            scope_id,
-                        };
-                        self.gotos.entry(name.node.0).or_default().push(goto);
-                    }
+                    let scope_id = self.scope_id();
+                    let goto = Goto {
+                        addr,
+                        span,
+                        depth: self.scope_depth,
+                        current_register: self.register_index,
+                        scope_id,
+                    };
+                    self.gotos.entry(name.node.0).or_default().push(goto);
                 }
 
                 BlockResult::new()
@@ -1342,7 +1273,7 @@ impl Compiler {
                             .locals
                             .iter()
                             .filter(|local| local.depth <= self.scope_depth)
-                            .nth(goto.current_register as usize);
+                            .nth(goto.current_register as usize - 1);
                         any_new_locals = first_new_local.map(|local| NewLocalsAfterGoto {
                             goto: (label.node.0.clone(), goto.span),
                             local: (local.name.clone(), local.span),
@@ -1370,29 +1301,32 @@ impl Compiler {
         })
     }
 
-    fn compile_return_statement(
-        &mut self,
-        return_statement: Vec<TokenTree<Expression>>,
-    ) -> crate::Result {
+    fn compile_return_statement(&mut self, return_statement: ReturnStatement) -> crate::Result {
         let has_to_close_values = !self.to_close.is_empty();
-        if return_statement.is_empty() {
+        if return_statement.values.is_empty() {
             if has_to_close_values {
-                self.push_bytecode(Bytecode::Close { from_register: 0 }, None);
+                self.push_bytecode(
+                    Bytecode::Close { from_register: 0 },
+                    Some(return_statement.return_span),
+                );
             }
-            self.push_bytecode(Bytecode::Return0, None);
+            self.push_bytecode(Bytecode::Return0, Some(return_statement.return_span));
             return Ok(());
         }
 
         let (num_returns, is_variable) = (
-            return_statement.len(),
-            Self::expression_list_can_be_multres(&return_statement),
+            return_statement.values.len(),
+            Self::expression_list_can_be_multres(&return_statement.values),
         );
 
         let register = self.register_index;
-        let expression_list_length = self.compile_expression_list(return_statement)?;
+        let expression_list_length = self.compile_expression_list(return_statement.values, None)?;
 
         if has_to_close_values {
-            self.push_bytecode(Bytecode::Close { from_register: 0 }, None);
+            self.push_bytecode(
+                Bytecode::Close { from_register: 0 },
+                Some(return_statement.return_span),
+            );
         }
 
         if num_returns == 1 && !is_variable {
@@ -1400,7 +1334,7 @@ impl Compiler {
                 Bytecode::Return1 {
                     src_register: register,
                 },
-                None,
+                Some(return_statement.return_span),
             );
         } else {
             self.push_bytecode(
@@ -1414,7 +1348,7 @@ impl Compiler {
                         num_fixed_values: num_returns as u8 - 1,
                     },
                 },
-                None,
+                Some(return_statement.return_span),
             );
         }
 
@@ -1434,7 +1368,7 @@ impl Compiler {
                     .compile_prefix_expression(
                         *function_call.node.function,
                         ExpressionMode::Copy,
-                        ExpressionResultMode::Single,
+                        ExpressionResultMode::Amount(1),
                     )?
                     .get_register();
 
@@ -1456,7 +1390,7 @@ impl Compiler {
                     .compile_prefix_expression(
                         *function_call.node.function,
                         ExpressionMode::Copy,
-                        ExpressionResultMode::Single,
+                        ExpressionResultMode::Amount(1),
                     )?
                     .get_register();
 
@@ -1464,16 +1398,35 @@ impl Compiler {
             };
 
         let num_args = function_call.node.args.node.len() + self_arg_n;
-        let expression_list_length = self.compile_expression_list(function_call.node.args.node)?;
+        let expression_list_length =
+            self.compile_expression_list(function_call.node.args.node, None)?;
 
-        self.chunk.push_call_instruction(
-            function_register,
-            matches!(expression_list_length, ExpressionListLength::MultRes { .. }),
-            result_mode,
-            match expression_list_length {
-                ExpressionListLength::Constant { .. } => num_args as u8,
-                // Subtract one, because the last argument will be accounted for via multres
-                ExpressionListLength::MultRes { .. } => num_args as u8 - 1,
+        let args_multres = matches!(expression_list_length, ExpressionListLength::MultRes { .. });
+        let num_args = match expression_list_length {
+            ExpressionListLength::Constant { .. } => num_args as u8,
+            // Subtract one, because the last argument will be accounted for via multres
+            ExpressionListLength::MultRes { .. } => num_args as u8 - 1,
+        };
+
+        // Instruction: [CALL|CALLM] [NUM_RESULTS] [NUM_KNOWN_ARGUMENTS]
+        // CALL for regular calls, CALLM for calls with a multres expression at
+        // the end of its arguments.
+        // NUM_RESULTS is 1 for single result, 0 for multres.
+        // NUM_KNOWN_ARGUMENTS is the number of known arguments, not counting
+        // the multres at the end (if any), plus 1.
+        self.chunk.push_bytecode(
+            if args_multres {
+                Bytecode::CallM {
+                    func_register: function_register,
+                    result_mode,
+                    num_args,
+                }
+            } else {
+                Bytecode::Call {
+                    func_register: function_register,
+                    result_mode,
+                    num_args,
+                }
             },
             Some(function_call.span),
         );
@@ -1519,7 +1472,8 @@ impl Compiler {
         } else {
             (self.register_index, false)
         };
-        let expression_list_length = self.compile_expression_list(function_call.node.args.node)?;
+        let expression_list_length =
+            self.compile_expression_list(function_call.node.args.node, None)?;
         if !is_self_call {
             debug_assert_eq!(parameters_register, expression_list_length.get_register());
         }
@@ -1530,15 +1484,34 @@ impl Compiler {
             expression_list_length.get_register()
         };
 
-        self.chunk.push_callt_instruction(
-            parameters_register,
-            matches!(expression_list_length, ExpressionListLength::MultRes { .. }),
-            // TODO: Is this right? Does it matter?
-            ExpressionResultMode::Multiple,
-            match expression_list_length {
-                ExpressionListLength::Constant { .. } => num_args as u8,
-                // Subtract one, because the last argument will be accounted for via multres
-                ExpressionListLength::MultRes { .. } => num_args as u8 - 1,
+        // TODO: Is this right? Does it matter?
+        let result_mode = ExpressionResultMode::Multres;
+        let num_args = match expression_list_length {
+            ExpressionListLength::Constant { .. } => num_args as u8,
+            // Subtract one, because the last argument will be accounted for via multres
+            ExpressionListLength::MultRes { .. } => num_args as u8 - 1,
+        };
+
+        // Instruction: [CALL|CALLM] [NUM_RESULTS] [NUM_KNOWN_ARGUMENTS]
+        // CALL for regular calls, CALLM for calls with a multres expression at
+        // the end of its arguments.
+        // NUM_RESULTS is 1 for single result, 0 for multres.
+        // NUM_KNOWN_ARGUMENTS is the number of known arguments, not counting
+        // the multres at the end (if any), plus 1.
+        let args_multres = matches!(expression_list_length, ExpressionListLength::MultRes { .. });
+        self.chunk.push_bytecode(
+            if args_multres {
+                Bytecode::CallTM {
+                    args_from_register: parameters_register,
+                    result_mode,
+                    num_args,
+                }
+            } else {
+                Bytecode::CallT {
+                    args_from_register: parameters_register,
+                    result_mode,
+                    num_args,
+                }
             },
             Some(function_call.span),
         );
@@ -1554,20 +1527,20 @@ impl Compiler {
         // Compile the function definition as a new chunk.
         let function_chunk = Compiler::new_sub(
             Arc::clone(&self.global_state),
-            function_def
-                .node
-                .name
-                .map(|mut name| {
+            function_def.node.name.map_or_else(
+                || b"<anonymous>()".into(),
+                |mut name| {
                     name.extend(b"()");
                     name
-                })
-                .unwrap_or_else(|| b"<anonymous>()".into()),
+                },
+            ),
             self.chunk.filename.as_ref(),
             function_def.node.method_name.clone(),
             Arc::clone(&self.chunk.source),
             function_def.node.parameters,
             function_def.node.varargs.is_some(),
             NonNull::from_mut(&mut self.frame),
+            self.print_bytecode,
         )
         .compile_chunk(Some(function_def.node.block))?;
 
@@ -1587,6 +1560,7 @@ impl Compiler {
     fn compile_expression_list(
         &mut self,
         expressions: Vec<TokenTree<Expression>>,
+        num_targets: Option<usize>,
     ) -> crate::Result<ExpressionListLength> {
         let num_expressions = expressions.len();
         let from_register = self.register_index;
@@ -1597,10 +1571,12 @@ impl Compiler {
                 self.compile_expression(
                     expression,
                     ExpressionMode::Copy,
-                    if is_last {
-                        ExpressionResultMode::Multiple
-                    } else {
-                        ExpressionResultMode::Single
+                    match (is_last, num_targets) {
+                        (true, Some(num_targets)) => {
+                            ExpressionResultMode::Amount(num_targets - i)
+                        }
+                        (true, None) => ExpressionResultMode::Multres,
+                        (false, _) => ExpressionResultMode::Amount(1),
                     },
                 )?,
                 ExpressionResult::Multiple { .. }
@@ -1635,7 +1611,7 @@ impl Compiler {
                             .compile_expression(
                                 *lhs,
                                 ExpressionMode::Copy,
-                                ExpressionResultMode::Single,
+                                ExpressionResultMode::Amount(1),
                             )?
                             .get_register();
                         let jmp_false_addr = self.push_undecided_jump(
@@ -1651,7 +1627,7 @@ impl Compiler {
                             .compile_expression(
                                 *rhs,
                                 ExpressionMode::Copy,
-                                ExpressionResultMode::Single,
+                                ExpressionResultMode::Amount(1),
                             )?
                             .get_register();
                         self.patch_addr_placeholder(jmp_false_addr);
@@ -1665,7 +1641,7 @@ impl Compiler {
                             .compile_expression(
                                 *lhs,
                                 ExpressionMode::Copy,
-                                ExpressionResultMode::Single,
+                                ExpressionResultMode::Amount(1),
                             )?
                             .get_register();
                         let jmp_true_addr = self.push_undecided_jump(
@@ -1681,7 +1657,7 @@ impl Compiler {
                             .compile_expression(
                                 *rhs,
                                 ExpressionMode::Copy,
-                                ExpressionResultMode::Single,
+                                ExpressionResultMode::Amount(1),
                             )?
                             .get_register();
                         self.patch_addr_placeholder(jmp_true_addr);
@@ -1696,17 +1672,17 @@ impl Compiler {
                             .compile_expression(
                                 *lhs,
                                 ExpressionMode::Ref,
-                                ExpressionResultMode::Single,
+                                ExpressionResultMode::Amount(1),
                             )?
                             .get_register();
                         let rhs_r = self
                             .compile_expression(
                                 *rhs,
                                 ExpressionMode::Ref,
-                                ExpressionResultMode::Single,
+                                ExpressionResultMode::Amount(1),
                             )?
                             .get_register();
-                        self.compile_binary_operator(op, dest_r, lhs_r, rhs_r, expression.span);
+                        self.compile_binary_operator(&op, dest_r, lhs_r, rhs_r, expression.span);
 
                         self.release_registers_from(dest_r + 1);
 
@@ -1722,7 +1698,7 @@ impl Compiler {
             Expression::UnaryOp { op, rhs } => {
                 let current_r = self.register_index;
                 let expr_r = self
-                    .compile_expression(*rhs, ExpressionMode::Ref, ExpressionResultMode::Single)?
+                    .compile_expression(*rhs, ExpressionMode::Ref, ExpressionResultMode::Amount(1))?
                     .get_register();
                 let dest_r = if current_r == expr_r {
                     expr_r
@@ -1748,7 +1724,7 @@ impl Compiler {
                 self.push_bytecode(
                     Bytecode::LoadVararg {
                         dest_register: register,
-                        single_value: matches!(result_mode, ExpressionResultMode::Single),
+                        result_mode,
                     },
                     Some(expression.span),
                 );
@@ -1770,9 +1746,11 @@ impl Compiler {
 
                 result_mode.into_result(register)
             }
-            PrefixExpression::Parenthesized(expression) => {
-                self.compile_expression(*expression, expression_mode, ExpressionResultMode::Single)?
-            }
+            PrefixExpression::Parenthesized(expression) => self.compile_expression(
+                *expression,
+                expression_mode,
+                ExpressionResultMode::Amount(1),
+            )?,
             PrefixExpression::Variable(variable) => {
                 let register = match variable.node {
                     Variable::Name(name) => self.read_variable(
@@ -1791,12 +1769,9 @@ impl Compiler {
                                 index: upval_index, ..
                             } = self.frame.resolve_name(&name.node.0)
                         {
-                            if let Expression::Literal(TokenTree {
-                                node: Literal::String(key),
-                                ..
-                            }) = index.node
+                            if let Expression::Literal(TokenTree { node: literal, .. }) = index.node
                             {
-                                let const_index = self.get_const_index(LuaConst::String(key));
+                                let const_index = self.register_const(literal);
                                 let index_r = self.take_register();
 
                                 self.push_bytecode(
@@ -1813,7 +1788,7 @@ impl Compiler {
                                     .compile_expression(
                                         *index,
                                         ExpressionMode::Ref,
-                                        ExpressionResultMode::Single,
+                                        ExpressionResultMode::Amount(1),
                                     )?
                                     .get_register();
 
@@ -1827,20 +1802,18 @@ impl Compiler {
                                 );
                                 index_r
                             }
-                        } else if let Expression::Literal(TokenTree {
-                            node: Literal::String(key),
-                            ..
-                        }) = index.node
+                        } else if let Expression::Literal(TokenTree { node: literal, .. }) =
+                            index.node
                         {
                             let current_r = self.register_index;
                             let table_r = self
                                 .compile_prefix_expression(
                                     *prefix,
                                     ExpressionMode::Ref,
-                                    ExpressionResultMode::Single,
+                                    ExpressionResultMode::Amount(1),
                                 )?
                                 .get_register();
-                            let const_index = self.get_const_index(LuaConst::String(key));
+                            let const_index = self.register_const(literal);
                             let dest_r = if table_r == current_r {
                                 table_r
                             } else {
@@ -1864,14 +1837,14 @@ impl Compiler {
                                 .compile_prefix_expression(
                                     *prefix,
                                     ExpressionMode::Ref,
-                                    ExpressionResultMode::Single,
+                                    ExpressionResultMode::Amount(1),
                                 )?
                                 .get_register();
                             let index_r = self
                                 .compile_expression(
                                     *index,
                                     ExpressionMode::Ref,
-                                    ExpressionResultMode::Single,
+                                    ExpressionResultMode::Amount(1),
                                 )?
                                 .get_register();
 
@@ -1897,33 +1870,57 @@ impl Compiler {
                         }
                     }
                     Variable::Field(prefix, name) => {
-                        let current_r = self.register_index;
-                        let table_r = self
-                            .compile_prefix_expression(
-                                *prefix,
-                                ExpressionMode::Ref,
-                                ExpressionResultMode::Single,
-                            )?
-                            .get_register();
+                        if let PrefixExpression::Variable(TokenTree {
+                            node: Variable::Name(target_name),
+                            ..
+                        }) = &prefix.node
+                            && let ResolvedName::Upvalue {
+                                index: upval_index, ..
+                            } = self.frame.resolve_name(&target_name.node.0)
+                        {
+                            let dest_r = self.take_register();
+                            let key_const_index =
+                                self.get_const_index(LuaConst::String(name.node.0));
 
-                        let const_index = self.get_const_index(LuaConst::String(name.node.0));
-                        let dest_r = if table_r == current_r {
-                            table_r
+                            self.push_bytecode(
+                                Bytecode::GetTableUpvalConstKey {
+                                    dest_register: dest_r,
+                                    table_upval_index: upval_index,
+                                    key_const_index,
+                                },
+                                Some(prefix_expression.span),
+                            );
+
+                            dest_r
                         } else {
-                            self.take_register()
-                        };
-                        self.push_bytecode(
-                            Bytecode::GetTableConstKey {
-                                dest_register: dest_r,
-                                table_register: table_r,
-                                key_const_index: const_index,
-                            },
-                            Some(prefix_expression.span),
-                        );
+                            let current_r = self.register_index;
+                            let table_r = self
+                                .compile_prefix_expression(
+                                    *prefix,
+                                    ExpressionMode::Ref,
+                                    ExpressionResultMode::Amount(1),
+                                )?
+                                .get_register();
 
-                        self.release_registers_from(dest_r + 1);
+                            let const_index = self.get_const_index(LuaConst::String(name.node.0));
+                            let dest_r = if table_r == current_r {
+                                table_r
+                            } else {
+                                self.take_register()
+                            };
+                            self.push_bytecode(
+                                Bytecode::GetTableConstKey {
+                                    dest_register: dest_r,
+                                    table_register: table_r,
+                                    key_const_index: const_index,
+                                },
+                                Some(prefix_expression.span),
+                            );
 
-                        dest_r
+                            self.release_registers_from(dest_r + 1);
+
+                            dest_r
+                        }
                     }
                 };
 
@@ -1939,12 +1936,13 @@ impl Compiler {
         // Optimization: if all of the fields are literals, we can just create the table here and
         // load it as a constant.
         if table.node.fields.iter().all(|field| match &field.node {
-            Field::Named(_, value) => matches!(value.node, Expression::Literal(_)),
             Field::Indexed(index, value) => {
                 matches!(index.node, Expression::Literal(_))
                     && matches!(value.node, Expression::Literal(_))
             }
-            Field::Value(value) => matches!(value.node, Expression::Literal(_)),
+            Field::Named(_, value) | Field::Value(value) => {
+                matches!(value.node, Expression::Literal(_))
+            }
         }) {
             let mut new_table = LuaTable::new();
             for fields in table.node.fields {
@@ -2007,13 +2005,13 @@ impl Compiler {
                 // TODO: Do we specify the starting register here for the values? Or is it ALWAYS
                 // table_r + 1?
                 self.push_bytecode(
-                    if !previous_was_multires {
-                        Bytecode::AppendToTable {
+                    if previous_was_multires {
+                        Bytecode::AppendToTableM {
                             table_register: table_r,
                             num_values,
                         }
                     } else {
-                        Bytecode::AppendToTableM {
+                        Bytecode::AppendToTable {
                             table_register: table_r,
                             num_values,
                         }
@@ -2039,7 +2037,7 @@ impl Compiler {
                         .compile_expression(
                             value,
                             ExpressionMode::Ref,
-                            ExpressionResultMode::Single,
+                            ExpressionResultMode::Amount(1),
                         )?
                         .get_register();
                     self.push_bytecode(
@@ -2058,14 +2056,14 @@ impl Compiler {
                         .compile_expression(
                             index_expression,
                             ExpressionMode::Ref,
-                            ExpressionResultMode::Single,
+                            ExpressionResultMode::Amount(1),
                         )?
                         .get_register();
                     let value_r = self
                         .compile_expression(
                             value,
                             ExpressionMode::Ref,
-                            ExpressionResultMode::Single,
+                            ExpressionResultMode::Amount(1),
                         )?
                         .get_register();
                     self.push_bytecode(
@@ -2088,9 +2086,9 @@ impl Compiler {
                             value,
                             ExpressionMode::Copy,
                             if is_last_field {
-                                ExpressionResultMode::Multiple
+                                ExpressionResultMode::Multres
                             } else {
-                                ExpressionResultMode::Single
+                                ExpressionResultMode::Amount(1)
                             },
                         )?,
                         ExpressionResult::Multiple { .. }
@@ -2105,13 +2103,13 @@ impl Compiler {
 
         if previous_was_value_field {
             self.push_bytecode(
-                if !previous_was_multires {
-                    Bytecode::AppendToTable {
+                if previous_was_multires {
+                    Bytecode::AppendToTableM {
                         table_register: table_r,
                         num_values,
                     }
                 } else {
-                    Bytecode::AppendToTableM {
+                    Bytecode::AppendToTable {
                         table_register: table_r,
                         num_values,
                     }
@@ -2128,15 +2126,39 @@ impl Compiler {
     fn compile_load_literal(&mut self, literal: Literal, span: Option<Span>) -> u8 {
         let register = self.take_register();
         let const_index = match literal {
-            Literal::Nil => self.get_const_index(LuaConst::Nil),
-            Literal::Boolean(b) => self.get_const_index(LuaConst::Boolean(b)),
             Literal::Number(Number::Float(f)) => {
+                if let Ok(i) = f.integer_repr()
+                    && let Ok(short) = i16::try_from(i)
+                {
+                    self.push_bytecode(
+                        Bytecode::LoadShortFloat {
+                            register,
+                            value: short,
+                        },
+                        span,
+                    );
+
+                    return register;
+                }
+
                 self.get_const_index(LuaConst::Number(LuaNumber::Float(f)))
             }
             Literal::Number(Number::Integer(i)) => {
+                if let Ok(short) = i16::try_from(i) {
+                    self.push_bytecode(
+                        Bytecode::LoadShort {
+                            register,
+                            value: short,
+                        },
+                        span,
+                    );
+
+                    return register;
+                }
+
                 self.get_const_index(LuaConst::Number(LuaNumber::Integer(i)))
             }
-            Literal::String(s) => self.get_const_index(LuaConst::String(s)),
+            literal => self.register_const(literal),
         };
 
         self.push_bytecode(
@@ -2150,99 +2172,84 @@ impl Compiler {
         register
     }
 
+    /// Given a literal, return the index of the constant in the chunk's constant pool.
+    fn register_const(&mut self, literal: Literal) -> ConstIndex {
+        match literal {
+            Literal::Nil => self.get_const_index(LuaConst::Nil),
+            Literal::Boolean(b) => self.get_const_index(LuaConst::Boolean(b)),
+            Literal::Number(Number::Float(f)) => {
+                self.get_const_index(LuaConst::Number(LuaNumber::Float(f)))
+            }
+            Literal::Number(Number::Integer(i)) => {
+                self.get_const_index(LuaConst::Number(LuaNumber::Integer(i)))
+            }
+            Literal::String(s) => self.get_const_index(LuaConst::String(s)),
+        }
+    }
+
     fn compile_binary_operator(
         &mut self,
-        op: TokenTree<BinaryOperator>,
+        op: &TokenTree<BinaryOperator>,
         dest_register: u8,
         left_register: u8,
         right_register: u8,
         span: Span,
     ) {
+        macro_rules! binary_op {
+            ($op:expr; $($left:ident $(=> $right:ident)?),*; $($rest:tt)*) => {
+                match $op {
+                    // binary_op!(_expand; $($left $(=> $right)?),*),
+                    $(
+                        BinaryOperator::$left => binary_op!(_expand; $left $(=> $right)?),
+                    )*
+                    $($rest)*,
+                }
+            };
+            (_expand; $ast:ident => $bytecode:ident) => {
+                Bytecode::$bytecode {
+                    dest_register,
+                    left_register,
+                    right_register,
+                }
+            };
+            (_expand; $ast:ident) => {
+                Bytecode::$ast {
+                    dest_register,
+                    left_register,
+                    right_register,
+                }
+            };
+            (_expand; ) => {
+                // Terminal case for recursion, do nothing
+            };
+        }
         self.push_bytecode(
-            match op.node {
+            binary_op!(
+                op.node;
+
                 // Arithmetic
-                BinaryOperator::Add => Bytecode::Add {
-                    dest_register,
-                    left_register,
-                    right_register,
-                },
-                BinaryOperator::Sub => Bytecode::Sub {
-                    dest_register,
-                    left_register,
-                    right_register,
-                },
-                BinaryOperator::Mul => Bytecode::Mul {
-                    dest_register,
-                    left_register,
-                    right_register,
-                },
-                BinaryOperator::Div => Bytecode::Div {
-                    dest_register,
-                    left_register,
-                    right_register,
-                },
-                BinaryOperator::Mod => Bytecode::Mod {
-                    dest_register,
-                    left_register,
-                    right_register,
-                },
-                BinaryOperator::Pow => Bytecode::Pow {
-                    dest_register,
-                    left_register,
-                    right_register,
-                },
-                BinaryOperator::FloorDiv => Bytecode::IDiv {
-                    dest_register,
-                    left_register,
-                    right_register,
-                },
-                BinaryOperator::BitwiseAnd => Bytecode::Band {
-                    dest_register,
-                    left_register,
-                    right_register,
-                },
-                BinaryOperator::BitwiseOr => Bytecode::Bor {
-                    dest_register,
-                    left_register,
-                    right_register,
-                },
-                BinaryOperator::BitwiseXor => Bytecode::Bxor {
-                    dest_register,
-                    left_register,
-                    right_register,
-                },
-                BinaryOperator::ShiftLeft => Bytecode::Shl {
-                    dest_register,
-                    left_register,
-                    right_register,
-                },
-                BinaryOperator::ShiftRight => Bytecode::Shr {
-                    dest_register,
-                    left_register,
-                    right_register,
-                },
+                Add,
+                Sub,
+                Mul,
+                Div,
+                Mod,
+                Pow,
+                FloorDiv => IDiv,
+                BitwiseAnd => Band,
+                BitwiseOr => Bor,
+                BitwiseXor => Bxor,
+                ShiftLeft => Shl,
+                ShiftRight => Shr,
 
                 // Comparison
-                BinaryOperator::Equal => Bytecode::Eq {
-                    dest_register,
-                    left_register,
-                    right_register,
-                },
-                BinaryOperator::NotEqual => Bytecode::Ne {
-                    dest_register,
-                    left_register,
-                    right_register,
-                },
-                BinaryOperator::LessThan => Bytecode::Lt {
-                    dest_register,
-                    left_register,
-                    right_register,
-                },
-                BinaryOperator::LessThanOrEqual => Bytecode::Le {
-                    dest_register,
-                    left_register,
-                    right_register,
-                },
+                Equal => Eq,
+                NotEqual => Ne,
+                LessThan => Lt,
+                LessThanOrEqual => Le,
+
+                // Strings
+                Concat;
+
                 // https://www.lua.org/manual/5.4/manual.html#3.4.4
                 // A comparison a > b is translated to b < a and a >= b is translated to b <= a.
                 BinaryOperator::GreaterThan => Bytecode::Lt {
@@ -2256,20 +2263,13 @@ impl Compiler {
                     right_register: left_register,
                 },
 
-                // Strings
-                BinaryOperator::Concat => Bytecode::Concat {
-                    dest_register,
-                    left_register,
-                    right_register,
-                },
-
                 // Logical
                 BinaryOperator::And | BinaryOperator::Or => {
                     unreachable!(
                         "short-circuiting logical operators should be handled in compile_expression"
                     );
                 }
-            },
+            ),
             Some(span),
         );
     }
@@ -2449,35 +2449,26 @@ impl Compiler {
                     unreachable!("the _ENV variable should always be bound to a local or upvalue");
                 }
 
-                // Resolve the name `_ENV`. Note that in the future we may want to implement a
-                // specialized `GETTABUP` opcode like Lua has, to fetch a table key from an
-                // upvalue directly, without moving the upvalue into a register.
-                let current_r = self.register_index;
-                let env_register = self.read_variable(
-                    TokenTree {
-                        node: Name(ENV_NAME.into()),
-                        span: name.span,
+                // `_ENV` should always be equivalent to upvalue 0.
+                let key_const_index = self.get_global_name_index(name.node.0.clone());
+                match self.frame.resolve_name(&ENV_NAME.into()) {
+                    ResolvedName::Local { register, .. } => Bytecode::SetTableConstKey {
+                        table_register: register,
+                        key_const_index,
+                        value_register,
                     },
-                    VariableMode::Ref,
-                )?;
-
-                let const_index = self.get_global_name_index(name.node.0.clone());
-
-                let key_r = self.take_register();
-                self.push_bytecode(
-                    Bytecode::LoadConst {
-                        register: key_r,
-                        const_index,
+                    ResolvedName::Upvalue {
+                        index: upval_index, ..
+                    } => Bytecode::SetTableUpvalConstKey {
+                        table_upval_index: upval_index,
+                        key_const_index,
+                        value_register,
                     },
-                    Some(span),
-                );
-
-                self.release_registers_from(current_r);
-
-                Bytecode::SetTable {
-                    table_register: env_register,
-                    value_register,
-                    key_register: key_r,
+                    ResolvedName::None => {
+                        unreachable!(
+                            "the _ENV variable should always be bound to a local or upvalue"
+                        );
+                    }
                 }
             }
         };
@@ -2494,7 +2485,7 @@ impl Compiler {
         self.scope_depth
     }
 
-    fn end_scope(&mut self) -> crate::Result {
+    fn end_scope(&mut self, end_span: Option<Span>) {
         let scope_id = self.scope_id();
         self.scope_ids.pop();
         let parent_scope_id = self.scope_id();
@@ -2505,6 +2496,7 @@ impl Compiler {
             .expect("there should be a starting register for the scope");
         self.release_registers_from(starting_register);
 
+        let end_ip = self.chunk.get_current_addr() as usize;
         while !self.frame.locals.is_empty()
             && self
                 .frame
@@ -2513,7 +2505,8 @@ impl Compiler {
                 .as_ref()
                 .is_some_and(|local| local.depth > self.scope_depth)
         {
-            self.frame.locals.pop();
+            let local = self.frame.locals.pop().unwrap();
+            self.chunk.local_vars[local.var_index].end_ip = end_ip;
         }
 
         // If we have any gotos still pending, they're going to jump out of this scope. So we need
@@ -2534,7 +2527,7 @@ impl Compiler {
 
             if !gotos_with_to_close.is_empty() {
                 // Let those gotos close their values, and then jump onwards
-                for goto in gotos_with_to_close.iter() {
+                for goto in &gotos_with_to_close {
                     self.chunk.patch_addr_placeholder(goto.addr);
                 }
 
@@ -2563,7 +2556,7 @@ impl Compiler {
                 Bytecode::Close {
                     from_register: starting_register,
                 },
-                None,
+                end_span,
             );
 
             self.to_close.truncate(at);
@@ -2572,29 +2565,37 @@ impl Compiler {
         // Remove any labels that are no longer in scope
         self.labels
             .retain(|_, label| label.depth <= self.scope_depth);
-
-        Ok(())
     }
 
     fn add_local(&mut self, name: LuaString, register: u8, attributes: u8, span: Option<Span>) {
         self.reserve_register(register);
-        let local = Local {
+        let local_var_index = self.chunk.local_vars.len();
+        self.chunk.local_vars.push(LocalVarInfo {
             name: name.clone(),
-            depth: self.scope_depth,
-            span,
-            attributes,
-        };
+            register,
+            start_ip: self.chunk.get_current_addr() as usize,
+            end_ip: usize::MAX,
+        });
 
         let index = self.frame.locals.len() as u8;
         debug_assert!(
-            index == register,
+            index + 1 == register,
             "registers must be allocated sequentially (index: {index}, register: {register}), when adding local {}",
             String::from_utf8_lossy(&name),
         );
+
+        let local = Local {
+            name,
+            register,
+            depth: self.scope_depth,
+            span,
+            attributes,
+            var_index: local_var_index,
+        };
         self.frame.locals.push(local);
 
         if attributes & (LuaVariableAttribute::ToBeClosed as u8) != 0 {
-            self.to_close.push(index);
+            self.to_close.push(register);
         }
     }
 }

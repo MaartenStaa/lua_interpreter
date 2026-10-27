@@ -13,109 +13,110 @@ use super::{
 impl From<ast::Literal> for LuaValue {
     fn from(literal: ast::Literal) -> Self {
         match literal {
-            ast::Literal::Nil => LuaValue::Nil,
-            ast::Literal::Boolean(b) => LuaValue::Boolean(b),
-            ast::Literal::Number(n) => LuaValue::Number(n.into()),
-            ast::Literal::String(s) => LuaValue::String(s),
+            ast::Literal::Nil => LuaValue::NIL,
+            ast::Literal::Boolean(b) => LuaValue::from_bool(b),
+            ast::Literal::Number(n) => LuaValue::from_number(LuaNumber::from(n)),
+            ast::Literal::String(s) => LuaValue::from_string(s),
         }
     }
 }
 
 impl From<bool> for LuaValue {
     fn from(b: bool) -> Self {
-        LuaValue::Boolean(b)
+        LuaValue::from_bool(b)
     }
 }
 
 impl From<&str> for LuaValue {
     fn from(s: &str) -> Self {
-        LuaValue::String(s.as_bytes().to_vec().into())
+        LuaValue::from_string(s.as_bytes().to_vec())
     }
 }
 
 impl From<String> for LuaValue {
     fn from(s: String) -> Self {
-        LuaValue::String(s.into_bytes().into())
+        LuaValue::from_string(s.into_bytes())
     }
 }
 
 impl From<Cow<'_, str>> for LuaValue {
     fn from(s: Cow<'_, str>) -> Self {
-        LuaValue::String(s.into_owned().into_bytes().into())
+        LuaValue::from_string(s.into_owned().into_bytes())
     }
 }
 
 impl From<Vec<u8>> for LuaValue {
     fn from(s: Vec<u8>) -> Self {
-        LuaValue::String(s.into())
+        LuaValue::from_string(LuaString::from_bytes(s))
     }
 }
 
 impl From<LuaString> for LuaValue {
     fn from(s: LuaString) -> Self {
-        LuaValue::String(s)
+        LuaValue::from_string(s)
     }
 }
 
 impl From<i64> for LuaValue {
     fn from(i: i64) -> Self {
-        LuaValue::Number(LuaNumber::Integer(i))
+        LuaValue::from_integer(i)
     }
 }
 
 impl From<f64> for LuaValue {
     fn from(f: f64) -> Self {
-        LuaValue::Number(LuaNumber::Float(f))
+        LuaValue::from_float(f)
     }
 }
 
 impl From<LuaNumber> for LuaValue {
     fn from(number: LuaNumber) -> Self {
-        LuaValue::Number(number)
+        LuaValue::from_number(number)
     }
 }
 
-impl From<LuaTable> for LuaValue {
+impl<T> From<T> for LuaValue
+where
+    T: Into<LuaObject>,
+{
+    fn from(object: T) -> Self {
+        LuaValue::from_object(Arc::new(RwLock::new(object.into())))
+    }
+}
+
+impl From<LuaTable> for LuaObject {
     fn from(table: LuaTable) -> Self {
-        LuaValue::Object(Arc::new(RwLock::new(LuaObject::Table(table))))
+        LuaObject::Table(table)
     }
 }
 
 impl From<LuaClosure> for LuaValue {
     fn from(closure: LuaClosure) -> Self {
-        LuaValue::Object(Arc::new(RwLock::new(LuaObject::Closure(closure))))
+        LuaValue::from_object(Arc::new(RwLock::new(LuaObject::Closure(closure))))
     }
 }
 
 impl From<LuaState> for LuaValue {
     fn from(state: LuaState) -> Self {
-        LuaValue::Object(Arc::new(RwLock::new(LuaObject::Thread(Arc::new(
-            RwLock::new(state),
-        )))))
-    }
-}
-
-impl From<UserData> for LuaValue {
-    fn from(user_data: UserData) -> Self {
-        LuaValue::Object(Arc::new(RwLock::new(LuaObject::UserData(user_data))))
+        LuaValue::from_object(Arc::new(RwLock::new(LuaObject::Thread(Box::new(state)))))
     }
 }
 
 impl From<LuaConst> for LuaValue {
     fn from(constant: LuaConst) -> Self {
         match constant {
-            LuaConst::Nil => LuaValue::Nil,
-            LuaConst::Boolean(b) => LuaValue::Boolean(b),
-            LuaConst::Number(n) => LuaValue::Number(n),
-            LuaConst::String(s) => LuaValue::String(s),
-            LuaConst::Table(t) => LuaValue::Object(Arc::new(RwLock::new(LuaObject::Table(t)))),
+            LuaConst::Nil => LuaValue::NIL,
+            LuaConst::Boolean(b) => LuaValue::from_bool(b),
+            LuaConst::Number(n) => LuaValue::from_number(n),
+            LuaConst::String(s) => LuaValue::from_string(s),
+            LuaConst::Table(t) => LuaValue::from_object(Arc::new(RwLock::new(LuaObject::Table(t)))),
         }
     }
 }
 
-impl From<LuaObject> for LuaValue {
-    fn from(object: LuaObject) -> Self {
-        LuaValue::Object(Arc::new(RwLock::new(object)))
+impl From<Arc<RwLock<LuaObject>>> for LuaValue {
+    fn from(object: Arc<RwLock<LuaObject>>) -> Self {
+        LuaValue::from_object(object)
     }
 }
 
@@ -125,5 +126,11 @@ impl From<ast::Number> for LuaNumber {
             ast::Number::Integer(i) => LuaNumber::Integer(i),
             ast::Number::Float(f) => LuaNumber::Float(f),
         }
+    }
+}
+
+impl From<UserData> for LuaObject {
+    fn from(user_data: UserData) -> Self {
+        LuaObject::UserData(user_data)
     }
 }

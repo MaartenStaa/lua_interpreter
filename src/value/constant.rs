@@ -20,8 +20,8 @@ impl PartialEq for LuaConst {
                 (LuaNumber::Integer(a), LuaNumber::Integer(b)) => a == b,
                 (LuaNumber::Float(a), LuaNumber::Float(b)) => a == b,
                 // NOTE: While the values may be equal, these are distinct constants!
-                (LuaNumber::Integer(_), LuaNumber::Float(_)) => false,
-                (LuaNumber::Float(_), LuaNumber::Integer(_)) => false,
+                (LuaNumber::Integer(_), LuaNumber::Float(_))
+                | (LuaNumber::Float(_), LuaNumber::Integer(_)) => false,
             },
             (LuaConst::String(a), LuaConst::String(b)) => a == b,
             (LuaConst::Table(a), LuaConst::Table(b)) => a == b,

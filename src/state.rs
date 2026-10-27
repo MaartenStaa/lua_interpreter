@@ -2,10 +2,10 @@ use crate::{
     chunk::Chunk,
     env,
     value::{
-        LuaConst, LuaValue, UpValue,
+        LuaValue, UpValue,
         callable::{Callable, Method},
     },
-    vm::{CallFrameKind, ConstIndex, MAX_STACK_SIZE, call_frame::CallFrame, trace::VMTracer},
+    vm::{CallFrameKind, ChunkIndex, MAX_STACK_SIZE, call_frame::CallFrame, trace::VMTracer},
 };
 use std::{
     collections::HashMap,
@@ -17,8 +17,6 @@ use std::{
 #[derive(Debug)]
 pub struct GlobalState {
     pub(crate) chunks: Vec<Chunk>,
-    pub(crate) consts: Vec<LuaConst>,
-    pub(crate) const_index: u16,
     pub(crate) global_env: Arc<RwLock<UpValue>>,
 }
 
@@ -33,43 +31,25 @@ impl GlobalState {
     fn new() -> Self {
         Self {
             chunks: Vec::new(),
-            consts: Vec::new(),
-            const_index: 0,
             global_env: env::create_global_env(),
         }
     }
 
-    pub fn add_chunk(&mut self, chunk: Chunk) -> crate::Result<u16> {
+    pub fn add_chunk(&mut self, chunk: Chunk) -> crate::Result<ChunkIndex> {
         let index = self.chunks.len();
-        if index >= u16::MAX as usize {
+        if index >= ChunkIndex::MAX as usize {
             return Err(crate::error::lua_error!("too many chunks"));
         }
         self.chunks.push(chunk);
-        Ok(index as u16)
+        Ok(index as ChunkIndex)
     }
 
-    pub fn get_chunk(&self, index: u16) -> Option<&Chunk> {
+    #[must_use]
+    pub fn get_chunk(&self, index: ChunkIndex) -> Option<&Chunk> {
         self.chunks.get(index as usize)
     }
 
-    pub fn register_const(&mut self, constant: LuaConst) -> u16 {
-        let index = self.const_index;
-        self.consts.push(constant);
-        self.const_index += 1;
-        index
-    }
-
-    pub fn lookup_const(&self, constant: &LuaConst) -> Option<u16> {
-        self.consts[..self.const_index as usize]
-            .iter()
-            .position(|c| c == constant)
-            .map(|i| i as u16)
-    }
-
-    pub fn get_consts(&self) -> &[LuaConst] {
-        &self.consts
-    }
-
+    #[must_use]
     pub fn get_global_env(&self) -> Arc<RwLock<UpValue>> {
         self.global_env.clone()
     }
@@ -128,13 +108,16 @@ pub struct LuaState {
 
     // Debug/trace support
     pub(crate) tracer: Option<VMTracer>,
+
+    #[cfg(feature = "debugger")]
+    pub(crate) debugger: Option<crate::debugger::controller::DebuggerController>,
 }
 
 impl LuaState {
-    pub(crate) fn new(global: Arc<RwLock<GlobalState>>, chunk_index: ConstIndex) -> Self {
+    pub(crate) fn new(global: Arc<RwLock<GlobalState>>, chunk_index: ChunkIndex) -> Self {
         let max_registers = {
             let global_state = global.read().unwrap();
-            assert!(chunk_index < global_state.chunks.len() as u16);
+            assert!(chunk_index < global_state.chunks.len() as ChunkIndex);
 
             let chunk = &global_state.chunks[chunk_index as usize];
             assert!(
@@ -163,7 +146,7 @@ impl LuaState {
                 }),
                 0,
                 true,
-                true,
+                0,
             )
             .expect("cannot stack overflow");
 
@@ -192,7 +175,7 @@ impl LuaState {
                         Some(closure.upvalues),
                         num_params.into(),
                         has_varargs,
-                        true,
+                        0,
                     )
                     .expect("cannot stack overflow");
             }
@@ -210,7 +193,7 @@ impl LuaState {
                         None,
                         0,
                         false,
-                        true,
+                        0,
                     )
                     .expect("cannot stack overflow");
             }
@@ -230,19 +213,23 @@ impl LuaState {
             is_main_thread,
             pending_yield: None,
             tracer: None,
+            #[cfg(feature = "debugger")]
+            debugger: None,
         }
     }
 
+    #[must_use]
     pub fn with_tracer(mut self, trace_vm: bool) -> Self {
         self.tracer = trace_vm.then(VMTracer::new);
         self
     }
 
+    #[must_use]
     pub fn status(&self) -> ThreadStatus {
         self.status
     }
 
-    /// Trigger a yield with the given values. This sets pending_yield which will
+    /// Trigger a yield with the given values. This sets `pending_yield` which will
     /// be checked after the current native function returns.
     pub fn yield_values(&mut self, values: Vec<LuaValue>) {
         self.pending_yield = Some(values);
@@ -251,6 +238,7 @@ impl LuaState {
     /// Check if execution can yield (not across C-call boundary)
     /// A yield is not allowed if there's a C function (native function) in the call stack,
     /// except for the immediate caller (which would be coroutine.yield itself)
+    #[must_use]
     pub fn is_yieldable(&self) -> bool {
         // Check all frames except the top one (which is coroutine.yield)
         // If any is a native function, we cannot yield
@@ -270,6 +258,9 @@ impl Debug for LuaState {
             .field("call_stack", &&self.call_stack[..self.call_stack_index])
             .field("call_stack_index", &self.call_stack_index)
             .field("status", &self.status)
-            .finish()
+            .field("is_main_thread", &self.is_main_thread)
+            .field("pending_yield", &self.pending_yield)
+            .field("multres", &self.multres)
+            .finish_non_exhaustive()
     }
 }

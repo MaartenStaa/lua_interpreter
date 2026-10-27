@@ -5,17 +5,17 @@ use std::{
 
 use crate::{
     value::{LuaValue, UpValue},
-    vm::ConstIndex,
+    vm::ChunkIndex,
 };
 
 #[derive(Debug, Copy, Clone)]
 pub(crate) enum CallFrameKind {
-    Lua { chunk: ConstIndex, ip: usize },
+    Lua { chunk: ChunkIndex, ip: usize },
     Native { name: &'static str },
 }
 
 impl CallFrameKind {
-    pub(crate) fn for_chunk(chunk: ConstIndex) -> Self {
+    pub(crate) fn for_chunk(chunk: ChunkIndex) -> Self {
         Self::Lua { chunk, ip: 0 }
     }
 }
@@ -28,11 +28,13 @@ pub(crate) struct CallFrame {
     pub(crate) return_addr: usize,
     pub(crate) return_value_register: u8,
     pub(crate) upvalues: Option<HashMap<usize, Arc<RwLock<UpValue>>>>,
-    pub(crate) num_args: u16,
+    pub(crate) num_args: usize,
     pub(crate) varargs: Vec<LuaValue>,
     pub(crate) takes_varargs: bool,
-    pub(crate) allow_multi_return_values: bool,
+    /// 0 = multres, otherwise expect `num_return_values - 1` values.
+    pub(crate) num_return_values: u8,
     pub(crate) to_close: Vec<u8>,
+    pub(crate) max_registers: u8,
 }
 
 impl CallFrame {
@@ -47,9 +49,9 @@ impl CallFrame {
     }
 
     #[inline]
-    pub(crate) fn inc_ip(&mut self, by: usize) {
+    pub(crate) fn inc_ip(&mut self) {
         if let CallFrameKind::Lua { ref mut ip, .. } = self.kind {
-            *ip += by;
+            *ip += 1;
         } else {
             panic!("attempted to increment IP on non-Lua call frame");
         }
@@ -68,8 +70,9 @@ impl CallFrame {
             num_args: 0,
             varargs: vec![],
             takes_varargs: false,
-            allow_multi_return_values: true,
+            num_return_values: 0,
             to_close: vec![],
+            max_registers: 0,
         }
     }
 }
@@ -77,8 +80,10 @@ impl CallFrame {
 #[derive(Debug, Copy, Clone)]
 pub(crate) struct PoppedCallFrame {
     pub(crate) kind: CallFrameKind,
+    pub(crate) frame_pointer: usize,
     pub(crate) border_frame: bool,
     pub(crate) return_addr: usize,
     pub(crate) return_value_register: u8,
-    pub(crate) allow_multi_return_values: bool,
+    /// 0 = multres, otherwise expect `num_return_values - 1` values.
+    pub(crate) num_return_values: u8,
 }

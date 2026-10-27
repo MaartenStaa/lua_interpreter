@@ -152,7 +152,7 @@ pub(crate) fn get_pack_option(
             max_alignment,
             fmt,
         )?,
-        b'l' => PackOptionItem::new(
+        b'l' | b'j' => PackOptionItem::new(
             PackOption::SignedInt,
             size_of::<i64>(),
             position,
@@ -162,13 +162,6 @@ pub(crate) fn get_pack_option(
         b'L' => PackOptionItem::new(
             PackOption::UnsignedInt,
             size_of::<u64>(),
-            position,
-            max_alignment,
-            fmt,
-        )?,
-        b'j' => PackOptionItem::new(
-            PackOption::SignedInt,
-            size_of::<i64>(),
             position,
             max_alignment,
             fmt,
@@ -281,7 +274,7 @@ pub(crate) fn unpack_int(
     let limit = if size <= SIZE_INT { size } else { SIZE_INT };
     for i in (0..limit).rev() {
         result <<= 8;
-        result |= str[if is_little_endian { i } else { size - 1 - i }] as i64;
+        result |= i64::from(str[if is_little_endian { i } else { size - 1 - i }]);
     }
     if size < SIZE_INT {
         if is_signed {
@@ -296,7 +289,7 @@ pub(crate) fn unpack_int(
             MASK_CHARACTER
         };
         for i in limit..size {
-            if str[if is_little_endian { i } else { size - 1 - i }] as u64 != mask {
+            if u64::from(str[if is_little_endian { i } else { size - 1 - i }]) != mask {
                 return Err(lua_error!(
                     "{size}-byte integer does not fit into Lua integer"
                 ));

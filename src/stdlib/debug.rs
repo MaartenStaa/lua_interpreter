@@ -2,10 +2,10 @@ use std::sync::LazyLock;
 
 use crate::{
     error::lua_error,
-    macros::require_closure,
+    macros::{lua_return, native_function, require_closure},
     state::LuaState,
     value::{
-        LuaObject, LuaTable, LuaValue,
+        IntegerRepr, LuaObject, LuaTable, LuaValue,
         callable::{Callable, Method},
     },
 };
@@ -13,36 +13,27 @@ use crate::{
 pub static DEBUG: LazyLock<LuaValue> = LazyLock::new(|| {
     let mut debug = LuaTable::new();
 
-    debug.insert(
-        "getinfo".into(),
-        LuaObject::NativeFunction("getinfo", getinfo).into(),
-    );
-    debug.insert(
-        "getupvalue".into(),
-        LuaObject::NativeFunction("debug.getupvalue", getupvalue).into(),
-    );
+    debug.insert("getinfo".into(), native_function!("debug"; getinfo));
+    debug.insert("getupvalue".into(), native_function!("debug"; getupvalue));
     debug.insert(
         "setmetatable".into(),
-        LuaObject::NativeFunction("setmetatable", setmetatable).into(),
+        native_function!("debug"; setmetatable),
     );
-    debug.insert(
-        "upvalueid".into(),
-        LuaObject::NativeFunction("debug.upvalueid", upvalueid).into(),
-    );
+    debug.insert("upvalueid".into(), native_function!("debug"; upvalueid));
 
     debug.into()
 });
 
-fn getinfo(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+fn getinfo(state: &mut LuaState) -> crate::Result<usize> {
     // TODO: First argument can optionally refer to the thread
     // TODO: Last argument can refer to which fields to fill in the table
 
     let mut info = LuaTable::new();
-    match state.try_arg(0) {
-        Some(LuaValue::Number(n)) => {
-            let call_frame_offset = n.integer_repr()?;
+    match state.ensure_arg(0)? {
+        v if v.is_number() => {
+            let call_frame_offset = unsafe { v.as_number() }.integer_repr()?;
             if call_frame_offset < 0 || call_frame_offset as usize > state.call_stack_index {
-                return Ok(vec![LuaValue::Nil]);
+                lua_return!(state)
             }
 
             // let call_frame = &vm.call_stack[vm.call_stack_index - call_frame_offset as usize];
@@ -50,37 +41,37 @@ fn getinfo(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
             //     info.insert("name".into(), LuaValue::String(name.clone()));
             // }
         }
-        Some(LuaValue::Object(o)) => match &*o.read().unwrap() {
-            LuaObject::Closure(closure) => {
-                if let Some(name) = state.get_chunk_name(closure.chunk) {
-                    info.insert("name".into(), LuaValue::String(name.clone()));
+        v if v.is_object() => {
+            let o = unsafe { v.as_object() };
+            match &*o.read().unwrap() {
+                LuaObject::Closure(closure) => {
+                    if let Some(name) = state.get_chunk_name(closure.chunk) {
+                        info.insert("name".into(), LuaValue::from_string(name.clone()));
+                    }
+                }
+                LuaObject::NativeFunction(name, _) => {
+                    info.insert("name".into(), (*name).into());
+                }
+                _ => {
+                    return Err(lua_error!(
+                        "bad argument #1 to 'getinfo' (number or function expected, got {type_name})",
+                        type_name = o.read().unwrap().type_name()
+                    ));
                 }
             }
-            LuaObject::NativeFunction(name, _) => {
-                info.insert("name".into(), (*name).into());
-            }
-            _ => {
-                return Err(lua_error!(
-                    "bad argument #1 to 'getinfo' (number or function expected, got {type_name})",
-                    type_name = o.read().unwrap().type_name()
-                ));
-            }
-        },
-        Some(v) => {
+        }
+        v => {
             return Err(lua_error!(
                 "bad argument #1 to 'getinfo' (number or function expected, got {type_name})",
                 type_name = v.type_name()
             ));
         }
-        None => {
-            return Err(lua_error!("bad argument #1 to 'getinfo' (value expected)"));
-        }
     }
 
-    Ok(vec![info.into()])
+    lua_return!(state; info.into())
 }
 
-fn getupvalue(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+fn getupvalue(state: &mut LuaState) -> crate::Result<usize> {
     // TODO: Will produce error "value expected" rather than "function expected, got no value"
     let value = state.ensure_arg(0)?;
     let callable: Result<Callable, _> = value.clone().try_into();
@@ -94,11 +85,11 @@ fn getupvalue(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
     let n = state.arg_as_integer(1)? - 1;
 
     let Method::Closure(closure) = callable.method else {
-        return Ok(vec![]);
+        return Ok(0);
     };
 
     if n < 0 || n as usize >= closure.upvalues.len() {
-        return Ok(vec![]);
+        return Ok(0);
     }
 
     if let Some(upvalue) = &closure.upvalues.get(&(n as usize)) {
@@ -108,33 +99,34 @@ fn getupvalue(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
             .expect("invalid chunk")
             .unwrap_or_else(|| b"?".into());
 
-        Ok(vec![name.into(), upvalue.read().unwrap().clone()])
-    } else {
-        Ok(vec![])
+        lua_return!(state;
+            name.into(),
+            upvalue.read().unwrap().clone(),
+        );
     }
+
+    Ok(0)
 }
 
-fn setmetatable(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+fn setmetatable(state: &mut LuaState) -> crate::Result<usize> {
     let mut value = state.ensure_arg(0)?;
     let mt = state.try_arg(1);
 
     value.set_metatable(mt)?;
-    Ok(vec![value])
+    lua_return!(state; value)
 }
 
-fn upvalueid(state: &mut LuaState) -> crate::Result<Vec<LuaValue>> {
+fn upvalueid(state: &mut LuaState) -> crate::Result<usize> {
     require_closure!(state.try_arg(0), "debug.upvalueid", closure, {
         let n = state.arg_as_integer(1)? - 1;
         if n < 0 || n as usize >= closure.upvalues.len() {
-            return Ok(vec![LuaValue::Nil]);
-        }
-
-        if let Some(upvalue) = &closure.upvalues.get(&(n as usize)) {
+            lua_return!(state)
+        } else if let Some(upvalue) = &closure.upvalues.get(&(n as usize)) {
             let id = (&*upvalue.read().unwrap()) as *const _ as i64;
             // TODO: This should be a "light userdata" value
-            Ok(vec![id.into()])
-        } else {
-            Ok(vec![LuaValue::Nil])
+            lua_return!(state; id.into());
         }
+
+        lua_return!(state)
     })
 }

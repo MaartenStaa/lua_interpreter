@@ -17,8 +17,17 @@ impl Debug for Span {
 }
 
 impl Span {
+    #[must_use]
     pub fn new(start: usize, end: usize) -> Span {
         Span { start, end }
+    }
+
+    #[must_use]
+    pub fn union(self, other: Span) -> Span {
+        Span {
+            start: self.start.min(other.start),
+            end: self.end.max(other.end),
+        }
     }
 
     pub fn labeled(&self, label: impl Into<String>) -> LabeledSpan {

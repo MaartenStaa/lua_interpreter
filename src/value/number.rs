@@ -23,29 +23,6 @@ impl Hash for LuaNumber {
     }
 }
 
-impl LuaNumber {
-    pub fn integer_repr(&self) -> crate::Result<i64> {
-        match self {
-            LuaNumber::Integer(i) => Ok(*i),
-            LuaNumber::Float(f) => {
-                if f.is_nan() {
-                    return Err(lua_error!("NaN has no integer representation",));
-                }
-
-                if f.is_infinite() {
-                    return Err(lua_error!("infinity has no integer representation",));
-                }
-
-                if f.fract() != 0.0 {
-                    return Err(lua_error!("float has no integer representation",));
-                }
-
-                Ok(*f as i64)
-            }
-        }
-    }
-}
-
 impl From<LuaNumber> for f32 {
     fn from(value: LuaNumber) -> Self {
         match value {
@@ -67,13 +44,13 @@ impl From<LuaNumber> for f64 {
 impl Display for LuaNumber {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            LuaNumber::Integer(i) => write!(f, "{}", i),
+            LuaNumber::Integer(i) => write!(f, "{i}"),
             LuaNumber::Float(fl) => {
                 // Ensure we always print the decimal point
                 if fl.fract() == 0.0 {
-                    write!(f, "{:.1}", fl)
+                    write!(f, "{fl:.1}")
                 } else {
-                    write!(f, "{}", fl)
+                    write!(f, "{fl}")
                 }
             }
         }
@@ -88,5 +65,41 @@ impl PartialEq for LuaNumber {
             (LuaNumber::Integer(a), LuaNumber::Float(b)) => (*a as f64) == *b,
             (LuaNumber::Float(a), LuaNumber::Integer(b)) => *a == (*b as f64),
         }
+    }
+}
+
+pub trait IntegerRepr {
+    /// Convert this value to an integer representation, if possible.
+    ///
+    /// # Errors
+    ///
+    /// If the value cannot be represented as an integer, an error is returned.
+    fn integer_repr(&self) -> crate::Result<i64>;
+}
+
+impl IntegerRepr for LuaNumber {
+    fn integer_repr(&self) -> crate::Result<i64> {
+        match self {
+            LuaNumber::Integer(i) => Ok(*i),
+            LuaNumber::Float(f) => f.integer_repr(),
+        }
+    }
+}
+
+impl IntegerRepr for f64 {
+    fn integer_repr(&self) -> crate::Result<i64> {
+        if self.is_nan() {
+            return Err(lua_error!("NaN has no integer representation",));
+        }
+
+        if self.is_infinite() {
+            return Err(lua_error!("infinity has no integer representation",));
+        }
+
+        if self.fract() != 0.0 {
+            return Err(lua_error!("float has no integer representation",));
+        }
+
+        Ok(*self as i64)
     }
 }

@@ -1,9 +1,5 @@
 use crate::{LuaState, value::NativeLuaFunction};
-use std::{
-    fmt::Display,
-    hash::Hash,
-    sync::{Arc, RwLock},
-};
+use std::{fmt::Display, hash::Hash};
 
 use super::{UserData, closure::LuaClosure, table::LuaTable};
 
@@ -13,7 +9,7 @@ pub enum LuaObject {
     Closure(LuaClosure),
     NativeFunction(&'static str, NativeLuaFunction),
     UserData(UserData),
-    Thread(Arc<RwLock<LuaState>>),
+    Thread(Box<LuaState>),
 }
 
 impl PartialEq for LuaObject {
@@ -36,40 +32,40 @@ impl PartialEq for LuaObject {
 
 impl Hash for LuaObject {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        (self as *const Self).hash(state);
+        std::ptr::from_ref(self).hash(state);
     }
 }
 
 impl LuaObject {
+    #[must_use]
     pub fn type_name(&self) -> &'static str {
         match self {
             LuaObject::Table(_) => "table",
-            LuaObject::Closure(LuaClosure { .. }) => "function",
-            LuaObject::NativeFunction(_, _) => "function",
+            LuaObject::Closure(LuaClosure { .. }) | LuaObject::NativeFunction(_, _) => "function",
             LuaObject::UserData(_) => "userdata",
             LuaObject::Thread(_) => "thread",
         }
+    }
+
+    pub(crate) fn is_table(&self) -> bool {
+        matches!(self, LuaObject::Table(_))
     }
 }
 
 impl Display for LuaObject {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            LuaObject::Table(_) => write!(f, "table: 0x{:x}", self as *const _ as usize),
+            LuaObject::Table(_) => write!(f, "table: {self:012p}"),
             LuaObject::Closure(LuaClosure { chunk, .. }) => {
-                write!(
-                    f,
-                    "function: 0x{:x} ({chunk:04})",
-                    self as *const _ as usize
-                )
+                write!(f, "function: {self:012p} ({chunk:04})")
             }
             LuaObject::NativeFunction(name, func) => {
-                write!(f, "function: 0x{:x} ({name})", func as *const _ as usize)
+                write!(f, "function: {func:012p} ({name})")
             }
             LuaObject::UserData(u) => {
-                write!(f, "{}", u)
+                write!(f, "{u}")
             }
-            _ => todo!("formatting a {self:?}"),
+            LuaObject::Thread(_) => write!(f, "thread: {self:012p}"),
         }
     }
 }

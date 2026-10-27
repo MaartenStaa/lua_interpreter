@@ -8,7 +8,7 @@ pub static UTF8: LazyLock<LuaValue> = LazyLock::new(|| {
     // Global constants
     package.insert(
         "charpattern".into(),
-        LuaValue::String(b"[\0-\x7F\xC2-\xFD][\x80-\xBF]*".into()),
+        LuaValue::from_string(b"[\0-\x7F\xC2-\xFD][\x80-\xBF]*"),
     );
 
     package.into()

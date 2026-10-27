@@ -47,7 +47,7 @@ impl NumberParser {
 
         // Find the end of the number
         let end = chars.position(|(i, &c)| {
-            let min_fraction_index = if is_hex { 1 } else { 0 };
+            let min_fraction_index = usize::from(is_hex);
 
             let is_end = if c == b'.' && !has_fraction && i >= min_fraction_index {
                 has_fraction = true;
@@ -92,7 +92,7 @@ impl NumberParser {
                 return Err(NumberParseError {
                     message: format!(
                         "invalid number literal near '{}'",
-                        String::from_utf8_lossy(&slice[..end + 1])
+                        String::from_utf8_lossy(&slice[..=end])
                     ),
                     span: 0..end + 1,
                 });
@@ -190,21 +190,19 @@ impl NumberParser {
 
 pub(crate) fn parse_decimal_number(literal: impl Iterator<Item = u8>) -> i64 {
     literal.fold(0i64, |acc, c| {
-        acc.wrapping_mul(10).wrapping_add(
-            c.to_digit(10)
-                .expect("expected only decimal numbers as input to parse_decimal_number")
-                as i64,
-        )
+        acc.wrapping_mul(10)
+            .wrapping_add(i64::from(c.to_digit(10).expect(
+                "expected only decimal numbers as input to parse_decimal_number",
+            )))
     })
 }
 
 pub(crate) fn parse_hex_number(literal: impl Iterator<Item = u8>) -> i64 {
     literal.fold(0i64, |acc, c| {
-        acc.wrapping_mul(16).wrapping_add(
+        acc.wrapping_mul(16).wrapping_add(i64::from(
             c.to_digit(16)
-                .expect("expected only hex numbers as input to parse_hex_number")
-                as i64,
-        )
+                .expect("expected only hex numbers as input to parse_hex_number"),
+        ))
     })
 }
 

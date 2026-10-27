@@ -16,7 +16,7 @@ impl LuaState {
     ) -> crate::Result<()> {
         // This clone is unfortunate, but otherwise the borrow-checker won't be happy
         // with us calling `run_closure` or `run_native_function` below.
-        let to_close = self.call_stack[self.call_stack_index - 1].to_close.clone();
+        let to_close = self.call_frame().to_close.clone();
 
         // Iterate in reverse order (LIFO)
         let mut stopped_at = 0;
@@ -27,7 +27,7 @@ impl LuaState {
             }
 
             let value = self.get(register);
-            if let LuaValue::Nil | LuaValue::Boolean(false) = value {
+            if value.is_nil() || (value.is_bool() && !unsafe { value.as_bool() }) {
                 // nil and false are ignored as to-be-closed values
                 continue;
             }
@@ -37,9 +37,7 @@ impl LuaState {
                     .try_into()
                     .map_err(|_| lua_error!("__close metamethod must be a callable value"))?;
 
-                let error = error
-                    .map(|e| e.message.clone().into_bytes().into())
-                    .unwrap_or(LuaValue::Nil);
+                let error = error.map_or(LuaValue::NIL, |e| e.message.clone().into_bytes().into());
                 let args = if close.is_metamethod {
                     vec![__close, value, error]
                 } else {
@@ -47,12 +45,14 @@ impl LuaState {
                 };
                 match close.method {
                     Method::Closure(closure) => {
-                        self.run_closure(closure, args)?;
-                    }
-                    Method::NativeFunction(name, func) => {
                         let num_args = args.len();
-                        let args_r = self.extend_stack(args);
-                        self.run_native_function(name, func, args_r, num_args as u16)?;
+                        let args_r = self.extend_stack(LuaValue::NIL, args);
+                        self.run_closure(&closure, args_r, num_args, 1)?;
+                    }
+                    nf @ Method::NativeFunction(name, func) => {
+                        let num_args = args.len();
+                        let args_r = self.extend_stack(nf, args);
+                        self.run_native_function(name, func, args_r, num_args, 1)?;
                     }
                 }
             } else {
@@ -63,10 +63,8 @@ impl LuaState {
         }
 
         // Remove closed registers from to_close list
-        self.call_stack[self.call_stack_index - 1]
-            .to_close
-            .truncate(stopped_at);
-        self.clear_registers_from(from_register);
+        self.call_frame_mut().to_close.truncate(stopped_at);
+        self.clear_registers_from(from_register, None);
 
         Ok(())
     }

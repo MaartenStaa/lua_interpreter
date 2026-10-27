@@ -1,7 +1,6 @@
 use crate::compiler::ExpressionResultMode;
-use crate::error::RuntimeError;
 use crate::instruction::Instruction;
-use crate::vm::{ConstIndex, JumpAddr};
+use crate::vm::{ChunkIndex, ConstIndex, JumpAddr};
 
 #[derive(Debug)]
 pub(crate) enum Bytecode {
@@ -14,12 +13,24 @@ pub(crate) enum Bytecode {
     /// Load a closure (function) into a register, and specify its upvalues.
     LoadClosure {
         register: u8,
-        chunk_index: ConstIndex,
+        chunk_index: ChunkIndex,
     },
     /// Load `nil` into a range of registers.
     LoadNil {
         from_register: u8,
         to_register: u8,
+    },
+    /// Load an integer (16 bytes) into a register.
+    LoadShort {
+        register: u8,
+        value: i16,
+    },
+    /// Load an integral float (16 bytes) into a register. Any floating point number that has an
+    /// integer representation that fits in 16 bits can be loaded with this instruction, which is
+    /// more compact than loading it as a constant.
+    LoadShortFloat {
+        register: u8,
+        value: i16,
     },
 
     // Binary operations
@@ -151,7 +162,7 @@ pub(crate) enum Bytecode {
     /// or all of them.
     LoadVararg {
         dest_register: u8,
-        single_value: bool,
+        result_mode: ExpressionResultMode,
     },
     /// Mark a register as having a <close> attribute.
     ToClose {
@@ -260,6 +271,23 @@ pub(crate) enum Bytecode {
         num_fixed_values: u8,
     },
 
+    // Loops
+    /// Prepare a numeric for loop. Validates that all three values (initial, limit, step) in
+    /// consecutive registers starting at `base_register` are numbers, coerces to float if any is
+    /// a float, checks that step is not zero, and jumps to `address` if the initial value already
+    /// exceeds the limit.
+    ForPrep {
+        base_register: u8,
+        address: JumpAddr,
+    },
+    /// Numeric for loop step. Increments R[`base_register`] by R[`base_register`+2] (the step), then
+    /// checks if the loop variable is still within the limit. If so, jumps to `address` (the loop
+    /// body). Otherwise falls through (exits the loop).
+    ForLoop {
+        base_register: u8,
+        address: JumpAddr,
+    },
+
     // Control
     Jmp {
         address: JumpAddr,
@@ -276,59 +304,73 @@ pub(crate) enum Bytecode {
         close_from_register: u8,
         address: JumpAddr,
     },
-
-    // Other
-    Error {
-        code: RuntimeError,
-    },
 }
 
 macro_rules! bytes {
-    ($instruction:ident $(,$($rest:tt)*)?) => {{
-        #[allow(unused_mut)]
-        let mut result = vec![Instruction::$instruction as u8];
-        bytes!(@append result; $($($rest)*)?);
-        result
+    ($instruction:ident) => {{ $crate::instruction::Instruction::create($crate::instruction::OpCode::$instruction, 0, 0, 0) }};
+    ($instruction:ident, bytes = $bc:expr) => {{
+        $crate::instruction::Instruction::create_bc(
+            $crate::instruction::OpCode::$instruction,
+            0,
+            $bc,
+        )
+    }};
+    ($instruction:ident, $a:expr, bytes = $bc:expr) => {{
+        $crate::instruction::Instruction::create_bc(
+            $crate::instruction::OpCode::$instruction,
+            $a,
+            $bc,
+        )
     }};
 
-    // Termination
-    (@append $result:ident;) => {};
-
-    // Typed element: `bytes = expr`
-    (@append $result:ident; bytes = $item:expr) => {{
-        $result.extend_from_slice(&$item.to_be_bytes());
+    ($instruction:ident, $a:expr) => {{
+        $crate::instruction::Instruction::create(
+            $crate::instruction::OpCode::$instruction,
+            $a,
+            0,
+            0,
+        )
     }};
-    (@append $result:ident; bytes = $item:expr, $($rest:tt)*) => {{
-        $result.extend_from_slice(&$item.to_be_bytes());
-        bytes!(@append $result; $($rest)*);
+    ($instruction:ident, $a:expr, $b:expr) => {{
+        $crate::instruction::Instruction::create(
+            $crate::instruction::OpCode::$instruction,
+            $a,
+            $b,
+            0,
+        )
     }};
-
-    // Untyped element: anything else
-    (@append $result:ident; $item:expr) => {{
-        $result.push($item);
-    }};
-    (@append $result:ident; $item:expr, $($rest:tt)*) => {{
-        $result.push($item);
-        bytes!(@append $result; $($rest)*);
+    ($instruction:ident, $a:expr, $b:expr, $c:expr) => {{
+        $crate::instruction::Instruction::create(
+            $crate::instruction::OpCode::$instruction,
+            $a,
+            $b,
+            $c,
+        )
     }};
 }
 
 impl Bytecode {
     fn expression_result_mode_to_byte(mode: ExpressionResultMode) -> u8 {
         match mode {
-            ExpressionResultMode::Single => 1,
-            ExpressionResultMode::Multiple => 0,
+            ExpressionResultMode::Amount(n) => {
+                debug_assert!(
+                    n < u8::MAX as usize,
+                    "ExpressionResultMode::Amount must be < 255"
+                );
+                (n + 1) as u8
+            }
+            ExpressionResultMode::Multres => 0,
         }
     }
 
-    pub fn into_bytes(self) -> Vec<u8> {
+    pub fn into_bytes(self) -> Instruction {
         match self {
             // Loading values
             Bytecode::LoadConst {
                 register,
                 const_index,
             } => {
-                bytes!(LoadConst, register, bytes = const_index)
+                bytes!(LoadConst, register, const_index)
             }
             Bytecode::LoadClosure {
                 register,
@@ -341,6 +383,12 @@ impl Bytecode {
                 to_register,
             } => {
                 bytes!(LoadNil, from_register, to_register)
+            }
+            Bytecode::LoadShort { register, value } => {
+                bytes!(LoadShort, register, bytes = i16::cast_unsigned(value))
+            }
+            Bytecode::LoadShortFloat { register, value } => {
+                bytes!(LoadShortFloat, register, bytes = i16::cast_unsigned(value))
             }
 
             // Binary operations
@@ -515,9 +563,13 @@ impl Bytecode {
             }
             Self::LoadVararg {
                 dest_register,
-                single_value,
+                result_mode,
             } => {
-                bytes!(LoadVararg, dest_register, single_value as u8)
+                bytes!(
+                    LoadVararg,
+                    dest_register,
+                    Self::expression_result_mode_to_byte(result_mode)
+                )
             }
             Self::ToClose { register } => {
                 bytes!(ToClose, register)
@@ -545,7 +597,7 @@ impl Bytecode {
                 bytes!(
                     SetTableConstKey,
                     table_register,
-                    bytes = key_const_index,
+                    key_const_index,
                     value_register
                 )
             }
@@ -569,7 +621,7 @@ impl Bytecode {
                 bytes!(
                     SetTableUpvalConstKey,
                     table_upval_index,
-                    bytes = key_const_index,
+                    key_const_index,
                     value_register
                 )
             }
@@ -589,7 +641,7 @@ impl Bytecode {
                     GetTableConstKey,
                     dest_register,
                     table_register,
-                    bytes = key_const_index
+                    key_const_index
                 )
             }
             Self::GetTableUpval {
@@ -613,7 +665,7 @@ impl Bytecode {
                     GetTableUpvalConstKey,
                     dest_register,
                     table_upval_index,
-                    bytes = key_const_index
+                    key_const_index
                 )
             }
             Self::AppendToTable {
@@ -697,6 +749,20 @@ impl Bytecode {
                 bytes!(ReturnM, from_register, num_fixed_values)
             }
 
+            // Loops
+            Self::ForPrep {
+                base_register,
+                address,
+            } => {
+                bytes!(ForPrep, base_register, bytes = address)
+            }
+            Self::ForLoop {
+                base_register,
+                address,
+            } => {
+                bytes!(ForLoop, base_register, bytes = address)
+            }
+
             // Control
             Self::Jmp { address } => {
                 bytes!(Jmp, bytes = address)
@@ -719,11 +785,6 @@ impl Bytecode {
             } => {
                 bytes!(JmpClose, close_from_register, bytes = address)
             }
-
-            // Other
-            Self::Error { code } => {
-                bytes!(Error, code as u8)
-            }
         }
     }
 }
@@ -734,18 +795,10 @@ pub(crate) enum JumpToUndecidedAddress {
     JmpTrue { condition_register: u8 },
     JmpFalse { condition_register: u8 },
     JmpClose { close_from_register: u8 },
+    ForPrep { base_register: u8 },
 }
 
 impl JumpToUndecidedAddress {
-    pub(crate) fn instruction_size_without_address(&self) -> usize {
-        match self {
-            JumpToUndecidedAddress::Jmp => 1,
-            JumpToUndecidedAddress::JmpTrue { .. }
-            | JumpToUndecidedAddress::JmpFalse { .. }
-            | JumpToUndecidedAddress::JmpClose { .. } => 2,
-        }
-    }
-
     pub(crate) fn into_bytecode(self, address: JumpAddr) -> Bytecode {
         match self {
             JumpToUndecidedAddress::Jmp => Bytecode::Jmp { address },
@@ -761,6 +814,10 @@ impl JumpToUndecidedAddress {
                 close_from_register,
             } => Bytecode::JmpClose {
                 close_from_register,
+                address,
+            },
+            JumpToUndecidedAddress::ForPrep { base_register } => Bytecode::ForPrep {
+                base_register,
                 address,
             },
         }

@@ -28,6 +28,7 @@ fn test_files(#[files("tests/resources/**/*.lua")] file: PathBuf) {
         Arc::new(source),
         vec![],
         true,
+        false,
     )
     .compile(Some(ast))
     .expect("compiling should succeed")

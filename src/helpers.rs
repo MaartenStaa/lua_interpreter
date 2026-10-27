@@ -30,7 +30,7 @@ impl BinaryOperator {
     }
 }
 
-impl<'source> TokenKind<'source> {
+impl TokenKind<'_> {
     // For easier matching
     pub(crate) fn is_operator(&self) -> bool {
         matches!(

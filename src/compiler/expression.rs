@@ -20,17 +20,17 @@ pub(crate) enum ExpressionMode {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum ExpressionResultMode {
-    /// The expression may produce no more than 1 result.
-    Single,
+    /// The expression may produce no more than the given amount of results.
+    Amount(usize),
     /// The expression being evaluated may produce multiple results, if applicable.
-    Multiple,
+    Multres,
 }
 
 impl ExpressionResultMode {
     pub(crate) fn into_result(self, register: u8) -> ExpressionResult {
         match self {
-            ExpressionResultMode::Single => ExpressionResult::Single { register },
-            ExpressionResultMode::Multiple => ExpressionResult::Multiple {
+            ExpressionResultMode::Amount(_) => ExpressionResult::Single { register },
+            ExpressionResultMode::Multres => ExpressionResult::Multiple {
                 from_register: register,
             },
         }
@@ -46,10 +46,10 @@ pub(crate) enum ExpressionResult {
 }
 
 impl ExpressionResult {
-    pub(crate) fn get_register(&self) -> u8 {
+    pub(crate) fn get_register(self) -> u8 {
         match self {
-            ExpressionResult::Single { register } => *register,
-            ExpressionResult::Multiple { from_register } => *from_register,
+            ExpressionResult::Single { register } => register,
+            ExpressionResult::Multiple { from_register } => from_register,
         }
     }
 }
@@ -66,10 +66,9 @@ pub(crate) enum ExpressionListLength {
 }
 
 impl ExpressionListLength {
-    pub(crate) fn get_register(&self) -> u8 {
+    pub(crate) fn get_register(self) -> u8 {
         match self {
-            Self::Constant { from_register } => *from_register,
-            Self::MultRes { from_register } => *from_register,
+            Self::Constant { from_register } | Self::MultRes { from_register } => from_register,
         }
     }
 }

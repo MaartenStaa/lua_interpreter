@@ -35,7 +35,7 @@ Legend:
        Note that the Rust Lua VM does not use garbage collection, so this
        function is essentially a stub, while mimicking the behavior of the Lua
        standard library.
-    3. 🚫 dofile
+    3. ✅ dofile
     4. ⚠️ error
        The `level` argument is not yet implemented.
     5. ✅ `_G`
@@ -60,15 +60,15 @@ Legend:
     23. ✅ `_VERSION`
     24. ✅ warn
     25. ✅ xpcall
-2. Coroutine manipulation \[0/8]
+2. Coroutine manipulation \[4/8]
     1. 🚫 coroutine.close
-    2. 🚫 coroutine.create
+    2. ✅ coroutine.create
     3. 🚫 coroutine.isyieldable
-    4. 🚫 coroutine.resume
+    4. ✅ coroutine.resume
     5. 🚫 coroutine.running
     6. 🚫 coroutine.status
-    7. 🚫 coroutine.wrap
-    8. 🚫 coroutine.yield
+    7. ✅ coroutine.wrap
+    8. ✅ coroutine.yield
 3. Modules \[1/9]
     1. ⚠️ require
        Loading files is supported, but `package.searchers` is not used

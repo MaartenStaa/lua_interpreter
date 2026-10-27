@@ -11,9 +11,21 @@ use crate::vm::CallFrameKind;
 #[derive(Debug, Diagnostic, Error)]
 #[repr(u8)]
 pub(crate) enum RuntimeError {
-    #[error("for loop limit is zero")]
-    #[diagnostic(code = "for_loop_limit_is_zero")]
-    ForLoopLimitIsZero,
+    #[error("'for' step is zero")]
+    #[diagnostic(code = "for_loop_step_is_zero")]
+    ForLoopStepIsZero,
+
+    #[error("'for' initial value must be a number")]
+    #[diagnostic(code = "for_loop_initial_not_number")]
+    ForLoopInitialNotNumber,
+
+    #[error("'for' limit must be a number")]
+    #[diagnostic(code = "for_loop_limit_not_number")]
+    ForLoopLimitNotNumber,
+
+    #[error("'for' step must be a number")]
+    #[diagnostic(code = "for_loop_step_not_number")]
+    ForLoopStepNotNumber,
 }
 
 impl From<RuntimeError> for u8 {
@@ -27,7 +39,10 @@ impl TryFrom<u8> for RuntimeError {
 
     fn try_from(value: u8) -> std::result::Result<Self, Self::Error> {
         match value {
-            0 => Ok(Self::ForLoopLimitIsZero),
+            0 => Ok(Self::ForLoopStepIsZero),
+            1 => Ok(Self::ForLoopInitialNotNumber),
+            2 => Ok(Self::ForLoopLimitNotNumber),
+            3 => Ok(Self::ForLoopStepNotNumber),
             _ => Err(lua_error!("invalid RuntimeError")),
         }
     }

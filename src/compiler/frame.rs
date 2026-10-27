@@ -9,7 +9,7 @@ use crate::{
 pub(crate) struct Frame {
     pub(crate) locals: Vec<Local>,
     pub(crate) upvalues: HashMap<LuaString, Upvalue>,
-    parent_frame: *mut Frame,
+    parent: *mut Frame,
 }
 
 #[derive(Debug)]
@@ -19,7 +19,7 @@ pub(crate) enum ResolvedName<'a> {
     None,
 }
 
-impl<'a> ResolvedName<'a> {
+impl ResolvedName<'_> {
     pub(crate) fn attributes(&self) -> u8 {
         match self {
             ResolvedName::Local { local, .. } => local.attributes,
@@ -46,19 +46,17 @@ enum ResolvedUpvalue {
 }
 
 impl ResolvedUpvalue {
-    fn attributes(&self) -> u8 {
+    fn attributes(self) -> u8 {
         match self {
-            ResolvedUpvalue::Local { attributes, .. } => *attributes,
-            ResolvedUpvalue::Upvalue { attributes, .. } => *attributes,
+            ResolvedUpvalue::Local { attributes, .. }
+            | ResolvedUpvalue::Upvalue { attributes, .. } => attributes,
         }
     }
 
-    fn source(&self) -> UpvalueLocation {
+    fn source(self) -> UpvalueLocation {
         match self {
-            ResolvedUpvalue::Local { register, .. } => UpvalueLocation::Local {
-                register: *register,
-            },
-            ResolvedUpvalue::Upvalue { index, .. } => UpvalueLocation::Upvalue { index: *index },
+            ResolvedUpvalue::Local { register, .. } => UpvalueLocation::Local { register },
+            ResolvedUpvalue::Upvalue { index, .. } => UpvalueLocation::Upvalue { index },
         }
     }
 }
@@ -71,21 +69,21 @@ impl Frame {
         Self {
             locals: vec![],
             upvalues: HashMap::new(),
-            parent_frame: std::ptr::null_mut(),
+            parent: std::ptr::null_mut(),
         }
     }
 
-    pub(crate) fn with_parent(parent_frame: *mut Self) -> Self {
+    pub(crate) fn with_parent(parent: *mut Self) -> Self {
         Self {
             locals: vec![],
             upvalues: HashMap::new(),
-            parent_frame,
+            parent,
         }
     }
 
     /// Try to resolve a name to either a local or an upvalue.
     pub(crate) fn resolve_name<'a>(&'a mut self, name: &LuaString) -> ResolvedName<'a> {
-        Self::resolve_name_inner(&self.locals, &mut self.upvalues, self.parent_frame, name)
+        Self::resolve_name_inner(&self.locals, &mut self.upvalues, self.parent, name)
     }
 
     /// Find a local by its name, returning its register index and a reference to it.
@@ -94,7 +92,7 @@ impl Frame {
     }
 
     fn resolve_upvalue(&mut self, name: &LuaString) -> Option<ResolvedUpvalue> {
-        Self::resolve_upvalue_inner(&self.locals, &mut self.upvalues, self.parent_frame, name)
+        Self::resolve_upvalue_inner(&self.locals, &mut self.upvalues, self.parent, name)
     }
 
     /// Add a new upvalue to this frame.
@@ -128,9 +126,9 @@ impl Frame {
     }
 
     fn resolve_local_inner<'l>(locals: &'l [Local], name: &[u8]) -> Option<(u8, &'l Local)> {
-        locals.iter().enumerate().rev().find_map(|(i, local)| {
+        locals.iter().rev().find_map(|local| {
             if local.name == name {
-                Some((i as u8, local))
+                Some((local.register, local))
             } else {
                 None
             }
@@ -152,27 +150,8 @@ impl Frame {
                 attributes: upvalue.attributes,
             });
         }
-        //
-        // polonius!(|upvalues| -> Option<ResolvedUpvalue> {
-        //     if let Some(upvalue) = upvalues.get(name) {
-        //         polonius_return!(Some(ResolvedUpvalue::Upvalue {
-        //             index: upvalue.index,
-        //             attributes: upvalue.attributes,
-        //         }));
-        //     }
-        // });
 
         if let Some((local_register, local)) = Self::resolve_local_inner(locals, name) {
-            // return Some(Self::add_upvalue_inner(
-            //     upvalues,
-            //     name.clone(),
-            //     // local_register,
-            //     // true,
-            //     UpvalueLocation::Local {
-            //         register: local_register,
-            //     },
-            //     local.attributes,
-            // ));
             return Some(ResolvedUpvalue::Local {
                 register: local_register,
                 attributes: local.attributes,
@@ -232,25 +211,29 @@ mod tests {
         // After adding, x resolves to the local
         frame1.locals.push(Local {
             name: b"x".into(),
+            register: 123,
             depth: 0,
             span: None,
             attributes: 0,
+            var_index: 0,
         });
         assert!(matches!(
             frame1.resolve_name(&b"x".into()),
-            ResolvedName::Local { register: 0, .. }
+            ResolvedName::Local { register: 123, .. }
         ));
 
         // Registers are incrementing
         frame1.locals.push(Local {
             name: b"foo".into(),
+            register: 124,
             depth: 0,
             span: None,
             attributes: 0,
+            var_index: 0,
         });
         assert!(matches!(
             frame1.resolve_name(&b"foo".into()),
-            ResolvedName::Local { register: 1, .. }
+            ResolvedName::Local { register: 124, .. }
         ));
 
         // Can add an upvalue manually and resolve it
@@ -290,9 +273,11 @@ mod tests {
         // We'll give frame 2 its own local
         frame2.locals.push(Local {
             name: b"z".into(),
+            register: 125,
             depth: 0,
             span: None,
             attributes: 0,
+            var_index: 0,
         });
 
         // From frame3, we can resolve the local `x` from the grandparent, its source is an upvalue
@@ -315,7 +300,7 @@ mod tests {
         assert!(matches!(
             frame2.upvalues.get(&b"x".into()),
             Some(Upvalue {
-                source: UpvalueLocation::Local { register: 0 },
+                source: UpvalueLocation::Local { register: 123 },
                 ..
             })
         ));

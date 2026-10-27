@@ -12,10 +12,11 @@ pub fn optimize(program: TokenTree<Block>) -> TokenTree<Block> {
                 .into_iter()
                 .map(optimize_statement)
                 .collect(),
-            return_statement: program
-                .node
-                .return_statement
-                .map(|exprs| exprs.into_iter().map(optimize_expression).collect()),
+            return_statement: program.node.return_statement.map(|s| ReturnStatement {
+                values: s.values.into_iter().map(optimize_expression).collect(),
+                return_span: s.return_span,
+            }),
+            end_span: program.node.end_span,
         },
         span,
     )
@@ -146,13 +147,12 @@ fn optimize_expression(expression: TokenTree<Expression>) -> TokenTree<Expressio
                             }
                         ) {
                             return *parenthesized;
-                        } else {
-                            let span = parenthesized.span;
-                            Expression::PrefixExpression(TokenTree::new(
-                                PrefixExpression::Parenthesized(parenthesized),
-                                span,
-                            ))
                         }
+                        let span = parenthesized.span;
+                        Expression::PrefixExpression(TokenTree::new(
+                            PrefixExpression::Parenthesized(parenthesized),
+                            span,
+                        ))
                     }
                     other => Expression::PrefixExpression(other),
                 }
@@ -393,7 +393,12 @@ fn optimize_binary_op(
                 }),
             ) => Expression::Literal(TokenTree::new(
                 Literal::String(
-                    Vec::from_iter(lhs.to_string().into_bytes().into_iter().chain(rhs)).into(),
+                    lhs.to_string()
+                        .into_bytes()
+                        .into_iter()
+                        .chain(rhs)
+                        .collect::<Vec<_>>()
+                        .into(),
                 ),
                 span,
             )),

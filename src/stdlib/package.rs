@@ -16,7 +16,7 @@ pub static PACKAGE: LazyLock<LuaValue> = LazyLock::new(|| {
     package.insert("loaded".into(), LuaTable::new().into());
     package.insert(
         "path".into(),
-        LuaValue::String(b"./?.lua;./?/init.lua".into()),
+        LuaValue::from_string(b"./?.lua;./?/init.lua"),
     );
 
     package.into()
@@ -42,6 +42,6 @@ impl From<PackageConfig> for LuaValue {
             config.substitution_character,
         ];
 
-        LuaValue::String(str.into())
+        LuaValue::from_string(str)
     }
 }

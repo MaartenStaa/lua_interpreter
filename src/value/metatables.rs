@@ -11,66 +11,79 @@ pub(crate) static GLOBAL_NUMBER_METATABLE: LazyLock<LuaValue> =
 pub(crate) static GLOBAL_STRING_METATABLE: LazyLock<LuaValue> =
     LazyLock::new(|| super::string::get_string_metatable().into());
 
-pub(crate) static METATABLE_KEY: LazyLock<LuaValue> =
-    LazyLock::new(|| LuaValue::String(b"__metatable".into()));
-pub(crate) static ADD_KEY: LazyLock<LuaValue> = LazyLock::new(|| LuaValue::String(b"__add".into()));
-pub(crate) static SUB_KEY: LazyLock<LuaValue> = LazyLock::new(|| LuaValue::String(b"__sub".into()));
-pub(crate) static MUL_KEY: LazyLock<LuaValue> = LazyLock::new(|| LuaValue::String(b"__mul".into()));
-pub(crate) static DIV_KEY: LazyLock<LuaValue> = LazyLock::new(|| LuaValue::String(b"__div".into()));
-pub(crate) static MOD_KEY: LazyLock<LuaValue> = LazyLock::new(|| LuaValue::String(b"__mod".into()));
-pub(crate) static POW_KEY: LazyLock<LuaValue> = LazyLock::new(|| LuaValue::String(b"__pow".into()));
-pub(crate) static UNM_KEY: LazyLock<LuaValue> = LazyLock::new(|| LuaValue::String(b"__unm".into()));
-pub(crate) static IDIV_KEY: LazyLock<LuaValue> =
-    LazyLock::new(|| LuaValue::String(b"__idiv".into()));
-pub(crate) static BAND_KEY: LazyLock<LuaValue> =
-    LazyLock::new(|| LuaValue::String(b"__band".into()));
-pub(crate) static BOR_KEY: LazyLock<LuaValue> = LazyLock::new(|| LuaValue::String(b"__bor".into()));
-pub(crate) static BXOR_KEY: LazyLock<LuaValue> =
-    LazyLock::new(|| LuaValue::String(b"__bxor".into()));
-pub(crate) static BNOT_KEY: LazyLock<LuaValue> =
-    LazyLock::new(|| LuaValue::String(b"__bnot".into()));
-pub(crate) static SHL_KEY: LazyLock<LuaValue> = LazyLock::new(|| LuaValue::String(b"__shl".into()));
-pub(crate) static SHR_KEY: LazyLock<LuaValue> = LazyLock::new(|| LuaValue::String(b"__shr".into()));
-pub(crate) static CONCAT_KEY: LazyLock<LuaValue> =
-    LazyLock::new(|| LuaValue::String(b"__concat".into()));
-pub(crate) static LEN_KEY: LazyLock<LuaValue> = LazyLock::new(|| LuaValue::String(b"__len".into()));
-pub(crate) static EQ_KEY: LazyLock<LuaValue> = LazyLock::new(|| LuaValue::String(b"__eq".into()));
-pub(crate) static LT_KEY: LazyLock<LuaValue> = LazyLock::new(|| LuaValue::String(b"__lt".into()));
-pub(crate) static LE_KEY: LazyLock<LuaValue> = LazyLock::new(|| LuaValue::String(b"__le".into()));
-pub(crate) static INDEX_KEY: LazyLock<LuaValue> =
-    LazyLock::new(|| LuaValue::String(b"__index".into()));
-pub(crate) static NEWINDEX_KEY: LazyLock<LuaValue> =
-    LazyLock::new(|| LuaValue::String(b"__newindex".into()));
-pub(crate) static CALL_KEY: LazyLock<LuaValue> =
-    LazyLock::new(|| LuaValue::String(b"__call".into()));
-pub(crate) static CLOSE_KEY: LazyLock<LuaValue> =
-    LazyLock::new(|| LuaValue::String(b"__close".into()));
-pub(crate) static PAIRS_KEY: LazyLock<LuaValue> =
-    LazyLock::new(|| LuaValue::String(b"__pairs".into()));
-pub(crate) static NAME_KEY: LazyLock<LuaValue> =
-    LazyLock::new(|| LuaValue::String(b"__name".into()));
-pub(crate) static TOSTRING_KEY: LazyLock<LuaValue> =
-    LazyLock::new(|| LuaValue::String(b"__tostring".into()));
+pub(crate) static METATABLE_KEY: LazyLock<LuaValue> = LazyLock::new(|| "__metatable".into());
+pub(crate) static ADD_KEY: LazyLock<LuaValue> = LazyLock::new(|| "__add".into());
+pub(crate) static SUB_KEY: LazyLock<LuaValue> = LazyLock::new(|| "__sub".into());
+pub(crate) static MUL_KEY: LazyLock<LuaValue> = LazyLock::new(|| "__mul".into());
+pub(crate) static DIV_KEY: LazyLock<LuaValue> = LazyLock::new(|| "__div".into());
+pub(crate) static MOD_KEY: LazyLock<LuaValue> = LazyLock::new(|| "__mod".into());
+pub(crate) static POW_KEY: LazyLock<LuaValue> = LazyLock::new(|| "__pow".into());
+pub(crate) static UNM_KEY: LazyLock<LuaValue> = LazyLock::new(|| "__unm".into());
+pub(crate) static IDIV_KEY: LazyLock<LuaValue> = LazyLock::new(|| "__idiv".into());
+pub(crate) static BAND_KEY: LazyLock<LuaValue> = LazyLock::new(|| "__band".into());
+pub(crate) static BOR_KEY: LazyLock<LuaValue> = LazyLock::new(|| "__bor".into());
+pub(crate) static BXOR_KEY: LazyLock<LuaValue> = LazyLock::new(|| "__bxor".into());
+pub(crate) static BNOT_KEY: LazyLock<LuaValue> = LazyLock::new(|| "__bnot".into());
+pub(crate) static SHL_KEY: LazyLock<LuaValue> = LazyLock::new(|| "__shl".into());
+pub(crate) static SHR_KEY: LazyLock<LuaValue> = LazyLock::new(|| "__shr".into());
+pub(crate) static CONCAT_KEY: LazyLock<LuaValue> = LazyLock::new(|| "__concat".into());
+pub(crate) static LEN_KEY: LazyLock<LuaValue> = LazyLock::new(|| "__len".into());
+pub(crate) static EQ_KEY: LazyLock<LuaValue> = LazyLock::new(|| "__eq".into());
+pub(crate) static LT_KEY: LazyLock<LuaValue> = LazyLock::new(|| "__lt".into());
+pub(crate) static LE_KEY: LazyLock<LuaValue> = LazyLock::new(|| "__le".into());
+pub(crate) static INDEX_KEY: LazyLock<LuaValue> = LazyLock::new(|| "__index".into());
+pub(crate) static NEWINDEX_KEY: LazyLock<LuaValue> = LazyLock::new(|| "__newindex".into());
+pub(crate) static CALL_KEY: LazyLock<LuaValue> = LazyLock::new(|| "__call".into());
+pub(crate) static CLOSE_KEY: LazyLock<LuaValue> = LazyLock::new(|| "__close".into());
+pub(crate) static PAIRS_KEY: LazyLock<LuaValue> = LazyLock::new(|| "__pairs".into());
+pub(crate) static NAME_KEY: LazyLock<LuaValue> = LazyLock::new(|| "__name".into());
+pub(crate) static TOSTRING_KEY: LazyLock<LuaValue> = LazyLock::new(|| "__tostring".into());
 
 impl LuaValue {
+    /// Get the metatable for this value, if any. Also resolves a type's global metatable, if
+    /// available. For example, for a string value, would return the metatable containing string methods.
+    ///
+    /// # Panics
+    ///
+    /// Panics when failing to acquire a read lock for this value's object.
     pub fn get_metatable(&self) -> Option<LuaValue> {
-        match self {
-            LuaValue::Boolean(_) => Some(GLOBAL_BOOLEAN_METATABLE.clone()),
-            LuaValue::Number(_) => Some(GLOBAL_NUMBER_METATABLE.clone()),
-            LuaValue::String(_) => Some(GLOBAL_STRING_METATABLE.clone()),
-            LuaValue::Object(o) => o.read().unwrap().get_metatable(),
-            _ => None,
+        if self.is_bool() {
+            Some(GLOBAL_BOOLEAN_METATABLE.clone())
+        } else if self.is_number() {
+            Some(GLOBAL_NUMBER_METATABLE.clone())
+        } else if self.is_string() {
+            Some(GLOBAL_STRING_METATABLE.clone())
+        } else if self.is_object() {
+            unsafe { self.as_object() }.read().unwrap().get_metatable()
+        } else {
+            None
         }
     }
 
+    /// Set the metatable for this object value.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if this value is not an object, of an upvalue that dereferences to an object.
+    ///
+    /// # Panics
+    ///
+    /// Panics when failing to acquire a write lock for this value's object or upvalue.
     pub fn set_metatable(&mut self, metatable: Option<LuaValue>) -> crate::Result<()> {
         match self {
-            LuaValue::Object(o) => o.write().unwrap().set_metatable(metatable),
-            LuaValue::UpValue(u) => u.write().unwrap().set_metatable(metatable),
+            v if v.is_object() => unsafe { v.as_object() }
+                .write()
+                .unwrap()
+                .set_metatable(metatable),
+            v if v.is_upvalue() => unsafe { v.as_upvalue() }
+                .write()
+                .unwrap()
+                .set_metatable(metatable),
             _ => Err(lua_error!("cannot set metatable on a non-object")),
         }
     }
 
+    #[must_use]
     pub fn get_metavalue(&self, key: &LuaValue) -> Option<LuaValue> {
         self.get_metatable()
             .and_then(|mt| assert_table!(mt, table, table.get(key).cloned()))
@@ -78,6 +91,7 @@ impl LuaValue {
 }
 
 impl LuaObject {
+    #[must_use]
     pub fn get_metatable(&self) -> Option<LuaValue> {
         match self {
             LuaObject::Table(t) => t.metatable().cloned(),
@@ -86,6 +100,11 @@ impl LuaObject {
         }
     }
 
+    /// Set the metatable for this object value.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if this object is not a table or full userdata.
     pub fn set_metatable(&mut self, metatable: Option<LuaValue>) -> crate::Result<()> {
         match self {
             LuaObject::Table(t) => {
@@ -100,6 +119,7 @@ impl LuaObject {
         }
     }
 
+    #[must_use]
     pub fn get_metavalue(&self, key: &LuaValue) -> Option<LuaValue> {
         self.get_metatable()
             .and_then(|mt| assert_table!(mt, table, table.get(key).cloned()))
@@ -113,20 +133,16 @@ pub fn handle(
 ) -> Option<crate::Result<ExecutionResult>> {
     assert!(!input.is_empty());
 
-    for value in input.iter() {
-        if let Some(LuaValue::Object(o)) = value.get_metavalue(key) {
-            match &*o.read().unwrap() {
+    for value in &input {
+        if let Some(mv) = value.get_metavalue(key)
+            && mv.is_object()
+        {
+            match &*unsafe { mv.as_object() }.read().unwrap() {
                 LuaObject::Closure(c) => {
-                    let result = match state.run_closure(c.clone(), input) {
+                    let num_args = input.len();
+                    let args_r = state.extend_stack(mv.clone(), input);
+                    let result = match state.run_closure(c, args_r, num_args, 0) {
                         Ok(result) => result,
-                        // Ok(ExecutionResult::Completed(mut value)) => {
-                        //     if value.is_empty() {
-                        //         LuaValue::Nil
-                        //     } else {
-                        //         value.swap_remove(0)
-                        //     }
-                        // }
-                        // Ok(ExecutionResult::Yielded(_)) => unreachable,
                         Err(e) => return Some(Err(e)),
                     };
 
@@ -134,18 +150,17 @@ pub fn handle(
                 }
                 LuaObject::NativeFunction(name, f) => {
                     let num_args = input.len();
-                    let args_r = state.extend_stack(input);
-                    let result = match state.run_native_function(name, *f, args_r, num_args as u16)
+                    let args_r = state.extend_stack(mv.clone(), input);
+                    let num_results = match state.run_native_function(name, *f, args_r, num_args, 0)
                     {
                         Ok(value) => value,
                         Err(e) => return Some(Err(e)),
                     };
-                    return Some(Ok(ExecutionResult::Completed(result)));
-                    // return Some(Ok(if result.is_empty() {
-                    //     LuaValue::Nil
-                    // } else {
-                    //     result.swap_remove(0)
-                    // }));
+
+                    let results = (0..num_results)
+                        .map(|i| state.arg(args_r as usize + i))
+                        .collect();
+                    return Some(Ok(ExecutionResult::Completed(results)));
                 }
                 _ => {}
             }

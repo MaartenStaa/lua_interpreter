@@ -15,7 +15,7 @@ where
     T: Debug,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?} - {:?}", self.span, self.node)
+        write!(f, "{:?} - {:#?}", self.span, self.node)
     }
 }
 
@@ -28,7 +28,14 @@ impl<T> TokenTree<T> {
 #[derive(Debug, PartialEq, Clone)]
 pub struct Block {
     pub statements: Vec<TokenTree<Statement>>,
-    pub return_statement: Option<Vec<TokenTree<Expression>>>,
+    pub return_statement: Option<ReturnStatement>,
+    pub end_span: Option<Span>,
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub struct ReturnStatement {
+    pub return_span: Span,
+    pub values: Vec<TokenTree<Expression>>,
 }
 
 #[derive(Debug, PartialEq, Clone)]
