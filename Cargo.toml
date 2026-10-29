@@ -9,6 +9,10 @@ edition = "2024"
 chrono = "0.4.42"
 clap = { version = "4.5.52", features = ["derive"] }
 cpu-time = "1.0.0"
+cranelift = { version = "0.137.0", optional = true, features = [
+  "jit",
+  "module",
+] }
 crossterm = { version = "0.28", optional = true }
 indexmap = "2.14.0"
 miette = { version = "7.6.0", features = ["fancy", "syntect-highlighter"] }
@@ -23,6 +27,7 @@ tree-sitter = { version = "0.26.10", optional = true }
 tree-sitter-lua = { version = "0.5.0", optional = true }
 
 [features]
+cranelift = ["dep:cranelift"]
 debugger = [
   "dep:ratatui",
   "dep:crossterm",

@@ -255,6 +255,14 @@ fn format_value(value: &LuaValue) -> Vec<Span<'static>> {
                     Span::styled(format!(" ({:04})", closure.chunk), COLOR_OVERLAY2),
                 ]
             }
+            LuaObject::JitFunction(name, func) => {
+                vec![
+                    Span::styled("jit'ed function", COLOR_MAUVE),
+                    Span::raw(": "),
+                    Span::styled(format!("{func:012p}"), COLOR_BLUE),
+                    Span::styled(format!(" ({name})"), COLOR_OVERLAY2),
+                ]
+            }
             LuaObject::NativeFunction(name, func) => {
                 vec![
                     Span::styled("native function", COLOR_MAUVE),

@@ -11,7 +11,7 @@ use std::{
 
 use crate::{
     ExecutionResult, LuaState,
-    compiler::Compiler,
+    compiler::{self, CompiledChunk, Runnable},
     error::{IntoLuaError, lua_error},
     macros::{assert_string, assert_table, lua_return, native_function, require_table},
     parser::Parser,
@@ -179,7 +179,7 @@ pub(crate) fn dofile(state: &mut LuaState) -> crate::Result<usize> {
     };
 
     let ast = resolve(Parser::new(&name, &source).parse()?);
-    let compiler = Compiler::new(
+    let mut compiler = compiler::factory(
         Arc::clone(&state.global),
         name.clone(),
         path,
@@ -297,6 +297,12 @@ pub(crate) fn load(state: &mut LuaState) -> crate::Result<usize> {
                             .into_iter()
                             .next()
                     }
+                    Method::JitFunction(name, f) => {
+                        let r = state.extend_stack(callable.method.clone(), []);
+                        state.run_jit_function(name, *f, r, 0, 2)?;
+                        // NOTE: native functions MUST return at least one value
+                        Some(state.get(r as usize))
+                    }
                     Method::NativeFunction(name, f) => {
                         let r = state.extend_stack(callable.method.clone(), []);
                         state.run_native_function(name, *f, r, 0, 2)?;
@@ -356,7 +362,7 @@ pub(crate) fn load(state: &mut LuaState) -> crate::Result<usize> {
 
     let filename: Option<PathBuf> = None;
     let ast = Parser::new(&name, &source).parse().map(resolve);
-    let compiler = Compiler::new(
+    let mut compiler = compiler::factory(
         Arc::clone(&state.global),
         name,
         filename,
@@ -373,16 +379,21 @@ pub(crate) fn load(state: &mut LuaState) -> crate::Result<usize> {
     };
 
     // Return a function that runs the chunk
-    let mut closure = LuaClosure::new(compiled_chunk.chunk_index);
+    match compiled_chunk {
+        CompiledChunk::Bytecode(chunk_index) => {
+            let mut closure = LuaClosure::new(chunk_index);
 
-    let env = if state.num_args() > 3 {
-        state.capture_upvalue(4)
-    } else {
-        state.get_global_env()
-    };
-    closure.upvalues.insert(0, env);
+            let env = if state.num_args() > 3 {
+                state.capture_upvalue(4)
+            } else {
+                state.get_global_env()
+            };
+            closure.upvalues.insert(0, env);
 
-    lua_return!(state; closure.into())
+            lua_return!(state; closure.into())
+        }
+        CompiledChunk::Jit(_) => todo!(),
+    }
 }
 
 pub(crate) fn next(state: &mut LuaState) -> crate::Result<usize> {
@@ -433,6 +444,12 @@ pub(crate) fn pairs(state: &mut LuaState) -> crate::Result<usize> {
                     state.set(i, v);
                 }
             }
+            Method::JitFunction(name, f) => {
+                let num_results = state.run_jit_function(name, f, 0, 1, 4)?;
+                if num_results < 3 {
+                    (num_results..3).for_each(|i| state.set(i, LuaValue::NIL));
+                }
+            }
             Method::NativeFunction(name, f) => {
                 let num_results = state.run_native_function(name, f, 0, 1, 4)?;
                 if num_results < 3 {
@@ -479,6 +496,19 @@ pub(crate) fn pcall(state: &mut LuaState) -> crate::Result<usize> {
                 .run_closure(&closure, args_r, num_args, 0)
                 .map(ExecutionResult::unwrap_completed)
                 .map(ResultKind::Vector)
+        }
+        Method::JitFunction(name, f) => {
+            let (args_r, num_args) = if callable_function.is_metamethod {
+                (0, state.num_args())
+            } else {
+                (1, state.num_args() - 1)
+            };
+            state
+                .run_jit_function(name, f, args_r, num_args, 0)
+                .map(|num_values| ResultKind::Register {
+                    r: args_r,
+                    num_values,
+                })
         }
         Method::NativeFunction(name, f) => {
             let (args_r, num_args) = if callable_function.is_metamethod {
@@ -714,7 +744,7 @@ pub(crate) fn require(state: &mut LuaState) -> crate::Result<usize> {
         let source = fs::read(&path).map_err(|_| lua_error!("unable to read module {name}"))?;
 
         let ast = resolve(Parser::new(&name, &source).parse()?);
-        let compiler = Compiler::new(
+        let mut compiler = compiler::factory(
             Arc::clone(&state.global),
             name.clone(),
             Some(path),
@@ -736,7 +766,10 @@ pub(crate) fn require(state: &mut LuaState) -> crate::Result<usize> {
             });
         });
 
-        lua_return!(state; result, path_value);
+        match state {
+            Runnable::State(mut state) => lua_return!(state; result, path_value),
+            Runnable::Jit(_) => todo!(),
+        }
     }
 
     Err(lua_error!("module '{name}' not found"))
@@ -949,6 +982,24 @@ pub(crate) fn xpcall(state: &mut LuaState) -> crate::Result<usize> {
                 .map(ExecutionResult::unwrap_completed)
                 .map(ResultKind::Vector)
         }
+        jf @ Method::JitFunction(name, f) => {
+            let (args_r, num_args) = if function_callable.is_metamethod {
+                let mut args = vec![function];
+                args.extend((2..state.num_args()).map(|i| state.arg(i)));
+                let num_args = args.len();
+                let args_r = state.extend_stack(jf, args);
+                (args_r, num_args)
+            } else {
+                (1, state.num_args() - 1)
+            };
+
+            state
+                .run_jit_function(name, f, args_r, num_args, 0)
+                .map(|num_values| ResultKind::Register {
+                    r: args_r,
+                    num_values,
+                })
+        }
         nf @ Method::NativeFunction(name, f) => {
             let (args_r, num_args) = if function_callable.is_metamethod {
                 let mut args = vec![function];
@@ -984,6 +1035,18 @@ pub(crate) fn xpcall(state: &mut LuaState) -> crate::Result<usize> {
                             .run_closure(closure, args_r, 1, 0)
                             .map(ExecutionResult::unwrap_completed)
                             .map(ResultKind::Vector)
+                    }
+                    Method::JitFunction(name, f) => {
+                        let args_r = state.extend_stack(
+                            msgh.method.clone(),
+                            [LuaValue::from_string(e.to_string().into_bytes())],
+                        );
+                        state
+                            .run_jit_function(name, *f, args_r, 1, 0)
+                            .map(|num_values| ResultKind::Register {
+                                r: args_r,
+                                num_values,
+                            })
                     }
                     Method::NativeFunction(name, f) => {
                         let args_r = state.extend_stack(

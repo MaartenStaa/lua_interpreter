@@ -16,7 +16,7 @@ pub use attribute::LuaVariableAttribute;
 use callable::{Callable, Method};
 pub use closure::LuaClosure;
 pub use constant::LuaConst;
-pub use function::NativeLuaFunction;
+pub use function::{JitLuaFunction, NativeLuaFunction};
 pub use number::{IntegerRepr, LuaNumber};
 pub use object::LuaObject;
 pub use string::LuaString;
@@ -485,6 +485,17 @@ impl LuaValue {
         unsafe { Arc::increment_strong_count(ptr) };
         unsafe { Arc::from_raw(ptr) }
     }
+
+    /// Create a new [`LuaValue`] from the raw bits, without trying to interpret
+    /// or convert them.
+    pub fn from_raw(value: i64) -> Self {
+        Self(i64::cast_unsigned(value))
+    }
+
+    /// Get the raw inner value, without trying to interpret it or extract a value.
+    pub fn into_raw(&self) -> i64 {
+        u64::cast_signed(self.0)
+    }
 }
 
 impl Drop for LuaValue {
@@ -541,6 +552,15 @@ impl LuaValue {
                         .unwrap_completed()
                         .into_iter()
                         .next()
+                }
+                jf @ Method::JitFunction(name, f) => {
+                    let args_r = state.extend_stack(jf, [self.clone()]);
+                    let num_return = state.run_jit_function(name, f, args_r, 1, 2)?;
+                    debug_assert!(
+                        num_return >= 1,
+                        "jit function {name} did not return a value",
+                    );
+                    Some(state.get(args_r))
                 }
                 nf @ Method::NativeFunction(name, f) => {
                     let args_r = state.extend_stack(nf, [self.clone()]);

@@ -388,6 +388,21 @@ impl LuaState {
                             )?;
                             return Ok(InstructionResult::Continue);
                         }
+                        jf @ Method::JitFunction(name, f) => {
+                            let args_r = self.extend_stack(jf, [table.clone(), key, value]);
+                            self.run_jit_function(name, f, args_r, 3, 1)?;
+
+                            // Check if the native function yielded
+                            if let Some(yield_values) = self.pending_yield.take() {
+                                // In this case, we don't care about the return values,
+                                // so set status to suspended with an empty
+                                // `resume_args_register`.
+                                self.status = ThreadStatus::Suspended {
+                                    resume_args_register: None,
+                                };
+                                return Ok(ExecutionResult::Yielded(yield_values).into());
+                            }
+                        }
                         nf @ Method::NativeFunction(name, f) => {
                             let args_r = self.extend_stack(nf, [table.clone(), key, value]);
                             self.run_native_function(name, f, args_r, 3, 1)?;
@@ -543,6 +558,20 @@ impl LuaState {
                             )?;
                             return Ok(InstructionResult::Continue);
                         }
+                        Method::JitFunction(name, f) => {
+                            self.run_jit_function(name, f, args_r, 2, 2)?;
+
+                            // Check if the native function yielded
+                            if let Some(yield_values) = self.pending_yield.take() {
+                                // Set status to Suspended, storing where to put resume args
+                                self.status = ThreadStatus::Suspended {
+                                    resume_args_register: Some(dest_r),
+                                };
+                                return Ok(ExecutionResult::Yielded(yield_values).into());
+                            }
+
+                            self.set(dest_r, self.get(args_r));
+                        }
                         Method::NativeFunction(name, f) => {
                             self.run_native_function(name, f, args_r, 2, 2)?;
 
@@ -685,6 +714,45 @@ impl LuaState {
                 self.align_closure_args(num_params, num_args, has_varargs);
 
                 Ok(InstructionResult::Continue)
+            }
+            Method::JitFunction(name, f) => {
+                let result =
+                    self.run_jit_function(name, f, func_r, num_args, expected_num_results)?;
+
+                // Check if the native function yielded
+                if let Some(yield_values) = self.pending_yield.take() {
+                    // Set status to Suspended, storing where to put resume args
+                    self.status = ThreadStatus::Suspended {
+                        resume_args_register: Some(func_r),
+                    };
+                    // Increment IP past the Call instruction so we don't re-execute it on resume
+                    self.call_frame_mut().inc_ip();
+                    return Ok(ExecutionResult::Yielded(yield_values).into());
+                }
+
+                let value_slots_needed = if expected_num_results == 0 {
+                    result
+                } else {
+                    (expected_num_results as usize - 1).min(result)
+                };
+                self.ensure_stack_space(func_r as usize + value_slots_needed);
+
+                self.multres = result;
+                if result == 0 && expected_num_results > 0 {
+                    self.set(func_r, LuaValue::NIL);
+                }
+
+                // If we expected a specific number of results, and we got fewer than that, clear
+                // the extra registers beyond the returned values to get rid of stale values, such
+                // as arguments to the called function.
+                if expected_num_results > 0 && (expected_num_results as usize - 1) > result {
+                    self.clear_registers_from(
+                        func_r as usize + self.multres,
+                        Some(func_r as usize + expected_num_results as usize - 1),
+                    );
+                }
+
+                Ok(InstructionResult::Normal)
             }
             Method::NativeFunction(name, f) => {
                 let result =

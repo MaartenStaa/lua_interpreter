@@ -181,7 +181,7 @@ impl LuaState {
             }
             // Note: This case should never be reached - coroutine.create() rejects native functions
             // If native function support is added in the future, we would need to store `f` in the call frame
-            Method::NativeFunction(name, _f) => {
+            Method::JitFunction(name, _) | Method::NativeFunction(name, _) => {
                 result
                     .push_call_frame(
                         CallFrameKind::Native { name },

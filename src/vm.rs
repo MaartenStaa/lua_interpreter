@@ -12,7 +12,7 @@ use crate::{
     instruction::OpCode,
     state::LuaState,
     value::{
-        LuaClosure, LuaConst, LuaNumber, LuaObject, LuaString, LuaTable, LuaValue,
+        JitLuaFunction, LuaClosure, LuaConst, LuaNumber, LuaObject, LuaString, LuaTable, LuaValue,
         NativeLuaFunction, UpValue, metatables, string::coerce_number,
     },
     vm::{
@@ -538,6 +538,74 @@ impl LuaState {
         let frame_pointer = self.call_frame().frame_pointer;
         self.stack[frame_pointer + from_register as usize..=frame_pointer + to_register as usize]
             .fill(LuaValue::NIL);
+    }
+
+    /// Run a JIT'ed function in this thread ([`LuaState`]). This will handle automatically pushing
+    /// and popping the call frame for the native function, and will ensure that the stack is in a
+    /// valid state before and after the call.
+    ///
+    /// # Expectations
+    ///
+    /// The stack is assumed to be in a correct state before the call. This means that:
+    /// - `args_r` is valid, and is an offset from the parent frame pointer.
+    /// - The actual `num_args` arguments sit at `stack[args_r + 1], stack[args_r + 2], ...,
+    ///   stack[args_r + num_args]`.
+    /// - The invoked function _may_ be at `stack[args_r]`, but this is not a requirement.
+    /// - The _return values_ of the native function will be placed starting at `stack[args_r]`.
+    ///
+    /// Like the native function itself, this returns the number of return values.
+    pub(crate) fn run_jit_function(
+        &mut self,
+        name: &'static str,
+        function: JitLuaFunction,
+        args_r: u8,
+        num_args: usize,
+        num_return_values: u8,
+    ) -> crate::Result<usize> {
+        let original_call_stack_index = self.call_stack_index;
+        let parent_frame_pointer = if self.call_stack_index > 0 {
+            self.call_frame().frame_pointer
+        } else {
+            0
+        };
+
+        debug_assert!(
+            (parent_frame_pointer + args_r as usize) <= self.stack.len(),
+            "not enough stack space for native function arguments!\nfn = {name}\nargs_r = {args_r}\nstack = {:?}",
+            &self.stack[parent_frame_pointer..]
+        );
+        debug_assert!(
+            (parent_frame_pointer + args_r as usize + num_args) <= self.stack.len(),
+            "native function args run beyond the stack!\nfn = {name}\nargs_r = {args_r}, num_args = {num_args}\nstack = {:?}",
+            &self.stack[parent_frame_pointer + args_r as usize..]
+        );
+
+        // NOTE: Some call frame values are irrelevant for native functions.
+        self.push_call_frame(
+            CallFrameKind::Native { name },
+            true, // Not applicable
+            parent_frame_pointer + args_r as usize,
+            0, // Not applicable
+            0, // Not applicable
+            0, // Not applicable
+            None,
+            num_args,
+            false, // Not applicable
+            num_return_values,
+        )?;
+
+        let result = function(self)
+            .inspect(|_| {
+                self.pop_call_frame();
+            })
+            .map_err(|err| self.pop_call_frames_into_error(original_call_stack_index, *err));
+
+        assert_eq!(
+            original_call_stack_index, self.call_stack_index,
+            "unbalanced call stack after native function call"
+        );
+
+        result
     }
 
     /// Run a native function in this thread ([`LuaState`]). This will handle automatically pushing

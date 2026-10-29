@@ -1,4 +1,7 @@
-use crate::{LuaState, value::NativeLuaFunction};
+use crate::{
+    LuaState,
+    value::{NativeLuaFunction, function::JitLuaFunction},
+};
 use std::{fmt::Display, hash::Hash};
 
 use super::{UserData, closure::LuaClosure, table::LuaTable};
@@ -7,6 +10,7 @@ use super::{UserData, closure::LuaClosure, table::LuaTable};
 pub enum LuaObject {
     Table(LuaTable),
     Closure(LuaClosure),
+    JitFunction(&'static str, JitLuaFunction),
     NativeFunction(&'static str, NativeLuaFunction),
     UserData(UserData),
     Thread(Box<LuaState>),
@@ -41,7 +45,9 @@ impl LuaObject {
     pub fn type_name(&self) -> &'static str {
         match self {
             LuaObject::Table(_) => "table",
-            LuaObject::Closure(LuaClosure { .. }) | LuaObject::NativeFunction(_, _) => "function",
+            LuaObject::Closure(LuaClosure { .. })
+            | LuaObject::JitFunction(_, _)
+            | LuaObject::NativeFunction(_, _) => "function",
             LuaObject::UserData(_) => "userdata",
             LuaObject::Thread(_) => "thread",
         }
@@ -58,6 +64,9 @@ impl Display for LuaObject {
             LuaObject::Table(_) => write!(f, "table: {self:012p}"),
             LuaObject::Closure(LuaClosure { chunk, .. }) => {
                 write!(f, "function: {self:012p} ({chunk:04})")
+            }
+            LuaObject::JitFunction(name, func) => {
+                write!(f, "function: {func:012p} ({name})")
             }
             LuaObject::NativeFunction(name, func) => {
                 write!(f, "function: {func:012p} ({name})")

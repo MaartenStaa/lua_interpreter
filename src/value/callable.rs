@@ -1,4 +1,4 @@
-use crate::value::NativeLuaFunction;
+use crate::value::{NativeLuaFunction, function::JitLuaFunction};
 
 use super::{LuaClosure, LuaObject, LuaValue, metatables};
 
@@ -11,6 +11,7 @@ pub struct Callable {
 #[derive(Debug, Clone)]
 pub(crate) enum Method {
     Closure(LuaClosure),
+    JitFunction(&'static str, JitLuaFunction),
     NativeFunction(&'static str, NativeLuaFunction),
 }
 
@@ -77,6 +78,7 @@ impl From<Method> for LuaObject {
     fn from(value: Method) -> Self {
         match value {
             Method::Closure(closure) => LuaObject::Closure(closure),
+            Method::JitFunction(name, f) => LuaObject::JitFunction(name, f),
             Method::NativeFunction(name, f) => LuaObject::NativeFunction(name, f),
         }
     }

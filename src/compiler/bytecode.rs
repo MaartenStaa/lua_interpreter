@@ -10,6 +10,7 @@ use crate::{
     bytecode::{Bytecode, JumpToUndecidedAddress},
     chunk::{Chunk, ChunkUpValue, LocalVarInfo},
     compiler::{
+        CompiledChunk, Compiler, ExpressionResultMode, Runnable,
         block::{BlockOptions, BlockResult, BreakJump, NewLocalsAfterGoto},
         expression::{ExpressionListLength, ExpressionMode, ExpressionResult, VariableMode},
         frame::{BindingLocation, Frame, UpvalueLocation},
@@ -18,27 +19,18 @@ use crate::{
     },
     debug,
     error::lua_error,
-    resolved_ast::{self, Name as BindingName},
     resolved_ast::{
-        BinaryOperator, Block, Expression, Field, ForCondition, FunctionCall, FunctionDef, Literal,
-        Name, Number, NumericFor, PrefixExpression, ReturnStatement, Statement, TableConstructor,
-        TokenTree, UnaryOperator, Variable,
+        self, BinaryOperator, Block, Expression, Field, ForCondition, FunctionCall, FunctionDef,
+        Literal, Name, Number, NumericFor, PrefixExpression, ReturnStatement, Statement,
+        TableConstructor, TokenTree, UnaryOperator, Variable,
     },
     token::Span,
     value::{IntegerRepr, LuaConst, LuaNumber, LuaString, LuaTable, LuaVariableAttribute},
-    vm::{ChunkIndex, ConstIndex, JumpAddr},
+    vm::{ConstIndex, JumpAddr},
 };
 
-pub(crate) use expression::ExpressionResultMode;
-
-mod block;
-mod expression;
-mod frame;
-mod goto;
-mod variable;
-
-impl Compiler {
-    fn binding_location(&self, name: &BindingName) -> BindingLocation<'_> {
+impl BytecodeCompiler {
+    fn binding_location(&self, name: &Name) -> BindingLocation<'_> {
         self.frame.binding_location(name.binding().id)
     }
 
@@ -84,7 +76,7 @@ impl Compiler {
 }
 
 #[derive(Debug)]
-pub struct Compiler {
+pub struct BytecodeCompiler {
     global_state: Arc<RwLock<GlobalState>>,
     chunk: Chunk,
     method_name: Option<LuaString>,
@@ -101,12 +93,42 @@ pub struct Compiler {
     print_bytecode: bool,
 }
 
-#[derive(Debug)]
-pub struct CompiledChunk {
-    pub chunk_index: ChunkIndex,
+impl Compiler for BytecodeCompiler {
+    fn compile(&mut self, ast: resolved_ast::Chunk) -> crate::Result<Runnable> {
+        let global_state = Arc::clone(&self.global_state);
+        let compiled_chunk = self.compile_chunk(ast)?;
+
+        Ok(match compiled_chunk {
+            CompiledChunk::Bytecode(chunk_index) => {
+                Runnable::State(LuaState::new(global_state, chunk_index))
+            }
+            CompiledChunk::Jit(f) => Runnable::Jit(f),
+        })
+    }
+
+    fn compile_chunk(&mut self, ast: resolved_ast::Chunk) -> crate::Result<CompiledChunk> {
+        self.chunk.num_params = ast.parameters.len() as u8;
+        for parameter in ast.parameters {
+            let register = self.take_register();
+            self.add_binding(parameter, register);
+        }
+        for capture in ast.captures {
+            let binding = capture.binding();
+            self.frame.upvalues.insert(
+                binding.id,
+                Upvalue {
+                    index: self.frame.upvalues.len() as u8,
+                    source: UpvalueLocation::Upvalue { index: 0 },
+                    attributes: binding.attributes,
+                    name: binding.name.clone(),
+                },
+            );
+        }
+        self.compile_body(ast.block)
+    }
 }
 
-impl Compiler {
+impl BytecodeCompiler {
     pub fn new(
         global_state: Arc<RwLock<GlobalState>>,
         chunk_name: LuaString,
@@ -189,15 +211,8 @@ impl Compiler {
         result
     }
 
-    pub fn compile(self, ast: resolved_ast::Chunk) -> crate::Result<LuaState> {
-        let global_state = Arc::clone(&self.global_state);
-        let compiled_chunk = self.compile_chunk(ast)?;
-
-        Ok(LuaState::new(global_state, compiled_chunk.chunk_index))
-    }
-
     pub(crate) fn compile_chunk(
-        mut self,
+        &mut self,
         ast: resolved_ast::Chunk,
     ) -> crate::Result<CompiledChunk> {
         self.chunk.num_params = ast.parameters.len() as u8;
@@ -220,7 +235,7 @@ impl Compiler {
         self.compile_body(ast.block)
     }
 
-    fn compile_body(mut self, ast: TokenTree<Block>) -> crate::Result<CompiledChunk> {
+    fn compile_body(&mut self, ast: TokenTree<Block>) -> crate::Result<CompiledChunk> {
         // We might have some initial locals from function args
         let initial_locals = self.frame.locals.len();
         let has_return = ast.node.return_statement.is_some();
@@ -300,10 +315,13 @@ impl Compiler {
             debug::print_instructions(&self.chunk, chunk_index);
             chunk_index
         } else {
-            self.global_state.write().unwrap().add_chunk(self.chunk)?
+            self.global_state
+                .write()
+                .unwrap()
+                .add_chunk(self.chunk.clone())?
         };
 
-        Ok(CompiledChunk { chunk_index })
+        Ok(CompiledChunk::Bytecode(chunk_index))
     }
 
     /// Push bytecode into the current chunk.
@@ -1517,7 +1535,7 @@ impl Compiler {
             );
         }
         // Compile the function definition as a new chunk.
-        let function_chunk = Compiler::new_sub(
+        let function_chunk = BytecodeCompiler::new_sub(
             Arc::clone(&self.global_state),
             function_def.node.name.map_or_else(
                 || b"<anonymous>()".into(),
@@ -1536,12 +1554,16 @@ impl Compiler {
         )
         .compile_body(function_def.node.block)?;
 
+        let CompiledChunk::Bytecode(chunk_index) = function_chunk else {
+            unreachable!("bytecode compiler only produces bytecode compiled chunks");
+        };
+
         // Load it as a closure into a register.
         let closure_r = closure_r.unwrap_or_else(|| self.take_register());
         self.push_bytecode(
             Bytecode::LoadClosure {
                 register: closure_r,
-                chunk_index: function_chunk.chunk_index,
+                chunk_index,
             },
             Some(function_def.span),
         );
@@ -2543,7 +2565,7 @@ mod tests {
     fn direct_reads_require_a_binding_that_is_never_captured() {
         let source = b"local captured = 1; local before = captured; local function f() return captured end; local plain = 2; local copy = plain";
         let state = GlobalState::get();
-        let compiled = Compiler::new(
+        let compiled = BytecodeCompiler::new(
             Arc::clone(&state),
             b"test".into(),
             None::<PathBuf>,

@@ -1,5 +1,5 @@
 use crate::{
-    compiler::{Local, Upvalue},
+    compiler::variable::{Local, Upvalue},
     resolved_ast::BindingId,
 };
 use std::collections::HashMap;

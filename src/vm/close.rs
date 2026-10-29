@@ -49,6 +49,11 @@ impl LuaState {
                         let args_r = self.extend_stack(LuaValue::NIL, args);
                         self.run_closure(&closure, args_r, num_args, 1)?;
                     }
+                    jf @ Method::JitFunction(name, func) => {
+                        let num_args = args.len();
+                        let args_r = self.extend_stack(jf, args);
+                        self.run_jit_function(name, func, args_r, num_args, 1)?;
+                    }
                     nf @ Method::NativeFunction(name, func) => {
                         let num_args = args.len();
                         let args_r = self.extend_stack(nf, args);

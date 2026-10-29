@@ -97,6 +97,20 @@ impl From<RuntimeError> for LuaError {
     }
 }
 
+impl From<cranelift::module::ModuleError> for LuaError {
+    fn from(value: cranelift::module::ModuleError) -> Self {
+        Self {
+            message: format!("{value:#?}"),
+            code: None,
+            source_code: None,
+            source: None,
+            labels: None,
+            origin: None,
+            pending_frames: vec![],
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum LuaSourceCode {
     Named(NamedSource<Vec<u8>>),

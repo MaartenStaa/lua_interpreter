@@ -6,8 +6,14 @@ use std::{
 
 use clap::{Parser, Subcommand};
 use lua_interpreter::{
-    GlobalState, compiler::Compiler, lexer::Lexer, optimizer::optimize as optimize_ast, parser,
-    resolver::resolve, token::TokenKind, value::LuaString,
+    GlobalState,
+    compiler::{self, Compiler},
+    lexer::Lexer,
+    optimizer::optimize as optimize_ast,
+    parser,
+    resolver::resolve,
+    token::TokenKind,
+    value::LuaString,
 };
 use miette::{LabeledSpan, NamedSource};
 
@@ -124,7 +130,7 @@ fn main() {
     };
 
     let source = Arc::new(source);
-    if match Compiler::new(
+    if match compiler::factory(
         GlobalState::get(),
         chunk_name.clone(),
         Some(filename),
@@ -145,7 +151,7 @@ fn main() {
             std::process::exit(1);
         }
     }
-    .with_tracer(trace_vm)
+    // .with_tracer(trace_vm)
     .run()
     .is_err()
     {
@@ -204,7 +210,7 @@ fn run_debug_parser(mut parser: parser::Parser) {
 
 #[cfg(feature = "debugger")]
 fn run_debugger(filename: &Path, break_start: bool, breakpoint_args: &[String]) {
-    use lua_interpreter::debugger;
+    use lua_interpreter::{compiler::Runnable, debugger};
 
     let Ok(filename) = filename.canonicalize() else {
         eprintln!("failed to canonicalize filename {}", filename.display());
@@ -226,7 +232,7 @@ fn run_debugger(filename: &Path, break_start: bool, breakpoint_args: &[String]) 
     let ast = optimize_ast(ast);
 
     let source = Arc::new(source);
-    let state = match Compiler::new(
+    let mut state = match compiler::factory(
         GlobalState::get(),
         chunk_name.clone(),
         Some(filename),
@@ -259,5 +265,11 @@ fn run_debugger(filename: &Path, break_start: bool, breakpoint_args: &[String]) 
         })
         .collect();
 
-    debugger::launch_debugger(state, breakpoints, break_start);
+    match state {
+        Runnable::State(state) => debugger::launch_debugger(state, breakpoints, break_start),
+        Runnable::Jit(_) => {
+            eprintln!("WARNING: debugging JIT'ed functions is not (yet) supported");
+            state.run().unwrap();
+        }
+    }
 }
