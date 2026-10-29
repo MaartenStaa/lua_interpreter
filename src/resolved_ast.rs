@@ -8,6 +8,7 @@ pub type BindingId = usize;
 pub struct Binding {
     pub id: BindingId,
     pub name: LuaString,
+    pub captured: bool,
     pub attributes: u8,
 }
 

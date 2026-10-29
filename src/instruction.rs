@@ -40,6 +40,7 @@ pub enum OpCode {
 
     // Variables
     Mov,
+    MovDirect,
     SetUpval,
     GetUpval,
     LoadVararg,

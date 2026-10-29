@@ -148,6 +148,12 @@ pub(crate) enum Bytecode {
         dest_register: u8,
         src_register: u8,
     },
+    /// Copy a local known never to be captured into a fresh temporary.
+    MovDirect {
+        dest_register: u8,
+        src_register: u8,
+    },
+
     /// Set an upvalue from a register.
     SetUpval {
         upval_index: u8,
@@ -543,6 +549,12 @@ impl Bytecode {
             }
 
             // Variables
+            Self::MovDirect {
+                dest_register,
+                src_register,
+            } => {
+                bytes!(MovDirect, dest_register, src_register)
+            }
             Self::Mov {
                 dest_register,
                 src_register,

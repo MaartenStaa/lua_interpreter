@@ -262,8 +262,12 @@ pub(crate) fn print_instruction(
         }
 
         // Variables
-        OpCode::Mov => {
-            instr!("MOV");
+        OpCode::Mov | OpCode::MovDirect => {
+            instr!(if instruction.opcode() == OpCode::MovDirect {
+                "MOV_DIRECT"
+            } else {
+                "MOV"
+            });
             reg!(1);
             reg!(2);
             eprintln!();

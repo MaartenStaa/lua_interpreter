@@ -71,6 +71,7 @@ fn opcode_display_name(opcode: OpCode) -> String {
         OpCode::Len => "LEN",
         OpCode::BNot => "BNOT",
         OpCode::Mov => "MOV",
+        OpCode::MovDirect => "MOV_DIRECT",
         OpCode::SetUpval => "SET_UPVAL",
         OpCode::GetUpval => "GET_UPVAL",
         OpCode::LoadVararg => "LOAD_VARARG",
@@ -153,7 +154,12 @@ fn format_operands(chunk: &ChunkSnapshot, instr: Instruction) -> String {
         | OpCode::GetTable => {
             format!("{} {} {}", r(instr.a()), r(instr.b()), r(instr.c()))
         }
-        OpCode::Neg | OpCode::Not | OpCode::Len | OpCode::BNot | OpCode::Mov => {
+        OpCode::Neg
+        | OpCode::Not
+        | OpCode::Len
+        | OpCode::BNot
+        | OpCode::Mov
+        | OpCode::MovDirect => {
             format!("{} {}", r(instr.a()), r(instr.b()))
         }
         OpCode::SetUpval => format!("U{} {}", instr.a(), r(instr.b())),

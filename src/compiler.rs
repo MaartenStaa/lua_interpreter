@@ -2314,21 +2314,31 @@ impl Compiler {
     fn read_variable(&mut self, name: TokenTree<Name>, mode: VariableMode) -> crate::Result<u8> {
         let span = name.span;
         let (bytecode, register) = match self.binding_location(&name.node) {
-            BindingLocation::Local { register, .. } => match mode {
-                VariableMode::Ref => {
-                    return Ok(register);
-                }
-                VariableMode::Read => {
-                    let dest_register = self.take_register();
-                    (
-                        Bytecode::Mov {
+            BindingLocation::Local { register, local } => {
+                let captured = local.captured;
+                match mode {
+                    VariableMode::Ref => {
+                        return Ok(register);
+                    }
+                    VariableMode::Read => {
+                        let dest_register = self.take_register();
+                        (
+                            if captured {
+                                Bytecode::Mov {
+                                    dest_register,
+                                    src_register: register,
+                                }
+                            } else {
+                                Bytecode::MovDirect {
+                                    dest_register,
+                                    src_register: register,
+                                }
+                            },
                             dest_register,
-                            src_register: register,
-                        },
-                        dest_register,
-                    )
+                        )
+                    }
                 }
-            },
+            }
             BindingLocation::Upvalue {
                 index: upval_index, ..
             } => match mode {
@@ -2486,6 +2496,7 @@ impl Compiler {
         );
         let local = self.frame.locals.last_mut().unwrap();
         local.binding = Some(binding.id);
+        local.captured = binding.captured;
     }
 
     fn add_local(&mut self, name: LuaString, register: u8, attributes: u8, span: Option<Span>) {
@@ -2507,6 +2518,7 @@ impl Compiler {
 
         let local = Local {
             binding: None,
+            captured: false,
             name,
             register,
             depth: self.scope_depth,

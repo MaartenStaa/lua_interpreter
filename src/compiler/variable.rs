@@ -8,6 +8,7 @@ use crate::{
 pub(crate) struct Local {
     pub(crate) name: LuaString,
     pub(crate) binding: Option<crate::resolved_ast::BindingId>,
+    pub(crate) captured: bool,
     pub(crate) register: u8,
     pub(crate) depth: u8,
     pub(crate) span: Option<Span>,

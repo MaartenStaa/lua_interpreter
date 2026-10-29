@@ -912,6 +912,11 @@ impl LuaState {
                 }
 
                 // Variables
+                OpCode::MovDirect => {
+                    let frame_pointer = self.call_frame().frame_pointer;
+                    let value = self.stack[frame_pointer + instruction.b() as usize].clone();
+                    self.set(instruction.a(), value);
+                }
                 OpCode::Mov => {
                     self.instr_mov(instruction);
                 }

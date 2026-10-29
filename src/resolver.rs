@@ -22,6 +22,7 @@ fn site(span: Span) -> Site {
 struct Binding {
     pub name: LuaString,
     pub attributes: u8,
+    pub captured: bool,
     function: usize,
 }
 
@@ -78,6 +79,7 @@ impl Resolver {
         self.result.bindings.push(Binding {
             name,
             attributes,
+            captured: false,
             function: self.function,
         });
         self.scopes.last_mut().unwrap().push(id);
@@ -98,6 +100,9 @@ impl Resolver {
     fn capture(&mut self, id: BindingId) {
         let owner = self.result.bindings[id].function;
         let mut function = self.function;
+        if function != owner {
+            self.result.bindings[id].captured = true;
+        }
         while function != owner {
             let info = &mut self.result.functions[function];
             if !info.captures.contains(&id) {
@@ -327,6 +332,7 @@ impl Lowerer<'_> {
         resolved::Binding {
             id,
             name: binding.name.clone(),
+            captured: binding.captured,
             attributes: binding.attributes,
         }
     }
@@ -613,8 +619,32 @@ mod tests {
             .filter(|(_, b)| b.name == b"x".as_slice())
             .collect::<Vec<_>>();
         assert_eq!(xs.len(), 2);
+        assert!(xs[0].1.captured);
+        assert!(!xs[1].1.captured);
         assert_eq!(resolution.functions[1].captures, vec![xs[0].0]);
         assert_eq!(resolution.functions[2].captures, vec![xs[0].0]);
+    }
+
+    #[test]
+    fn initializers_use_outer_binding_and_local_functions_capture_themselves() {
+        let resolution = resolve(
+            "local x = 1; local x = function() return x end; local function f() return f end",
+        );
+        let xs = resolution
+            .bindings
+            .iter()
+            .filter(|b| b.name == b"x".as_slice())
+            .collect::<Vec<_>>();
+        assert!(xs[0].captured);
+        assert!(!xs[1].captured);
+        assert!(
+            resolution
+                .bindings
+                .iter()
+                .find(|b| b.name == b"f".as_slice())
+                .unwrap()
+                .captured
+        );
     }
 
     #[test]
@@ -623,6 +653,8 @@ mod tests {
             resolve("local _ENV = {}; return function() return function() return missing end end");
         assert_eq!(resolution.functions[1].captures, vec![1]);
         assert_eq!(resolution.functions[2].captures, vec![1]);
+        assert!(resolution.bindings[1].captured);
+        assert!(!resolution.bindings[0].captured);
     }
 
     fn parse(source: &str) -> TokenTree<Block> {
@@ -666,6 +698,7 @@ mod tests {
             panic!("local binding")
         };
         assert_eq!(binding.name, b"x".as_slice());
+        assert!(!binding.captured);
         let resolved::Name::Upvalue(env) = environment(&explist[0].node) else {
             panic!("upvalue environment")
         };
@@ -686,6 +719,8 @@ mod tests {
         let resolved::Name::Local(env) = environment(&values[0].node) else {
             panic!("local environment")
         };
+        // Even the earlier use contains the final capture information.
+        assert!(env.captured);
         let resolved::Expression::FunctionDef(function) =
             &chunk.block.node.return_statement.as_ref().unwrap().values[0].node
         else {
