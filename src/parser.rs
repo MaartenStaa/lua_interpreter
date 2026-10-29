@@ -713,72 +713,70 @@ impl<'name, 'source> Parser<'name, 'source> {
             .wrap_err("in varlist or functioncall")?;
         let start = prefix_expression.span.start;
 
-        match self.lexer.peek()? {
-            Some(
-                Token {
-                    kind: TokenKind::Comma,
-                    ..
-                }
-                | Token {
-                    kind: TokenKind::Equals,
-                    ..
-                },
-            ) => {
-                let mut prefix_expressions = vec![prefix_expression];
-                while let Some(Token {
-                    kind: TokenKind::Comma,
-                    ..
-                }) = self.lexer.peek()?
-                {
-                    self.lexer.next();
-                    prefix_expressions.push(
-                        self.parse_prefix_expression(inside_vararg_function)
-                            .wrap_err("in varlist")?,
-                    );
-                }
-
-                let mut varlist = Vec::with_capacity(prefix_expressions.len());
-                for var in prefix_expressions {
-                    varlist.push(match var {
-                        TokenTree {
-                            node: PrefixExpression::Variable(v),
-                            ..
-                        } => v,
-                        TokenTree { span, .. } => {
-                            return Err(lua_error!(
-                                labels = vec![span.labeled("expected variable")],
-                                "unexpected token"
-                            ));
-                        }
-                    });
-                }
-
-                self.lexer.expect(|k| k == &TokenKind::Equals, "=")?;
-                let mut explist = Vec::new();
-                let end_position = loop {
-                    explist.push(
-                        self.expect_expression(inside_vararg_function)
-                            .wrap_err("in varlist")?,
-                    );
-
-                    match self.lexer.peek()? {
-                        Some(Token {
-                            kind: TokenKind::Comma,
-                            ..
-                        }) => {
-                            self.lexer.next();
-                            continue;
-                        }
-                        _ => break explist.last().unwrap().span.end,
-                    }
-                };
-
-                return Ok(TokenTree::new(
-                    Statement::Assignment { varlist, explist },
-                    Span::new(start, end_position),
-                ));
+        if let Some(
+            Token {
+                kind: TokenKind::Comma,
+                ..
             }
-            _ => {}
+            | Token {
+                kind: TokenKind::Equals,
+                ..
+            },
+        ) = self.lexer.peek()?
+        {
+            let mut prefix_expressions = vec![prefix_expression];
+            while let Some(Token {
+                kind: TokenKind::Comma,
+                ..
+            }) = self.lexer.peek()?
+            {
+                self.lexer.next();
+                prefix_expressions.push(
+                    self.parse_prefix_expression(inside_vararg_function)
+                        .wrap_err("in varlist")?,
+                );
+            }
+
+            let mut varlist = Vec::with_capacity(prefix_expressions.len());
+            for var in prefix_expressions {
+                varlist.push(match var {
+                    TokenTree {
+                        node: PrefixExpression::Variable(v),
+                        ..
+                    } => v,
+                    TokenTree { span, .. } => {
+                        return Err(lua_error!(
+                            labels = vec![span.labeled("expected variable")],
+                            "unexpected token"
+                        ));
+                    }
+                });
+            }
+
+            self.lexer.expect(|k| k == &TokenKind::Equals, "=")?;
+            let mut explist = Vec::new();
+            let end_position = loop {
+                explist.push(
+                    self.expect_expression(inside_vararg_function)
+                        .wrap_err("in varlist")?,
+                );
+
+                match self.lexer.peek()? {
+                    Some(Token {
+                        kind: TokenKind::Comma,
+                        ..
+                    }) => {
+                        self.lexer.next();
+                        continue;
+                    }
+                    _ => break explist.last().unwrap().span.end,
+                }
+            };
+
+            return Ok(TokenTree::new(
+                Statement::Assignment { varlist, explist },
+                Span::new(start, end_position),
+            ));
         }
 
         match prefix_expression {
