@@ -7,6 +7,7 @@ use crate::{
 #[derive(Debug, Clone)]
 pub(crate) struct Local {
     pub(crate) name: LuaString,
+    pub(crate) binding: Option<crate::resolved_ast::BindingId>,
     pub(crate) register: u8,
     pub(crate) depth: u8,
     pub(crate) span: Option<Span>,
@@ -22,6 +23,7 @@ impl Local {
 
 #[derive(Debug, Clone)]
 pub(crate) struct Upvalue {
+    pub(crate) name: LuaString,
     pub(crate) index: u8,
     pub(crate) source: UpvalueLocation,
     pub(crate) attributes: u8,

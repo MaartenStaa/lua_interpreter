@@ -7,7 +7,7 @@ use std::{
 use clap::{Parser, Subcommand};
 use lua_interpreter::{
     GlobalState, compiler::Compiler, lexer::Lexer, optimizer::optimize as optimize_ast, parser,
-    token::TokenKind, value::LuaString,
+    resolver::resolve, token::TokenKind, value::LuaString,
 };
 use miette::{LabeledSpan, NamedSource};
 
@@ -130,11 +130,10 @@ fn main() {
         Some(filename),
         None,
         Arc::clone(&source),
-        vec![],
         true,
         print_bytecode,
     )
-    .compile(Some(ast))
+    .compile(resolve(ast))
     {
         Ok(c) => c,
         Err(e) => {
@@ -198,8 +197,9 @@ fn run_debug_parser(mut parser: parser::Parser) {
             std::process::exit(1);
         }
     };
+    let resolved = resolve(ast);
 
-    println!("{ast:#?}");
+    println!("{resolved:#?}");
 }
 
 #[cfg(feature = "debugger")]
@@ -232,11 +232,10 @@ fn run_debugger(filename: &Path, break_start: bool, breakpoint_args: &[String]) 
         Some(filename),
         None,
         Arc::clone(&source),
-        vec![],
         true,
         false,
     )
-    .compile(Some(ast))
+    .compile(resolve(ast))
     {
         Ok(c) => c,
         Err(e) => {

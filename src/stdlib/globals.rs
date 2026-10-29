@@ -14,6 +14,8 @@ use crate::{
     compiler::Compiler,
     error::{IntoLuaError, lua_error},
     macros::{assert_string, assert_table, lua_return, native_function, require_table},
+    parser::Parser,
+    resolver::resolve,
     stdlib::package,
     value::{
         IntegerRepr, LuaClosure, LuaObject, LuaString, LuaValue,
@@ -176,17 +178,17 @@ pub(crate) fn dofile(state: &mut LuaState) -> crate::Result<usize> {
         (b"[stdin]".into(), None, buffer)
     };
 
+    let ast = resolve(Parser::new(&name, &source).parse()?);
     let compiler = Compiler::new(
         Arc::clone(&state.global),
         name.clone(),
         path,
         None,
         Arc::new(source),
-        vec![],
         false,
         false,
     );
-    let mut compiled_state = compiler.compile(None)?;
+    let mut compiled_state = compiler.compile(ast)?;
     let result = compiled_state.run()?;
     let num_return_values = result.len();
     for (i, value) in result.into_iter().enumerate() {
@@ -353,17 +355,17 @@ pub(crate) fn load(state: &mut LuaState) -> crate::Result<usize> {
     };
 
     let filename: Option<PathBuf> = None;
+    let ast = Parser::new(&name, &source).parse().map(resolve);
     let compiler = Compiler::new(
         Arc::clone(&state.global),
         name,
         filename,
         None,
         Arc::new(source),
-        vec![],
         true,
         false,
     );
-    let compiled_chunk = match compiler.compile_chunk(None) {
+    let compiled_chunk = match ast.and_then(|ast| compiler.compile_chunk(ast)) {
         Ok(compiled_chunk) => compiled_chunk,
         Err(e) => {
             lua_return!(state; LuaValue::NIL, LuaValue::from_string(format!("{e}").into_bytes()))
@@ -711,17 +713,17 @@ pub(crate) fn require(state: &mut LuaState) -> crate::Result<usize> {
 
         let source = fs::read(&path).map_err(|_| lua_error!("unable to read module {name}"))?;
 
+        let ast = resolve(Parser::new(&name, &source).parse()?);
         let compiler = Compiler::new(
             Arc::clone(&state.global),
             name.clone(),
             Some(path),
             None,
             Arc::new(source),
-            vec![],
             false,
             false,
         );
-        let mut state = compiler.compile(None)?;
+        let mut state = compiler.compile(ast)?;
         let mut result = state.run()?;
         let result = result.swap_remove(0);
 

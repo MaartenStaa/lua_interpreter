@@ -1547,6 +1547,7 @@ impl<'name, 'source> Parser<'name, 'source> {
                 name,
                 method_name,
                 parameters,
+                captures: vec![],
                 varargs,
                 block,
             },

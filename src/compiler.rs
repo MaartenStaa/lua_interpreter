@@ -2,29 +2,28 @@ use std::{
     collections::HashMap,
     mem::MaybeUninit,
     path::PathBuf,
-    ptr::NonNull,
     sync::{Arc, RwLock},
 };
 
 use crate::{
     GlobalState, LuaState,
-    ast::{
-        BinaryOperator, Block, Expression, Field, ForCondition, FunctionCall, FunctionDef, Literal,
-        LocalAttribute, Name, Number, NumericFor, PrefixExpression, ReturnStatement, Statement,
-        TableConstructor, TokenTree, UnaryOperator, Variable,
-    },
     bytecode::{Bytecode, JumpToUndecidedAddress},
     chunk::{Chunk, ChunkUpValue, LocalVarInfo},
     compiler::{
         block::{BlockOptions, BlockResult, BreakJump, NewLocalsAfterGoto},
         expression::{ExpressionListLength, ExpressionMode, ExpressionResult, VariableMode},
-        frame::{Frame, ResolvedName, UpvalueLocation},
+        frame::{BindingLocation, Frame, UpvalueLocation},
         goto::{Goto, Label},
         variable::{Local, Upvalue},
     },
     debug,
     error::lua_error,
-    parser::Parser,
+    resolved_ast::{self, Name as BindingName},
+    resolved_ast::{
+        BinaryOperator, Block, Expression, Field, ForCondition, FunctionCall, FunctionDef, Literal,
+        Name, Number, NumericFor, PrefixExpression, ReturnStatement, Statement, TableConstructor,
+        TokenTree, UnaryOperator, Variable,
+    },
     token::Span,
     value::{IntegerRepr, LuaConst, LuaNumber, LuaString, LuaTable, LuaVariableAttribute},
     vm::{ChunkIndex, ConstIndex, JumpAddr},
@@ -38,15 +37,13 @@ mod frame;
 mod goto;
 mod variable;
 
-const ENV_NAME: &[u8] = b"_ENV";
-
 impl Compiler {
-    fn scope_id(&self) -> usize {
-        *self.scope_ids.last().expect("scope_ids is not empty")
+    fn binding_location(&self, name: &BindingName) -> BindingLocation<'_> {
+        self.frame.binding_location(name.binding().id)
     }
 
-    fn resolve_local(&self, name: &LuaString) -> Option<(u8, &Local)> {
-        self.frame.resolve_local(name)
+    fn scope_id(&self) -> usize {
+        *self.scope_ids.last().expect("scope_ids is not empty")
     }
 
     fn take_register(&mut self) -> u8 {
@@ -116,17 +113,16 @@ impl Compiler {
         filename: Option<impl Into<PathBuf>>,
         method_name: Option<LuaString>,
         source: Arc<Vec<u8>>,
-        parameters: Vec<TokenTree<Name>>,
         has_varargs: bool,
         print_bytecode: bool,
     ) -> Self {
-        let mut result = Self {
+        Self {
             global_state,
             chunk: Chunk::new(
                 chunk_name,
                 filename.map(std::convert::Into::into),
                 source,
-                parameters.len() as u8,
+                0,
                 has_varargs,
                 vec![],
             ),
@@ -142,21 +138,7 @@ impl Compiler {
             register_index: 1,
             max_registers: 0,
             print_bytecode,
-        };
-
-        // Every main chunk has an `_ENV` upvalue.
-        result
-            .frame
-            // NOTE: The source location doesn't matter much here, as for the root chunk the value
-            // is set directly, rather than being loaded from a parent call frame.
-            .add_upvalue(ENV_NAME.into(), UpvalueLocation::Upvalue { index: 0 }, 0);
-
-        for param in parameters {
-            let register = result.take_register();
-            result.add_local(param.node.0, register, 0, Some(param.span));
         }
-
-        result
     }
 
     /// Create a new compiler instance for a non-main chunk, e.g. a function body.
@@ -169,7 +151,7 @@ impl Compiler {
         source: Arc<Vec<u8>>,
         parameters: Vec<TokenTree<Name>>,
         has_varargs: bool,
-        parent_frame: std::ptr::NonNull<Frame>,
+        upvalues: HashMap<usize, Upvalue>,
         print_bytecode: bool,
     ) -> Self {
         let mut result = Self {
@@ -186,7 +168,10 @@ impl Compiler {
             gotos: HashMap::new(),
             labels: HashMap::new(),
             to_close: vec![],
-            frame: Frame::with_parent(parent_frame.as_ptr()),
+            frame: Frame {
+                locals: vec![],
+                upvalues,
+            },
             scope_depth: 0,
             scope_id_counter: 1,
             scope_ids: vec![0],
@@ -198,13 +183,13 @@ impl Compiler {
 
         for param in parameters {
             let register = result.take_register();
-            result.add_local(param.node.0, register, 0, Some(param.span));
+            result.add_binding(param, register);
         }
 
         result
     }
 
-    pub fn compile(self, ast: Option<TokenTree<Block>>) -> crate::Result<LuaState> {
+    pub fn compile(self, ast: resolved_ast::Chunk) -> crate::Result<LuaState> {
         let global_state = Arc::clone(&self.global_state);
         let compiled_chunk = self.compile_chunk(ast)?;
 
@@ -213,13 +198,29 @@ impl Compiler {
 
     pub(crate) fn compile_chunk(
         mut self,
-        ast: Option<TokenTree<Block>>,
+        ast: resolved_ast::Chunk,
     ) -> crate::Result<CompiledChunk> {
-        let ast = match ast {
-            Some(ast) => Ok(ast),
-            None => Parser::new(&self.chunk.name, &self.chunk.source).parse(),
-        }?;
+        self.chunk.num_params = ast.parameters.len() as u8;
+        for parameter in ast.parameters {
+            let register = self.take_register();
+            self.add_binding(parameter, register);
+        }
+        for capture in ast.captures {
+            let binding = capture.binding();
+            self.frame.upvalues.insert(
+                binding.id,
+                Upvalue {
+                    index: self.frame.upvalues.len() as u8,
+                    source: UpvalueLocation::Upvalue { index: 0 },
+                    attributes: binding.attributes,
+                    name: binding.name.clone(),
+                },
+            );
+        }
+        self.compile_body(ast.block)
+    }
 
+    fn compile_body(mut self, ast: TokenTree<Block>) -> crate::Result<CompiledChunk> {
         // We might have some initial locals from function args
         let initial_locals = self.frame.locals.len();
         let has_return = ast.node.return_statement.is_some();
@@ -272,7 +273,8 @@ impl Compiler {
         let mut chunk_upvalues: Vec<_> = (0..self.frame.upvalues.len())
             .map(|_| MaybeUninit::uninit())
             .collect();
-        for (name, upvalue) in &self.frame.upvalues {
+        for upvalue in self.frame.upvalues.values() {
+            let name = &upvalue.name;
             chunk_upvalues[upvalue.index as usize].write(ChunkUpValue {
                 is_local: matches!(upvalue.source, UpvalueLocation::Local { .. }),
                 index: match upvalue.source {
@@ -345,11 +347,6 @@ impl Compiler {
         }
 
         self.chunk.register_const(lua_const)
-    }
-
-    fn get_global_name_index(&mut self, name: LuaString) -> ConstIndex {
-        let lua_const = LuaConst::String(name);
-        self.get_const_index(lua_const)
     }
 
     fn compile_block(
@@ -489,37 +486,19 @@ impl Compiler {
                         self.push_load_nil(Some(name.span));
                     }
 
-                    let mut attributes = 0;
-                    match name.node.attribute {
-                        Some(TokenTree {
-                            node: LocalAttribute::Const,
-                            ..
-                        }) => {
-                            attributes |= LuaVariableAttribute::Constant as u8;
-                        }
-                        Some(TokenTree {
-                            node: LocalAttribute::Close,
-                            ..
-                        }) => {
-                            // `<close>` implies `<const>`
-                            attributes |= LuaVariableAttribute::Constant as u8;
-                            attributes |= LuaVariableAttribute::ToBeClosed as u8;
-                            self.push_bytecode(
-                                Bytecode::ToClose {
-                                    register: name_register,
-                                },
-                                Some(span),
-                            );
-                        }
-                        None => {}
+                    if name.node.name.node.binding().attributes
+                        & LuaVariableAttribute::ToBeClosed as u8
+                        != 0
+                    {
+                        self.push_bytecode(
+                            Bytecode::ToClose {
+                                register: name_register,
+                            },
+                            Some(span),
+                        );
                     }
 
-                    self.add_local(
-                        name.node.name.node.0,
-                        name_register,
-                        attributes,
-                        Some(name.span),
-                    );
+                    self.add_binding(name.node.name, name_register);
                 }
 
                 self.release_registers_from(current_register + num_names as u8);
@@ -531,7 +510,7 @@ impl Compiler {
                 // function () body end`, not to `local f = function () body end` (This only makes
                 // a difference when the body of the function contains references to f.)
                 let name_r = self.push_load_nil(Some(span));
-                self.add_local(name.node.0, name_r, 0, Some(name.span));
+                self.add_binding(name, name_r);
 
                 self.compile_function_def(function_def, Some(name_r))?;
 
@@ -566,9 +545,9 @@ impl Compiler {
                                     let key_const_index =
                                         self.get_const_index(literal.node.clone().into());
 
-                                    if let ResolvedName::Upvalue {
+                                    if let BindingLocation::Upvalue {
                                         index: upval_index, ..
-                                    } = self.frame.resolve_name(&name.node.0)
+                                    } = self.binding_location(&name.node)
                                     {
                                         self.push_bytecode(
                                             Bytecode::SetTableUpvalConstKey {
@@ -602,15 +581,15 @@ impl Compiler {
                                     },
                                     target_index,
                                 ) if matches!(
-                                    self.frame.resolve_name(&name.node.0),
-                                    ResolvedName::Upvalue { .. }
+                                    self.binding_location(&name.node),
+                                    BindingLocation::Upvalue { .. }
                                 ) =>
                                 {
                                     // TODO: Can we fix the double-lookup here? We can't capture
                                     // the upval_index from the match guard, it seems.
-                                    let ResolvedName::Upvalue {
+                                    let BindingLocation::Upvalue {
                                         index: upval_index, ..
-                                    } = self.frame.resolve_name(&name.node.0)
+                                    } = self.binding_location(&name.node)
                                     else {
                                         unreachable!()
                                     };
@@ -669,9 +648,9 @@ impl Compiler {
                                         }),
                                     ..
                                 } => {
-                                    if let ResolvedName::Upvalue {
+                                    if let BindingLocation::Upvalue {
                                         index: upval_index, ..
-                                    } = self.frame.resolve_name(&name.node.0)
+                                    } = self.binding_location(&name.node)
                                     {
                                         self.push_bytecode(
                                             Bytecode::SetTableUpvalConstKey {
@@ -981,7 +960,6 @@ impl Compiler {
                                 ExpressionResultMode::Amount(1),
                             )?
                             .get_register();
-                        self.add_local(name.node.0, base_r, 0, Some(name.span));
 
                         let limit_r = self
                             .compile_expression(
@@ -990,24 +968,21 @@ impl Compiler {
                                 ExpressionResultMode::Amount(1),
                             )?
                             .get_register();
-                        self.add_local(b"#limit".into(), limit_r, 0, None);
 
                         let step_r = if let Some(step) = step {
-                            let step_r = self
-                                .compile_expression(
-                                    step,
-                                    ExpressionMode::Copy,
-                                    ExpressionResultMode::Amount(1),
-                                )?
-                                .get_register();
-                            self.add_local(b"#step".into(), step_r, 0, None);
-                            step_r
+                            self.compile_expression(
+                                step,
+                                ExpressionMode::Copy,
+                                ExpressionResultMode::Amount(1),
+                            )?
+                            .get_register()
                         } else {
-                            let step_r = self
-                                .compile_load_literal(Literal::Number(Number::Integer(1)), None);
-                            self.add_local(b"#step".into(), step_r, 0, None);
-                            step_r
+                            self.compile_load_literal(Literal::Number(Number::Integer(1)), None)
                         };
+
+                        self.add_binding(name, base_r);
+                        self.add_local(b"#limit".into(), limit_r, 0, None);
+                        self.add_local(b"#step".into(), step_r, 0, None);
 
                         debug_assert_eq!(limit_r, base_r + 1);
                         debug_assert_eq!(step_r, base_r + 2);
@@ -1053,12 +1028,7 @@ impl Compiler {
                         self.add_local(b"#iterator".into(), iterator_local, 0, None);
                         self.add_local(b"#state".into(), state_local, 0, None);
                         // NOTE: The syntax ensures there is at least one name
-                        self.add_local(
-                            names[0].node.0.clone(),
-                            control_local,
-                            0,
-                            Some(names[0].span),
-                        );
+                        self.add_binding(names[0].clone(), control_local);
                         self.add_local(
                             b"#closing".into(),
                             closing_local,
@@ -1075,7 +1045,7 @@ impl Compiler {
                         // Initialize the other variables to nil
                         for name in &names[1..] {
                             let register = self.push_load_nil(Some(name.span));
-                            self.add_local(name.node.0.clone(), register, 0, Some(name.span));
+                            self.add_binding(name.clone(), register);
                         }
 
                         // Call the iterator function
@@ -1115,9 +1085,14 @@ impl Compiler {
 
                         // Then store each result in the corresponding local
                         for (index, name) in names.into_iter().enumerate() {
-                            let (local_register, _) = self
-                                .resolve_local(&name.node.0)
-                                .expect("parser ensures that variable is in scope");
+                            let binding = name.node.binding().id;
+                            let BindingLocation::Local {
+                                register: local_register,
+                                ..
+                            } = self.frame.binding_location(binding)
+                            else {
+                                unreachable!("loop variable has a local register")
+                            };
                             self.push_bytecode(
                                 Bytecode::Mov {
                                     dest_register: local_register,
@@ -1443,9 +1418,9 @@ impl Compiler {
                 node: Variable::Name(name),
                 ..
             }) => {
-                (name.node.0 == self.chunk.name.as_slice()
+                (name.node.binding().name == self.chunk.name.as_slice()
                     && function_call.node.method_name.is_none())
-                    || (&name.node.0 == b"self"
+                    || (&name.node.binding().name == b"self"
                         && function_call.node.method_name.map(|n| n.node.0) == self.method_name)
             }
             _ => false,
@@ -1524,6 +1499,23 @@ impl Compiler {
         function_def: TokenTree<FunctionDef>,
         closure_r: Option<u8>,
     ) -> crate::Result<u8> {
+        let mut upvalues = HashMap::new();
+        for capture in &function_def.node.captures {
+            let binding = capture.binding();
+            let source = match self.frame.binding_location(binding.id) {
+                BindingLocation::Local { register, .. } => UpvalueLocation::Local { register },
+                BindingLocation::Upvalue { index, .. } => UpvalueLocation::Upvalue { index },
+            };
+            upvalues.insert(
+                binding.id,
+                Upvalue {
+                    index: upvalues.len() as u8,
+                    source,
+                    attributes: binding.attributes,
+                    name: binding.name.clone(),
+                },
+            );
+        }
         // Compile the function definition as a new chunk.
         let function_chunk = Compiler::new_sub(
             Arc::clone(&self.global_state),
@@ -1539,10 +1531,10 @@ impl Compiler {
             Arc::clone(&self.chunk.source),
             function_def.node.parameters,
             function_def.node.varargs.is_some(),
-            NonNull::from_mut(&mut self.frame),
+            upvalues,
             self.print_bytecode,
         )
-        .compile_chunk(Some(function_def.node.block))?;
+        .compile_body(function_def.node.block)?;
 
         // Load it as a closure into a register.
         let closure_r = closure_r.unwrap_or_else(|| self.take_register());
@@ -1765,9 +1757,9 @@ impl Compiler {
                             node: Variable::Name(name),
                             ..
                         }) = &prefix.node
-                            && let ResolvedName::Upvalue {
+                            && let BindingLocation::Upvalue {
                                 index: upval_index, ..
-                            } = self.frame.resolve_name(&name.node.0)
+                            } = self.binding_location(&name.node)
                         {
                             if let Expression::Literal(TokenTree { node: literal, .. }) = index.node
                             {
@@ -1874,9 +1866,9 @@ impl Compiler {
                             node: Variable::Name(target_name),
                             ..
                         }) = &prefix.node
-                            && let ResolvedName::Upvalue {
+                            && let BindingLocation::Upvalue {
                                 index: upval_index, ..
-                            } = self.frame.resolve_name(&target_name.node.0)
+                            } = self.binding_location(&target_name.node)
                         {
                             let dest_r = self.take_register();
                             let key_const_index =
@@ -2321,8 +2313,8 @@ impl Compiler {
 
     fn read_variable(&mut self, name: TokenTree<Name>, mode: VariableMode) -> crate::Result<u8> {
         let span = name.span;
-        let (bytecode, register) = match self.frame.resolve_name(&name.node.0) {
-            ResolvedName::Local { register, .. } => match mode {
+        let (bytecode, register) = match self.binding_location(&name.node) {
+            BindingLocation::Local { register, .. } => match mode {
                 VariableMode::Ref => {
                     return Ok(register);
                 }
@@ -2337,7 +2329,7 @@ impl Compiler {
                     )
                 }
             },
-            ResolvedName::Upvalue {
+            BindingLocation::Upvalue {
                 index: upval_index, ..
             } => match mode {
                 VariableMode::Read | VariableMode::Ref => {
@@ -2351,60 +2343,6 @@ impl Compiler {
                     )
                 }
             },
-            ResolvedName::None => {
-                // Unbounded variable access:
-                // "any reference to a free name (that is, a name not bound to any declaration) var is syntactically translated to _ENV.var"
-                let const_index = self.get_global_name_index(name.node.0.clone());
-                match self.frame.resolve_name(&ENV_NAME.into()) {
-                    ResolvedName::Local { .. } => {
-                        // Resolve the name `_ENV`.
-                        let current_r = self.register_index;
-                        let env_register = self.read_variable(
-                            TokenTree {
-                                node: Name(ENV_NAME.into()),
-                                span: name.span,
-                            },
-                            VariableMode::Ref,
-                        )?;
-
-                        let dest_r = if env_register == current_r {
-                            env_register
-                        } else {
-                            self.take_register()
-                        };
-
-                        self.release_registers_from(dest_r + 1);
-
-                        (
-                            Bytecode::GetTableConstKey {
-                                table_register: env_register,
-                                dest_register: dest_r,
-                                key_const_index: const_index,
-                            },
-                            dest_r,
-                        )
-                    }
-                    ResolvedName::Upvalue {
-                        index: upval_index, ..
-                    } => {
-                        let dest_r = self.take_register();
-
-                        (
-                            Bytecode::GetTableUpvalConstKey {
-                                dest_register: dest_r,
-                                table_upval_index: upval_index,
-                                key_const_index: const_index,
-                            },
-                            dest_r,
-                        )
-                    }
-                    ResolvedName::None => {
-                        unreachable!(
-                            "the _ENV variable should always be bound to a local or upvalue"
-                        );
-                    }
-                }
-            }
         };
 
         self.push_bytecode(bytecode, Some(span));
@@ -2413,12 +2351,12 @@ impl Compiler {
 
     fn write_variable(&mut self, name: TokenTree<Name>, value_register: u8) -> crate::Result<()> {
         let span = name.span;
-        let bytecode = match self.frame.resolve_name(&name.node.0) {
-            ResolvedName::Local { register, local } => {
+        let bytecode = match self.binding_location(&name.node) {
+            BindingLocation::Local { register, local } => {
                 if local.is_constant() {
                     return Err(lua_error!(
                         "attempt to assign to const variable '{}'",
-                        String::from_utf8_lossy(&name.node.0)
+                        String::from_utf8_lossy(&name.node.binding().name)
                     ));
                 }
 
@@ -2427,48 +2365,19 @@ impl Compiler {
                     src_register: value_register,
                 }
             }
-            u @ ResolvedName::Upvalue {
+            u @ BindingLocation::Upvalue {
                 index: upval_index, ..
             } => {
                 if u.is_constant() {
                     return Err(lua_error!(
                         "attempt to assign to const variable '{}'",
-                        String::from_utf8_lossy(&name.node.0)
+                        String::from_utf8_lossy(&name.node.binding().name)
                     ));
                 }
 
                 Bytecode::SetUpval {
                     upval_index,
                     src_register: value_register,
-                }
-            }
-            ResolvedName::None => {
-                // Unbounded variable access:
-                // "any reference to a free name (that is, a name not bound to any declaration) var is syntactically translated to _ENV.var"
-                if name.node.0 == ENV_NAME {
-                    unreachable!("the _ENV variable should always be bound to a local or upvalue");
-                }
-
-                // `_ENV` should always be equivalent to upvalue 0.
-                let key_const_index = self.get_global_name_index(name.node.0.clone());
-                match self.frame.resolve_name(&ENV_NAME.into()) {
-                    ResolvedName::Local { register, .. } => Bytecode::SetTableConstKey {
-                        table_register: register,
-                        key_const_index,
-                        value_register,
-                    },
-                    ResolvedName::Upvalue {
-                        index: upval_index, ..
-                    } => Bytecode::SetTableUpvalConstKey {
-                        table_upval_index: upval_index,
-                        key_const_index,
-                        value_register,
-                    },
-                    ResolvedName::None => {
-                        unreachable!(
-                            "the _ENV variable should always be bound to a local or upvalue"
-                        );
-                    }
                 }
             }
         };
@@ -2567,6 +2476,18 @@ impl Compiler {
             .retain(|_, label| label.depth <= self.scope_depth);
     }
 
+    fn add_binding(&mut self, name: TokenTree<Name>, register: u8) {
+        let binding = name.node.binding().clone();
+        self.add_local(
+            binding.name.clone(),
+            register,
+            binding.attributes,
+            Some(name.span),
+        );
+        let local = self.frame.locals.last_mut().unwrap();
+        local.binding = Some(binding.id);
+    }
+
     fn add_local(&mut self, name: LuaString, register: u8, attributes: u8, span: Option<Span>) {
         self.reserve_register(register);
         let local_var_index = self.chunk.local_vars.len();
@@ -2585,6 +2506,7 @@ impl Compiler {
         );
 
         let local = Local {
+            binding: None,
             name,
             register,
             depth: self.scope_depth,
@@ -2597,5 +2519,60 @@ impl Compiler {
         if attributes & (LuaVariableAttribute::ToBeClosed as u8) != 0 {
             self.to_close.push(register);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::instruction::OpCode;
+
+    #[test]
+    fn direct_reads_require_a_binding_that_is_never_captured() {
+        let source = b"local captured = 1; local before = captured; local function f() return captured end; local plain = 2; local copy = plain";
+        let state = GlobalState::get();
+        let compiled = Compiler::new(
+            Arc::clone(&state),
+            b"test".into(),
+            None::<PathBuf>,
+            None,
+            Arc::new(source.to_vec()),
+            false,
+            false,
+        )
+        .compile_chunk(crate::resolver::resolve(
+            crate::parser::Parser::new(b"test", source).parse().unwrap(),
+        ))
+        .unwrap();
+        let state = state.read().unwrap();
+        let chunk = state.get_chunk(compiled.chunk_index).unwrap();
+        let instructions = chunk.get_instructions();
+        let captured = chunk
+            .local_vars
+            .iter()
+            .find(|v| v.name == b"captured".as_slice())
+            .unwrap()
+            .register;
+        let plain = chunk
+            .local_vars
+            .iter()
+            .find(|v| v.name == b"plain".as_slice())
+            .unwrap()
+            .register;
+        assert!(
+            instructions
+                .iter()
+                .any(|i| i.opcode() == OpCode::Mov && i.b() == captured)
+        );
+        assert!(
+            !instructions
+                .iter()
+                .any(|i| i.opcode() == OpCode::MovDirect && i.b() == captured)
+        );
+        assert!(
+            instructions
+                .iter()
+                .any(|i| i.opcode() == OpCode::MovDirect && i.b() == plain)
+        );
     }
 }

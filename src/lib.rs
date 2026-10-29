@@ -14,6 +14,8 @@ mod macros;
 mod math;
 pub mod optimizer;
 pub mod parser;
+pub mod resolved_ast;
+pub mod resolver;
 pub mod state;
 mod stdlib;
 pub mod token;

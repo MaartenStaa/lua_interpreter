@@ -1,7 +1,8 @@
 use std::{os::unix::ffi::OsStrExt, path::PathBuf};
 
 use lua_interpreter::{
-    GlobalState, compiler::Compiler, optimizer::optimize, parser::Parser, value::LuaString,
+    GlobalState, compiler::Compiler, optimizer::optimize, parser::Parser, resolver::resolve,
+    value::LuaString,
 };
 use rstest::*;
 
@@ -26,11 +27,10 @@ fn test_files(#[files("tests/resources/**/*.lua")] file: PathBuf) {
         Some(file),
         None,
         Arc::new(source),
-        vec![],
         true,
         false,
     )
-    .compile(Some(ast))
+    .compile(resolve(ast))
     .expect("compiling should succeed")
     .run()
     .expect("running chunk should succeed");

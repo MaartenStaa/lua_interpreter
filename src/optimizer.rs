@@ -212,6 +212,7 @@ fn optimize_function_def(func: TokenTree<FunctionDef>) -> TokenTree<FunctionDef>
             name: func.node.name,
             method_name: func.node.method_name,
             parameters: func.node.parameters,
+            captures: func.node.captures,
             varargs: func.node.varargs,
             block: optimize(func.node.block),
         },
